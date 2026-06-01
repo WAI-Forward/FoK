@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# IDE files
+.idea/
+
+# Local data / secrets
+data/
+.env
+.env.*
+
+# Screenshots / generated captures
+screenshots/
+
+# Logs and process files
+*.log
+*.pid
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>King of Kingdoms 3D</title>
+    <link rel="stylesheet" href="./styles.css?v=0.6.9" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./node_modules/three/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="game-canvas" aria-label="King of Kingdoms 3D game world"></canvas>
+      <div class="camera-crosshair" aria-hidden="true"></div>
+
+      <section id="faction-select" class="faction-select" aria-labelledby="faction-title">
+        <div class="faction-shell">
+          <p class="eyebrow">King of Kingdoms 3D</p>
+          <h1 id="faction-title">Choose your banner</h1>
+          <div id="faction-cards" class="faction-cards"></div>
+        </div>
+      </section>
+
+      <section class="hud topbar" aria-label="World state">
+        <button id="menu-toggle" class="menu-toggle" type="button" aria-controls="command-panel" aria-expanded="false">Menu</button>
+        <div>
+          <span class="label">Faction</span>
+          <strong id="hud-faction">Unsworn</strong>
+        </div>
+        <div>
+          <span class="label">Renown</span>
+          <strong id="hud-renown">0</strong>
+        </div>
+        <div>
+          <span class="label">Gold</span>
+          <strong id="hud-gold">0</strong>
+        </div>
+        <div>
+          <span class="label">Status</span>
+          <strong id="hud-zone">Wildlands</strong>
+        </div>
+      </section>
+
+      <section class="resources" aria-label="Player resources">
+        <div id="resource-list" class="resource-list"></div>
+      </section>
+
+      <section id="base-tooltip" class="base-tooltip is-hidden" aria-hidden="true"></section>
+      <section id="location-prompt" class="location-prompt is-hidden" aria-hidden="true">
+        <strong id="location-prompt-title">Hold Space</strong>
+        <div class="hold-meter"><span id="location-prompt-progress"></span></div>
+      </section>
+      <section id="interior-hint" class="interior-hint is-hidden" aria-hidden="true">
+        <span id="interior-title">Castle Interior</span>
+        <button id="leave-interior" type="button">Leave Keep</button>
+      </section>
+
+      <section id="npc-trade-panel" class="hud npc-trade-panel is-hidden" aria-label="NPC resource trade" aria-hidden="true">
+        <div class="panel-chrome">
+          <div>
+            <strong id="npc-trade-title">Trader</strong>
+            <span id="npc-trade-resource">Resource market</span>
+          </div>
+          <button id="npc-trade-close" class="menu-close" type="button" aria-label="Close trader">Close</button>
+        </div>
+        <label class="trade-amount">
+          <span>Amount</span>
+          <input id="npc-trade-amount" type="number" min="1" step="1" value="1" />
+        </label>
+        <div class="trade-prices">
+          <span>Buy price</span>
+          <strong id="npc-buy-price">0</strong>
+          <span>Sell price</span>
+          <strong id="npc-sell-price">0</strong>
+        </div>
+        <div class="trade-actions">
+          <button id="npc-buy-resource" class="primary" type="button">Buy (0)</button>
+          <button id="npc-sell-resource" type="button">Sell (0)</button>
+        </div>
+      </section>
+
+      <section id="steward-panel" class="hud npc-trade-panel steward-panel is-hidden" aria-label="Steward resource deposit" aria-hidden="true">
+        <div class="panel-chrome">
+          <div>
+            <strong id="steward-title">Steward</strong>
+            <span id="steward-status">Faction vault</span>
+          </div>
+          <button id="steward-close" class="menu-close" type="button" aria-label="Close steward">Close</button>
+        </div>
+        <label class="trade-amount">
+          <span>Amount</span>
+          <input id="steward-amount" type="number" min="1" step="1" value="1" />
+        </label>
+        <div id="steward-deposit-list" class="deposit-list"></div>
+      </section>
+
+      <section id="depot-panel" class="hud npc-trade-panel depot-panel is-hidden" aria-label="Depot storage" aria-hidden="true">
+        <div class="panel-chrome">
+          <div>
+            <strong id="depot-title">Depot</strong>
+            <span id="depot-status">Field storage</span>
+          </div>
+          <button id="depot-close" class="menu-close" type="button" aria-label="Close depot">Close</button>
+        </div>
+        <label class="trade-amount">
+          <span>Amount</span>
+          <input id="depot-amount" type="number" min="1" step="1" value="1" />
+        </label>
+        <div id="depot-resource-list" class="deposit-list"></div>
+        <div id="depot-item-list" class="depot-item-list"></div>
+      </section>
+
+      <section class="hud hand-slot hand-slot-left" aria-label="Left hand">
+        <span class="hand-label">L</span>
+        <strong id="left-hand-icon">Empty</strong>
+      </section>
+
+      <section class="hud hand-slot hand-slot-right" aria-label="Right hand">
+        <span class="hand-label">R</span>
+        <strong id="right-hand-icon">Empty</strong>
+      </section>
+
+      <section id="hotbar" class="hud hotbar" aria-label="Hotbar"></section>
+
+      <section id="inventory-panel" class="hud inventory-panel is-hidden" aria-label="Inventory" aria-hidden="true">
+        <div class="panel-chrome">
+          <div>
+            <strong>Inventory</strong>
+            <span id="inventory-status">Ready</span>
+          </div>
+          <button id="inventory-close" class="menu-close" type="button" aria-label="Close inventory">Close</button>
+        </div>
+        <div class="inventory-shell">
+          <section class="paperdoll" aria-label="Equipped gear">
+            <div class="body-outline" aria-hidden="true"></div>
+            <button class="gear-slot gear-slot-head" data-equip-slot="head" type="button">
+              <span>Head</span>
+              <strong>Empty</strong>
+            </button>
+            <button class="gear-slot gear-slot-chest" data-equip-slot="chest" type="button">
+              <span>Chest</span>
+              <strong>Empty</strong>
+            </button>
+            <button class="gear-slot gear-slot-gloves" data-equip-slot="gloves" type="button">
+              <span>Gloves</span>
+              <strong>Empty</strong>
+            </button>
+            <button class="gear-slot gear-slot-feet" data-equip-slot="feet" type="button">
+              <span>Feet</span>
+              <strong>Empty</strong>
+            </button>
+            <button class="gear-slot gear-slot-left-hand" data-equip-slot="leftHand" type="button">
+              <span>Left hand</span>
+              <strong>Empty</strong>
+            </button>
+            <button class="gear-slot gear-slot-right-hand" data-equip-slot="rightHand" type="button">
+              <span>Right hand</span>
+              <strong>Empty</strong>
+            </button>
+          </section>
+          <section class="inventory-bag" aria-label="Item grid">
+            <div id="inventory-grid" class="inventory-grid"></div>
+            <div id="inventory-details" class="inventory-details"></div>
+            <div id="inventory-hotbar" class="inventory-hotbar" aria-label="Assign hotbar slots"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="build-panel" class="hud build-panel is-hidden" aria-label="Build menu" aria-hidden="true">
+        <div class="panel-chrome">
+          <div>
+            <strong>Build</strong>
+            <span id="build-status">Choose a building</span>
+          </div>
+          <button id="build-close" class="menu-close" type="button" aria-label="Close build menu">Close</button>
+        </div>
+        <div class="build-shell">
+          <section aria-label="Building choices">
+            <div id="build-grid" class="build-grid"></div>
+          </section>
+          <aside id="build-details" class="build-details" aria-label="Building details"></aside>
+        </div>
+        <div class="panel-heading build-owned-heading">
+          <h2>Placed Buildings</h2>
+          <span id="structure-count">0 built</span>
+        </div>
+        <div id="structure-list" class="structure-list"></div>
+      </section>
+
+      <section id="command-panel" class="hud command-panel is-hidden" aria-label="Command panel" aria-hidden="true">
+        <div class="panel-chrome">
+          <strong>Menu</strong>
+          <button id="menu-close" class="menu-close" type="button" aria-label="Close menu">Close</button>
+        </div>
+        <div class="panel-tabs" role="tablist" aria-label="Command views">
+          <button class="tab is-active" data-panel="market" type="button">Market</button>
+          <button class="tab" data-panel="world" type="button">World</button>
+        </div>
+
+        <div class="panel-view is-active" data-panel-view="market">
+          <header class="panel-heading">
+            <h2>Market</h2>
+            <span>AoE pricing</span>
+          </header>
+          <div id="market-list" class="market-list"></div>
+        </div>
+
+        <div class="panel-view" data-panel-view="world">
+          <header class="panel-heading">
+            <h2>Field</h2>
+            <span id="nearest-poi">No POI nearby</span>
+          </header>
+          <div class="action-grid">
+            <button id="claim-poi" class="primary" type="button">Claim POI</button>
+            <button id="spawn-event" type="button">Scout Event</button>
+            <button id="resolve-event" type="button">Resolve Event</button>
+            <button id="simulate-raid" type="button">Raid Pulse</button>
+          </div>
+          <div id="event-card" class="notice"></div>
+        </div>
+
+      </section>
+
+      <section id="ruler-panel" class="hud ruler-panel is-hidden" aria-label="Faction management" aria-hidden="true">
+        <div class="panel-chrome">
+          <div>
+            <strong id="ruler-title">Faction Throne</strong>
+            <span id="ruler-status">Ruler management</span>
+          </div>
+          <button id="ruler-close" class="menu-close" type="button" aria-label="Close ruler menu">Close</button>
+        </div>
+        <div class="panel-tabs" role="tablist" aria-label="Ruler views">
+          <button class="ruler-tab is-active" data-ruler-panel="members" type="button">Members</button>
+          <button class="ruler-tab" data-ruler-panel="resources" type="button">Resources</button>
+          <button class="ruler-tab" data-ruler-panel="politics" type="button">Politics</button>
+        </div>
+        <div id="ruler-members" class="ruler-view is-active" data-ruler-view="members"></div>
+        <div id="ruler-resources" class="ruler-view" data-ruler-view="resources"></div>
+        <div id="ruler-politics" class="ruler-view" data-ruler-view="politics"></div>
+      </section>
+
+      <section id="toast-log" class="toast-log" aria-live="polite"></section>
+    </main>
+
+    <script type="module" src="./src/main.js?v=0.8.0"></script>
+  </body>
+</html>
