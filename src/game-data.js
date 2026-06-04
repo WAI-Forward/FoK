@@ -211,7 +211,7 @@ export const BUILDING_LOOKUP = Object.fromEntries(
 );
 
 export const WEAPON_STATS = {
-  "Empty Hand": { range: 1.35, damage: 6, penetration: 0, frequency: 1.35, speed: 1.25, knockback: 1.2 },
+  "Empty Hand": { range: 1.35, damage: 4, penetration: 0, frequency: 1.35, speed: 1.25, knockback: 2.6 },
   Dagger: { range: 1.35, damage: 12, penetration: 4, frequency: 1.8, speed: 1.7, knockback: 0.9 },
   Sword: { range: 2, damage: 20, penetration: 7, frequency: 1.25, speed: 1.2, knockback: 1.8 },
   Axe: { range: 1.9, damage: 26, penetration: 11, frequency: 0.95, speed: 0.9, knockback: 3.2 },

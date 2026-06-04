@@ -20,6 +20,35 @@ const EVENT_LOCATIONS = [
   { x: 74, z: -42 },
   { x: -36, z: -86 }
 ];
+const HISTORY_VOLUME_RECORD_THRESHOLD = 6;
+const HISTORY_PRECEDING_VOLUME_COUNT = 3;
+const HISTORY_RENOWN_PER_MENTION = 8;
+const LORE_SCHEMA_VERSION = 2;
+const LORE_RECORDED_EVENT_TYPES = new Set(["player_killed", "poi_claimed", "ruler_claimed", "ruler_killed"]);
+const FIRST_NAMES = [
+  "Alden",
+  "Bran",
+  "Cedric",
+  "Daria",
+  "Elian",
+  "Faye",
+  "Garrick",
+  "Helena",
+  "Ivor",
+  "Jessa",
+  "Kael",
+  "Lysa",
+  "Merek",
+  "Nora",
+  "Oren",
+  "Petra",
+  "Quinn",
+  "Rowan",
+  "Sera",
+  "Ted",
+  "Vela",
+  "Wynn"
+];
 const POI_WORKER_DELIVERY_AMOUNT = 20;
 const COURIER_RESOURCE_IDS = ["gold", ...RESOURCE_TYPES.map((resource) => resource.id)];
 const POI_WORKER_NAMES = {
@@ -93,7 +122,12 @@ export function createGameState() {
         wheat: 30,
         iron: 12
       },
-      inventory: []
+      inventory: [],
+      houseName: "",
+      firstName: "",
+      lifeNumber: 0,
+      historyRenownClaimed: 0,
+      historyRenownVersion: LORE_SCHEMA_VERSION
     },
     factionMembers,
     factionGovernance,
@@ -102,7 +136,23 @@ export function createGameState() {
     structures: [],
     couriers: [],
     activeEvent: null,
+    lore: createDefaultLoreState(),
     log: []
+  };
+}
+
+export function createDefaultLoreState() {
+  const opening = createOpeningLoreText();
+  return {
+    version: LORE_SCHEMA_VERSION,
+    story: opening,
+    opening,
+    openingPrompt: createOpeningLorePrompt(),
+    transactions: [],
+    volumes: [],
+    nextVolumeNumber: 1,
+    renownAwardsByPlayerId: {},
+    pendingStartedAt: null
   };
 }
 
@@ -123,8 +173,25 @@ function createInventoryItem(definition) {
   };
 }
 
-export function joinFaction(state, factionId) {
+export function joinFaction(state, factionId, options = {}) {
   const faction = FACTION_LOOKUP[factionId];
+  const houseName = sanitizeHouseName(options.houseName ?? state.player.houseName);
+
+  if (!faction) {
+    return { ok: false, message: "Choose a valid faction." };
+  }
+
+  if (!houseName) {
+    return { ok: false, message: "Choose a house name." };
+  }
+
+  setPlayerHouseName(state, houseName);
+  if (!state.player.firstName) {
+    beginNewPlayerLife(state);
+  } else {
+    updatePlayerLineageName(state);
+  }
+
   state.selectedFactionId = factionId;
   const members = state.factionMembers[factionId];
 
@@ -132,20 +199,26 @@ export function joinFaction(state, factionId) {
     members.push({
       playerId: state.player.id,
       name: state.player.name,
+      houseName: state.player.houseName,
       renown: state.player.renown,
       joinedAt: state.elapsed
     });
+  } else {
+    syncFactionMemberRecord(state);
   }
 
   state.player.position.x = faction.position.x;
   state.player.position.z = faction.position.z + faction.safeRadius * 0.55;
   state.player.renown += 5;
   addLog(state, `You joined ${faction.name}.`);
+  return { ok: true, message: `You joined ${faction.name}.` };
 }
 
 export function getFactionMembers(state, factionId) {
   return (state.factionMembers[factionId] ?? []).map((member) => ({
     ...member,
+    name: member.playerId === state.player.id ? state.player.name : member.name,
+    houseName: member.playerId === state.player.id ? state.player.houseName : member.houseName,
     renown: member.playerId === state.player.id ? state.player.renown : member.renown
   }));
 }
@@ -186,6 +259,18 @@ export function claimFactionRulerSeat(state, factionId) {
   governance.rulerPlayerId = state.player.id;
   state.player.renown += 25;
   addLog(state, `You became ruler of ${FACTION_LOOKUP[factionId].name}.`);
+  syncFactionMemberRecord(state);
+  recordLoreEvent(state, {
+    type: "ruler_claimed",
+    factionId,
+    actor: createPlayerLoreActor(state),
+    summary: `${FACTION_LOOKUP[factionId].name}'s ${state.player.name} became ruler.`,
+    details: {
+      factionName: FACTION_LOOKUP[factionId].name,
+      title: "Ruler"
+    },
+    weight: 4
+  });
   return { ok: true, becameRuler: true, message: `You are now ruler of ${FACTION_LOOKUP[factionId].name}.` };
 }
 
@@ -325,6 +410,18 @@ export function claimPoi(state, poiId) {
   state.player.renown += 18;
   damageEquippedItem(state, 2);
   addLog(state, `${poi.name} was claimed for ${FACTION_LOOKUP[state.selectedFactionId].name}.`);
+  recordLoreEvent(state, {
+    type: "poi_claimed",
+    factionId: state.selectedFactionId,
+    actor: createPlayerLoreActor(state),
+    summary: `${FACTION_LOOKUP[state.selectedFactionId].name}'s ${state.player.name} claimed ${poi.name}.`,
+    details: {
+      factionName: FACTION_LOOKUP[state.selectedFactionId].name,
+      poiName: poi.name,
+      poiType: poi.type
+    },
+    weight: 2
+  });
 
   return { ok: true, message: `${poi.name} claimed.` };
 }
@@ -1092,6 +1189,439 @@ export function damageEquippedItem(state, amount) {
   }
 
   item.durability = Math.max(0, item.durability - amount);
+}
+
+export function sanitizeHouseName(value) {
+  return String(value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "")
+    .slice(0, 18);
+}
+
+export function setPlayerHouseName(state, value) {
+  state.player.houseName = sanitizeHouseName(value);
+  updatePlayerLineageName(state);
+  syncFactionMemberRecord(state);
+  return state.player.houseName;
+}
+
+export function beginNewPlayerLife(state) {
+  if (!state.player.houseName) {
+    return state.player.name;
+  }
+
+  state.player.firstName = randomItem(FIRST_NAMES);
+  state.player.lifeNumber = Math.max(0, Math.floor(Number(state.player.lifeNumber) || 0)) + 1;
+  updatePlayerLineageName(state);
+  syncFactionMemberRecord(state);
+  return state.player.name;
+}
+
+export function updatePlayerLineageName(state) {
+  if (!state.player.houseName) {
+    return state.player.name;
+  }
+
+  const firstName = state.player.firstName || randomItem(FIRST_NAMES);
+  state.player.firstName = firstName;
+  state.player.name = `${firstName} ${formatHouseName(state.player.houseName)}`;
+  return state.player.name;
+}
+
+export function formatHouseName(houseName) {
+  const clean = sanitizeHouseName(houseName);
+  return clean ? `${clean.charAt(0)}${clean.slice(1).toLowerCase()}` : "";
+}
+
+export function syncFactionMemberRecord(state) {
+  if (!state.selectedFactionId || !state.factionMembers[state.selectedFactionId]) {
+    return;
+  }
+
+  const member = state.factionMembers[state.selectedFactionId].find((entry) => entry.playerId === state.player.id);
+
+  if (!member) {
+    return;
+  }
+
+  member.name = state.player.name;
+  member.houseName = state.player.houseName;
+  member.renown = state.player.renown;
+}
+
+export function recordPlayerKillLore(state, defeatedPlayer, options = {}) {
+  if (!defeatedPlayer?.id || defeatedPlayer.id === state.player.id || !state.selectedFactionId) {
+    return null;
+  }
+
+  const defeatedFaction = defeatedPlayer.factionId ? FACTION_LOOKUP[defeatedPlayer.factionId] : null;
+  const wasRuler = defeatedPlayer.factionId
+    ? state.factionGovernance[defeatedPlayer.factionId]?.rulerPlayerId === defeatedPlayer.id
+    : false;
+  const weaponName = options.weaponName ?? "arms";
+  const summary = wasRuler
+    ? `${FACTION_LOOKUP[state.selectedFactionId].name}'s ${state.player.name} killed ${defeatedFaction?.name ?? "a rival faction"}'s ruler ${defeatedPlayer.name} using ${weaponName}.`
+    : `${FACTION_LOOKUP[state.selectedFactionId].name}'s ${state.player.name} defeated ${defeatedPlayer.name} using ${weaponName}.`;
+
+  return recordLoreEvent(state, {
+    type: wasRuler ? "ruler_killed" : "player_killed",
+    factionId: state.selectedFactionId,
+    actor: createPlayerLoreActor(state),
+    subject: createExternalPlayerLoreActor(defeatedPlayer),
+    summary,
+    details: {
+      factionName: FACTION_LOOKUP[state.selectedFactionId].name,
+      defeatedFactionName: defeatedFaction?.name ?? "Unknown faction",
+      weaponName,
+      wasRuler
+    },
+    weight: wasRuler ? 5 : 3
+  });
+}
+
+export function recordLoreEvent(state, event) {
+  if (!event?.summary) {
+    return null;
+  }
+
+  const type = String(event.type ?? "event").slice(0, 60);
+  if (!LORE_RECORDED_EVENT_TYPES.has(type)) {
+    return null;
+  }
+
+  ensureLoreState(state);
+  const actor = normalizeLoreActor(event.actor);
+  const subject = normalizeLoreActor(event.subject);
+  const mentions = collectLoreMentions(actor, subject, event.mentions);
+  const transaction = {
+    id: createId("lore"),
+    type,
+    at: Math.max(0, Number(state.elapsed) || 0),
+    factionId: FACTION_LOOKUP[event.factionId]?.id ?? actor?.factionId ?? null,
+    summary: String(event.summary).slice(0, 240),
+    actor,
+    subject,
+    mentions,
+    details: event.details && typeof event.details === "object" ? { ...event.details } : {},
+    weight: Math.max(1, Math.min(5, Math.floor(Number(event.weight) || 1)))
+  };
+
+  state.lore.transactions.push(transaction);
+  state.lore.transactions = state.lore.transactions.slice(-120);
+  if (state.lore.pendingStartedAt === null) {
+    state.lore.pendingStartedAt = state.elapsed;
+  }
+
+  return maybeWriteHistoryVolume(state);
+}
+
+export function tickLoreSystem(state) {
+  ensureLoreState(state);
+  return maybeWriteHistoryVolume(state);
+}
+
+export function getLoreProgress(state) {
+  const lore = ensureLoreState(state);
+  const completed = Math.min(HISTORY_VOLUME_RECORD_THRESHOLD, lore.transactions.length);
+  const percent = Math.floor((completed / HISTORY_VOLUME_RECORD_THRESHOLD) * 100);
+
+  return {
+    completed,
+    required: HISTORY_VOLUME_RECORD_THRESHOLD,
+    remaining: Math.max(0, HISTORY_VOLUME_RECORD_THRESHOLD - completed),
+    percent
+  };
+}
+
+export function claimLoreRenownAwards(state) {
+  ensureLoreState(state);
+  const playerId = state.player.id;
+  const totalAward = Math.max(0, Math.floor(Number(state.lore.renownAwardsByPlayerId?.[playerId]) || 0));
+  if (state.player.historyRenownVersion !== LORE_SCHEMA_VERSION) {
+    state.player.historyRenownClaimed = 0;
+    state.player.historyRenownVersion = LORE_SCHEMA_VERSION;
+  }
+
+  const alreadyClaimed = Math.max(0, Math.floor(Number(state.player.historyRenownClaimed) || 0));
+  const gain = Math.max(0, totalAward - alreadyClaimed);
+
+  if (!gain) {
+    return 0;
+  }
+
+  state.player.renown += gain;
+  state.player.historyRenownClaimed = totalAward;
+  state.player.historyRenownVersion = LORE_SCHEMA_VERSION;
+  syncFactionMemberRecord(state);
+  addLog(state, `The chronicles named you. Gained ${gain} renown.`);
+  return gain;
+}
+
+function createPlayerLoreActor(state) {
+  return {
+    playerId: state.player.id,
+    name: state.player.name,
+    houseName: state.player.houseName,
+    factionId: state.selectedFactionId
+  };
+}
+
+function createExternalPlayerLoreActor(player) {
+  return {
+    playerId: player.id ?? null,
+    name: player.name ?? "Unknown",
+    houseName: player.houseName ?? "",
+    factionId: player.factionId ?? null
+  };
+}
+
+function ensureLoreState(state) {
+  state.lore = normalizeLoreState(state.lore);
+  return state.lore;
+}
+
+export function normalizeLoreState(source) {
+  const lore = source && typeof source === "object" ? source : {};
+  if (lore.version !== LORE_SCHEMA_VERSION) {
+    return createDefaultLoreState();
+  }
+
+  const fallback = createDefaultLoreState();
+  return {
+    version: LORE_SCHEMA_VERSION,
+    story: typeof lore.story === "string" && lore.story.trim() ? lore.story.slice(0, 20000) : fallback.story,
+    opening: typeof lore.opening === "string" && lore.opening.trim() ? lore.opening.slice(0, 2400) : fallback.opening,
+    openingPrompt:
+      typeof lore.openingPrompt === "string" && lore.openingPrompt.trim()
+        ? lore.openingPrompt.slice(0, 3000)
+        : fallback.openingPrompt,
+    transactions: Array.isArray(lore.transactions)
+      ? lore.transactions.filter((entry) => entry && LORE_RECORDED_EVENT_TYPES.has(entry.type)).slice(-120)
+      : [],
+    volumes: Array.isArray(lore.volumes) ? lore.volumes.filter(Boolean).slice(-40) : [],
+    nextVolumeNumber: Math.max(1, Math.floor(Number(lore.nextVolumeNumber) || 1)),
+    renownAwardsByPlayerId:
+      lore.renownAwardsByPlayerId && typeof lore.renownAwardsByPlayerId === "object"
+        ? Object.fromEntries(
+            Object.entries(lore.renownAwardsByPlayerId)
+              .filter(([playerId]) => typeof playerId === "string" && playerId.length <= 80)
+              .map(([playerId, amount]) => [playerId, Math.max(0, Math.floor(Number(amount) || 0))])
+          )
+        : {},
+    pendingStartedAt: Number.isFinite(Number(lore.pendingStartedAt)) ? Math.max(0, Number(lore.pendingStartedAt)) : null
+  };
+}
+
+function maybeWriteHistoryVolume(state, options = {}) {
+  const lore = ensureLoreState(state);
+  const pendingCount = lore.transactions.length;
+
+  if (pendingCount < HISTORY_VOLUME_RECORD_THRESHOLD) {
+    return null;
+  }
+
+  return writeHistoryVolume(state);
+}
+
+function writeHistoryVolume(state) {
+  const lore = ensureLoreState(state);
+  const transactions = lore.transactions.splice(0, HISTORY_VOLUME_RECORD_THRESHOLD);
+
+  if (!transactions.length) {
+    return null;
+  }
+
+  const previousVolumes = selectRelevantPrecedingVolumes(lore.volumes);
+  const mentionCounts = countMentions(transactions);
+  const renownAwards = {};
+
+  for (const [playerId, count] of Object.entries(mentionCounts)) {
+    const award = count * HISTORY_RENOWN_PER_MENTION;
+    renownAwards[playerId] = award;
+    lore.renownAwardsByPlayerId[playerId] = (lore.renownAwardsByPlayerId[playerId] ?? 0) + award;
+  }
+
+  const volumeNumber = lore.nextVolumeNumber;
+  const prompt = createHistoryPrompt(transactions, lore.story);
+  const text = composeHistoryVolumeText(volumeNumber, transactions, lore.story);
+  const volume = {
+    id: createId("volume"),
+    number: volumeNumber,
+    title: createHistoryVolumeTitle(volumeNumber, transactions),
+    createdAt: Math.max(0, Number(state.elapsed) || 0),
+    previousVolumeIds: previousVolumes.map((volume) => volume.id),
+    transactionIds: transactions.map((transaction) => transaction.id),
+    mentionCounts,
+    renownAwards,
+    prompt,
+    text
+  };
+
+  lore.volumes.unshift(volume);
+  lore.volumes = lore.volumes.slice(0, 40);
+  lore.story = appendStorySection(lore.story, text);
+  lore.nextVolumeNumber += 1;
+  lore.pendingStartedAt = lore.transactions.length ? state.elapsed : null;
+  claimLoreRenownAwards(state);
+  addLog(state, `The chronicle was extended.`);
+  return volume;
+}
+
+function selectRelevantPrecedingVolumes(volumes) {
+  return volumes
+    .slice(0, HISTORY_PRECEDING_VOLUME_COUNT)
+    .sort((a, b) => a.number - b.number);
+}
+
+function countMentions(transactions) {
+  const counts = {};
+
+  for (const transaction of transactions) {
+    for (const mention of transaction.mentions ?? []) {
+      if (!mention.playerId) {
+        continue;
+      }
+
+      counts[mention.playerId] = (counts[mention.playerId] ?? 0) + 1;
+    }
+  }
+
+  return counts;
+}
+
+function composeHistoryVolumeText(volumeNumber, transactions, storySoFar) {
+  const opening = storySoFar?.trim()
+    ? `Chapter ${volumeNumber}. The tale continued, and the ink turned again to banners, crowns, and names tested in the field.`
+    : createOpeningLoreText();
+  const deeds = transactions.map((event) => narrateTransaction(event)).join(" ");
+  const strongest = transactions.slice().sort((a, b) => b.weight - a.weight)[0];
+
+  return [opening, deeds, createEventReflection(strongest)].filter(Boolean).join("\n\n");
+}
+
+function createHistoryPrompt(transactions, storySoFar) {
+  const eventText = formatEventsForHistoryPrompt(transactions);
+
+  if (!storySoFar?.trim()) {
+    return `Start a medieval tale based on the following events:\n\n${eventText}`;
+  }
+
+  return `Continue this story:\n\n${storySoFar}\n\nBased on these events:\n\n${eventText}`;
+}
+
+function formatEventsForHistoryPrompt(transactions) {
+  return transactions.map((event) => `- ${event.summary}`).join("\n");
+}
+
+function appendStorySection(storySoFar, nextSection) {
+  return [storySoFar?.trim(), nextSection?.trim()].filter(Boolean).join("\n\n");
+}
+
+function createOpeningLorePrompt() {
+  return `Start a medieval tale. Set the scene using these factions by name: ${FACTIONS.map((faction) => faction.name).join(", ")}. Mention these places by name: ${POIS.map((poi) => poi.name).join(", ")}.`;
+}
+
+function createOpeningLoreText() {
+  const factionNames = formatList(FACTIONS.map((faction) => faction.name));
+  const poiNames = formatList(POIS.map((poi) => poi.name));
+  return `In the wild crownlands, ${factionNames} raised their banners beneath a restless sky. Between them lay ${poiNames}, places of quarry dust, wheat, iron, market cries, and old dungeon shadows, where every oath waited to become history.`;
+}
+
+function formatList(values) {
+  const clean = values.filter(Boolean);
+
+  if (clean.length <= 1) {
+    return clean[0] ?? "";
+  }
+
+  if (clean.length === 2) {
+    return `${clean[0]} and ${clean[1]}`;
+  }
+
+  return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
+}
+
+function createHistoryVolumeTitle(volumeNumber, transactions) {
+  const strongest = transactions.slice().sort((a, b) => b.weight - a.weight)[0];
+  const factionName = strongest?.factionId ? FACTION_LOOKUP[strongest.factionId]?.name : null;
+  const theme = strongest ? getHistoryTheme(strongest.type) : "Unwritten Roads";
+  return `Volume ${volumeNumber}: ${factionName ? `${theme} of ${factionName}` : theme}`;
+}
+
+function getHistoryTheme(type) {
+  const themes = {
+    player_killed: "Blood in the Field",
+    poi_claimed: "Banners Raised",
+    ruler_claimed: "Crowns Taken",
+    ruler_killed: "Crowns Broken"
+  };
+
+  return themes[type] ?? "Field Notes";
+}
+
+function narrateTransaction(event) {
+  if (event.type === "ruler_claimed") {
+    return `${event.actor?.name ?? "A claimant"} took the throne, and the hall answered with steel-edged silence.`;
+  }
+
+  if (event.type === "ruler_killed") {
+    return `${event.summary} The death of a crowned rival rang farther than the weapon stroke.`;
+  }
+
+  if (event.type === "player_killed") {
+    return `${event.summary} Those who saw it carried the tale back through campfires and gatehouses.`;
+  }
+
+  if (event.type === "poi_claimed") {
+    return `${event.actor?.name ?? "A captain"} planted a banner over ${event.details?.poiName ?? "new ground"}.`;
+  }
+
+  return event.summary;
+}
+
+function createEventReflection(event) {
+  if (event.weight >= 5) {
+    return "Such deeds do not settle quickly; they become the kind of rumor that sharpens borders.";
+  }
+
+  if (event.weight >= 3) {
+    return "By nightfall the deed had already grown larger in the telling.";
+  }
+
+  return "Small acts, written faithfully, are how kingdoms learn their own names.";
+}
+
+function collectLoreMentions(actor, subject, mentions = []) {
+  const byId = new Map();
+
+  for (const entry of [actor, subject, ...(Array.isArray(mentions) ? mentions : [])]) {
+    const mention = normalizeLoreActor(entry);
+
+    if (!mention?.playerId) {
+      continue;
+    }
+
+    byId.set(mention.playerId, mention);
+  }
+
+  return [...byId.values()];
+}
+
+function normalizeLoreActor(actor) {
+  if (!actor || typeof actor !== "object") {
+    return null;
+  }
+
+  const playerId = typeof actor.playerId === "string" ? actor.playerId.slice(0, 80) : null;
+  const name = typeof actor.name === "string" ? actor.name.slice(0, 60) : "Unknown";
+  const factionId = FACTION_LOOKUP[actor.factionId]?.id ?? null;
+
+  return {
+    playerId,
+    name,
+    houseName: sanitizeHouseName(actor.houseName),
+    factionId
+  };
 }
 
 export function addLog(state, message) {

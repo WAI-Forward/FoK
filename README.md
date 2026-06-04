@@ -5,7 +5,7 @@ A browser-based 3D medieval faction prototype with a first playable slice of:
 - AoE-style resource trading where each buy raises prices and each sell lowers them.
 - Four joinable factions with hubs, safe zones, and tracked faction resources.
 - Claimable points of interest that generate wood, stone, wheat, iron, or gold.
-- Renown gain from territory, building, depots, couriers, and dynamic events.
+- Renown gain from history-volume mentions, territory, building, depots, couriers, and dynamic events.
 - Loot durability and hub repairs.
 - Destructible player outposts and resource depots.
 - Outposts periodically fire on nearby PvE mobs and players whose faction is marked as an enemy.
@@ -38,10 +38,12 @@ Dungeon PvE mobs are enabled by default. Add `?pve=false` to the URL to turn off
 
 ## Play
 
-- Pick a faction banner to start at that faction hub.
+- Enter an A-Z house name, then pick a faction banner to start at that faction hub.
 - Move in the 3D world with WASD or arrow keys. Press Space to jump, then press Space while airborne to dive.
 - Drag with the middle mouse button to rotate the free camera. Double middle-click to toggle an over-the-shoulder locked third-person camera with a centered crosshair.
 - Use the command panel to buy and sell resources, claim nearby POIs, and resolve dynamic events.
+- Press L to open the chronicle scroll and read written history volumes.
+- The chronicle starts with a scene-setting opening, then appends completed batches of player kills, rulers taking thrones, ruler kills, and POI captures into one continuing story.
 - Press B to open the build menu for depots, outposts, and walls. Choose Place, rotate the translucent preview with the mouse wheel, then left-click to build. Hold Space near a friendly depot to store resources or unequipped items for its automatic camel courier.
 - In Gear, double left-click an item to equip it in your left hand, or double right-click it to equip it in your right hand.
 - Equipped items are shown on the character's left and right hand in the 3D scene.

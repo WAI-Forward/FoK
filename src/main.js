@@ -28,18 +28,21 @@ import {
   WEAPON_STATS
 } from "./game-data.js";
 import {
+  beginNewPlayerLife,
   buildStructure,
   acceptFactionAllegiance,
   claimPoi,
   claimFactionRulerSeat,
-  claimNearestPoi,
+  claimLoreRenownAwards,
   createGameState,
   depositToFaction,
   distance2D,
   equipItem,
+  formatHouseName,
   getEquippedItem,
   getFactionMembers,
   getFactionRulerName,
+  getLoreProgress,
   getNearestPoi,
   getSelectedGearItem,
   getZone,
@@ -47,16 +50,19 @@ import {
   isArmorItem,
   isWeaponItem,
   joinFaction,
+  normalizeLoreState,
   performWeaponAttack,
+  recordPlayerKillLore,
   requestFactionAllegiance,
-  resolveDynamicEvent,
+  sanitizeHouseName,
   setFactionRelation,
-  simulateRaid,
   selectGearItem,
-  spawnDynamicEvent,
+  setPlayerHouseName,
+  syncFactionMemberRecord,
   tickCouriers,
   tickEvent,
   tickFactionIncome,
+  tickLoreSystem,
   unequipHand
 } from "./state.js";
 
@@ -179,6 +185,8 @@ const PVE_STATUS_BAR_HEIGHT = 7.15;
 const REMOTE_STATUS_BAR_HEIGHT = 7.35;
 const LOCAL_STATUS_BAR_HEIGHT = 7.05;
 const PVE_MOB_COLLISION_PADDING = 0.22;
+const ACTOR_COLLISION_PADDING = 0.12;
+const PLAYER_COLLISION_RADIUS = 1.15;
 const PVE_KNOCKBACK_IMPULSE_SCALE = 4.2;
 const PLAYER_KNOCKBACK_IMPULSE_SCALE = 3.2;
 const KNOCKBACK_MAX_SPEED = 13.5;
@@ -224,6 +232,8 @@ const ARMOR_MATERIAL_FALLBACKS = {
 const TERRAIN_SIZE = 520;
 const TERRAIN_HALF = TERRAIN_SIZE / 2;
 const TERRAIN_SEGMENTS = 156;
+const LONG_GRASS_PATCH_COUNT = 115;
+const LONG_GRASS_BLADES_PER_PATCH = 22;
 const TERRAIN_LEVELS = [
   { x: -210, z: -210, height: 2.2, radius: 78, falloff: 34 },
   { x: 210, z: -210, height: 7.6, radius: 76, falloff: 36 },
@@ -279,6 +289,8 @@ const world = {
   raycaster: new THREE.Raycaster(),
   groundPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
   aimTarget: new THREE.Vector3(0, 0, 1),
+  aimPoint: new THREE.Vector3(0, 0, 1),
+  aimRayDirection: new THREE.Vector3(0, 0, 1),
   aimDirection: new THREE.Vector3(0, 0, 1),
   hasAim: false,
   clock: new THREE.Clock(),
@@ -295,6 +307,7 @@ const world = {
     couriers: new Map(),
     event: null,
     terrain: null,
+    grassPatches: null,
     scenery: null
   },
   courierVisuals: new Map(),
@@ -407,6 +420,7 @@ const world = {
   cameraYaw: Math.PI * 0.25,
   cameraPitch: 0.6,
   cameraDistance: 62,
+  uiReady: false,
   pointer: {
     dragging: false,
     cameraDragging: false,
@@ -427,17 +441,21 @@ const world = {
 const ui = {
   factionSelect: document.querySelector("#faction-select"),
   factionCards: document.querySelector("#faction-cards"),
+  houseNameInput: document.querySelector("#house-name"),
+  houseNameStatus: document.querySelector("#house-name-status"),
+  hudFactionButton: document.querySelector("#hud-faction-button"),
   hudFaction: document.querySelector("#hud-faction"),
+  hudPlayerButton: document.querySelector("#hud-player-button"),
+  hudPlayer: document.querySelector("#hud-player"),
+  hudLoreButton: document.querySelector("#hud-lore-button"),
   hudRenown: document.querySelector("#hud-renown"),
-  hudGold: document.querySelector("#hud-gold"),
+  hudStatusButton: document.querySelector("#hud-status-button"),
   hudZone: document.querySelector("#hud-zone"),
   resourceList: document.querySelector("#resource-list"),
-  menuToggle: document.querySelector("#menu-toggle"),
-  menuClose: document.querySelector("#menu-close"),
-  commandPanel: document.querySelector("#command-panel"),
-  marketList: document.querySelector("#market-list"),
-  nearestPoi: document.querySelector("#nearest-poi"),
-  eventCard: document.querySelector("#event-card"),
+  statusPanel: document.querySelector("#status-panel"),
+  statusClose: document.querySelector("#status-close"),
+  statusSummary: document.querySelector("#status-summary"),
+  statusBody: document.querySelector("#status-body"),
   structureCount: document.querySelector("#structure-count"),
   structureList: document.querySelector("#structure-list"),
   inventoryPanel: document.querySelector("#inventory-panel"),
@@ -490,12 +508,17 @@ const ui = {
   rulerMembers: document.querySelector("#ruler-members"),
   rulerResources: document.querySelector("#ruler-resources"),
   rulerPolitics: document.querySelector("#ruler-politics"),
+  loreScroll: document.querySelector("#lore-scroll"),
+  loreClose: document.querySelector("#lore-close"),
+  loreMeta: document.querySelector("#lore-meta"),
+  loreBody: document.querySelector("#lore-body"),
   toastLog: document.querySelector("#toast-log")
 };
 
 function initializeNetworkIdentity() {
   const storageKey = "kok3d.playerId";
   const nameKey = "kok3d.playerName";
+  const houseKey = "kok3d.houseName";
   let playerId = "";
 
   try {
@@ -521,6 +544,11 @@ function initializeNetworkIdentity() {
 
   state.player.id = playerId;
   state.player.name = playerName;
+  try {
+    state.player.houseName = sanitizeHouseName(localStorage.getItem(houseKey));
+  } catch {
+    state.player.houseName = "";
+  }
   state.player.hp = MULTIPLAYER_MAX_HEALTH;
   state.player.maxHp = MULTIPLAYER_MAX_HEALTH;
   state.player.dead = false;
@@ -621,6 +649,12 @@ function markPersistenceDirty() {
   }
 }
 
+function markPlayerPersistenceDue() {
+  if (world.persistence.enabled) {
+    world.persistence.saveTimer = Math.min(world.persistence.saveTimer, 0.5);
+  }
+}
+
 function updatePersistence(deltaSeconds) {
   if (!world.persistence.enabled) {
     return;
@@ -655,8 +689,13 @@ function buildPersistentPayload(includeWorld = true) {
       player: {
         id: state.player.id,
         name: state.player.name,
+        houseName: state.player.houseName,
+        firstName: state.player.firstName,
+        lifeNumber: state.player.lifeNumber,
         gold: state.player.gold,
         renown: state.player.renown,
+        historyRenownClaimed: state.player.historyRenownClaimed,
+        historyRenownVersion: state.player.historyRenownVersion,
         position: state.player.position,
         velocity: state.player.velocity,
         selectedGearItemId: state.player.selectedGearItemId,
@@ -678,7 +717,8 @@ function buildPersistentPayload(includeWorld = true) {
       pois: state.pois,
       structures: state.structures,
       couriers: state.couriers,
-      activeEvent: state.activeEvent
+      activeEvent: state.activeEvent,
+      lore: state.lore
     };
   }
 
@@ -696,6 +736,13 @@ function applyPersistentPayload(data, options = {}) {
 
   if (options.includePlayer && data.player) {
     applyPlayerSnapshot(data.player);
+  }
+
+  if (claimLoreRenownAwards(state) > 0) {
+    markPlayerPersistenceDue();
+    if (world.uiReady) {
+      refreshUi();
+    }
   }
 }
 
@@ -729,6 +776,7 @@ function applyWorldSnapshot(snapshot) {
   }
 
   state.activeEvent = snapshot.activeEvent ?? null;
+  state.lore = normalizeLoreState(snapshot.lore ?? state.lore);
 }
 
 function applyPlayerSnapshot(snapshot) {
@@ -744,6 +792,17 @@ function applyPlayerSnapshot(snapshot) {
 
   state.player.gold = Number.isFinite(Number(persisted.gold)) ? Number(persisted.gold) : state.player.gold;
   state.player.renown = Number.isFinite(Number(persisted.renown)) ? Number(persisted.renown) : state.player.renown;
+  state.player.historyRenownClaimed = Number.isFinite(Number(persisted.historyRenownClaimed))
+    ? Number(persisted.historyRenownClaimed)
+    : state.player.historyRenownClaimed;
+  state.player.historyRenownVersion = Number.isFinite(Number(persisted.historyRenownVersion))
+    ? Number(persisted.historyRenownVersion)
+    : 0;
+  state.player.houseName = sanitizeHouseName(persisted.houseName) || state.player.houseName;
+  state.player.firstName = typeof persisted.firstName === "string" ? persisted.firstName.slice(0, 24) : state.player.firstName;
+  state.player.lifeNumber = Number.isFinite(Number(persisted.lifeNumber))
+    ? Math.max(0, Math.floor(Number(persisted.lifeNumber)))
+    : state.player.lifeNumber;
   state.player.resources = mergeResourceBag(persisted.resources, state.player.resources);
 
   if (persisted.position) {
@@ -773,6 +832,14 @@ function applyPlayerSnapshot(snapshot) {
   }
 
   state.player.selectedGearItemId = persisted.selectedGearItemId ?? state.player.selectedGearItemId;
+  if (state.player.houseName) {
+    if (!state.player.firstName) {
+      beginNewPlayerLife(state);
+    } else {
+      setPlayerHouseName(state, state.player.houseName);
+    }
+  }
+  syncFactionMemberRecord(state);
   removeLegacyStarterWeapons();
 }
 
@@ -934,6 +1001,7 @@ function setupScene() {
   createFactionHubs();
   createPoiMeshes();
   createOutdoorScenery();
+  createLongGrassPatches();
   createCastleInterior();
   createPoiInteriors();
   createPlayerMesh();
@@ -1316,6 +1384,152 @@ function createOutdoorRock(scale = 1) {
   group.add(side);
 
   return group;
+}
+
+function createLongGrassPatches() {
+  const group = new THREE.Group();
+  group.name = "long-grass-patches";
+
+  const bladeGeometry = createLongGrassBladeGeometry();
+  const lightGrass = new THREE.MeshStandardMaterial({
+    color: "#4f7d3a",
+    roughness: 0.96,
+    side: THREE.DoubleSide
+  });
+  const darkGrass = new THREE.MeshStandardMaterial({
+    color: "#355f31",
+    roughness: 0.98,
+    side: THREE.DoubleSide
+  });
+  const maxBlades = LONG_GRASS_PATCH_COUNT * Math.ceil(LONG_GRASS_BLADES_PER_PATCH * 1.35);
+  const lightBlades = new THREE.InstancedMesh(bladeGeometry, lightGrass, maxBlades);
+  const darkBlades = new THREE.InstancedMesh(bladeGeometry, darkGrass, maxBlades);
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const rotation = new THREE.Quaternion();
+  const bladeScale = new THREE.Vector3();
+  const euler = new THREE.Euler();
+  let lightIndex = 0;
+  let darkIndex = 0;
+  let patches = 0;
+
+  for (let attempt = 0; attempt < 420 && patches < LONG_GRASS_PATCH_COUNT; attempt += 1) {
+    const radius = 24 + Math.sqrt(hash2d(attempt + 13, 41)) * (TERRAIN_HALF - 42);
+    const angle = attempt * 2.399963 + hash2d(attempt + 5, 103) * 0.85;
+    const centerX = Math.cos(angle) * radius + (hash2d(attempt, 71) - 0.5) * 18;
+    const centerZ = Math.sin(angle) * radius + (hash2d(attempt, 97) - 0.5) * 18;
+
+    if (!canPlaceLongGrassAt(centerX, centerZ, 8.5)) {
+      continue;
+    }
+
+    patches += 1;
+    const patchRadius = 2.2 + hash2d(attempt, 151) * 4.4;
+    const bladeCount = Math.floor(LONG_GRASS_BLADES_PER_PATCH * (0.72 + hash2d(attempt, 173) * 0.58));
+
+    for (let blade = 0; blade < bladeCount; blade += 1) {
+      const bladeSeed = attempt * 97 + blade * 13;
+      const bladeRadius = Math.sqrt(hash2d(bladeSeed, 11)) * patchRadius;
+      const bladeAngle = hash2d(bladeSeed, 23) * Math.PI * 2;
+      const x = centerX + Math.cos(bladeAngle) * bladeRadius;
+      const z = centerZ + Math.sin(bladeAngle) * bladeRadius;
+
+      if (!canPlaceLongGrassAt(x, z, 4.5)) {
+        continue;
+      }
+
+      const bladeHeight = 0.62 + hash2d(bladeSeed, 37) * 1.15;
+      const bladeWidth = 0.16 + hash2d(bladeSeed, 43) * 0.16;
+      const yaw = hash2d(bladeSeed, 59) * Math.PI * 2;
+      const leanX = (hash2d(bladeSeed, 67) - 0.5) * 0.24;
+      const leanZ = (hash2d(bladeSeed, 79) - 0.5) * 0.28;
+      euler.set(leanX, yaw, leanZ);
+      rotation.setFromEuler(euler);
+      position.set(x, getTerrainHeightAt(x, z) + 0.02, z);
+      bladeScale.set(bladeWidth, bladeHeight, 1);
+      matrix.compose(position, rotation, bladeScale);
+
+      if (hash2d(bladeSeed, 89) > 0.45) {
+        lightBlades.setMatrixAt(lightIndex, matrix);
+        lightIndex += 1;
+      } else {
+        darkBlades.setMatrixAt(darkIndex, matrix);
+        darkIndex += 1;
+      }
+    }
+  }
+
+  lightBlades.count = lightIndex;
+  darkBlades.count = darkIndex;
+  lightBlades.instanceMatrix.needsUpdate = true;
+  darkBlades.instanceMatrix.needsUpdate = true;
+  lightBlades.castShadow = true;
+  darkBlades.castShadow = true;
+  lightBlades.receiveShadow = true;
+  darkBlades.receiveShadow = true;
+  group.add(lightBlades, darkBlades);
+
+  world.meshes.grassPatches = group;
+  addOutdoor(group);
+}
+
+function createLongGrassBladeGeometry() {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute([
+      -0.5, 0, 0,
+      0.5, 0, 0,
+      0.18, 0.72, 0,
+      0, 1, 0,
+      -0.18, 0.72, 0
+    ], 3)
+  );
+  geometry.setAttribute(
+    "uv",
+    new THREE.Float32BufferAttribute([
+      0, 0,
+      1, 0,
+      0.68, 0.72,
+      0.5, 1,
+      0.32, 0.72
+    ], 2)
+  );
+  geometry.setIndex([0, 1, 2, 0, 2, 4, 4, 2, 3]);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function canPlaceLongGrassAt(x, z, rockPadding) {
+  if (Math.max(Math.abs(x), Math.abs(z)) > TERRAIN_HALF - 14) {
+    return false;
+  }
+
+  if (distanceToOutdoorRoad(x, z) < 8) {
+    return false;
+  }
+
+  if (getTerrainGrassAmountAt(x, z) < 0.78) {
+    return false;
+  }
+
+  for (const scenery of OUTDOOR_SCENERY) {
+    const clearance = scenery.type === "rock" ? rockPadding + scenery.scale * 3.2 : 2.4 + scenery.scale * 1.8;
+    if (Math.hypot(x - scenery.x, z - scenery.z) < clearance) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function distanceToOutdoorRoad(x, z) {
+  return Math.min(
+    Math.abs(x),
+    Math.abs(z),
+    Math.abs(x - z) * Math.SQRT1_2,
+    Math.abs(x + z) * Math.SQRT1_2
+  );
 }
 
 function createCastleInterior() {
@@ -3151,6 +3365,10 @@ function createRemotePlayerVisual(player) {
 }
 
 function setupUi() {
+  if (ui.houseNameInput) {
+    ui.houseNameInput.value = sanitizeHouseName(state.player.houseName);
+  }
+
   ui.factionCards.innerHTML = FACTIONS.map(
     (faction) => `
       <button class="faction-card" style="--faction-color: ${faction.color}66" data-faction="${faction.id}" type="button">
@@ -3161,32 +3379,50 @@ function setupUi() {
     `
   ).join("");
 
+  updateHouseNameGate();
+  ui.houseNameInput?.addEventListener("input", () => {
+    const sanitized = sanitizeHouseName(ui.houseNameInput.value);
+    if (ui.houseNameInput.value !== sanitized) {
+      ui.houseNameInput.value = sanitized;
+    }
+    updateHouseNameGate();
+  });
+
   ui.factionCards.addEventListener("click", (event) => {
     const button = event.target.closest("[data-faction]");
     if (!button) {
       return;
     }
 
-    joinFaction(state, button.dataset.faction);
-    ui.factionSelect.classList.add("is-hidden");
-    markPersistenceDirty();
-    refreshUi();
+    const houseName = sanitizeHouseName(ui.houseNameInput?.value);
+
+    if (!houseName) {
+      flash("Choose a house name.");
+      ui.houseNameInput?.focus();
+      updateHouseNameGate();
+      return;
+    }
+
+    try {
+      localStorage.setItem("kok3d.houseName", houseName);
+    } catch {
+      // Local saves are optional; server persistence still receives the house name.
+    }
+
+    const result = joinFaction(state, button.dataset.faction, { houseName });
+    runAction(result);
+
+    if (result.ok) {
+      ui.factionSelect.classList.add("is-hidden");
+      ui.factionSelect.setAttribute("aria-hidden", "true");
+      publishLocalPlayer(true);
+    }
   });
 
-  if (state.selectedFactionId) {
+  if (state.selectedFactionId && state.player.houseName) {
     ui.factionSelect.classList.add("is-hidden");
+    ui.factionSelect.setAttribute("aria-hidden", "true");
   }
-
-  document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((entry) => entry.classList.remove("is-active"));
-      document
-        .querySelectorAll(".panel-view")
-        .forEach((entry) => entry.classList.remove("is-active"));
-      tab.classList.add("is-active");
-      document.querySelector(`[data-panel-view="${tab.dataset.panel}"]`).classList.add("is-active");
-    });
-  });
 
   document.querySelectorAll(".ruler-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -3199,11 +3435,20 @@ function setupUi() {
     });
   });
 
-  ui.menuToggle.addEventListener("click", () => {
-    setCommandPanelOpen(ui.commandPanel.classList.contains("is-hidden"));
+  ui.hudFactionButton.addEventListener("click", () => {
+    setRulerPanelOpen(ui.rulerPanel.classList.contains("is-hidden"), { leaveSeat: false });
   });
-  ui.menuClose.addEventListener("click", () => {
-    setCommandPanelOpen(false);
+  ui.hudPlayerButton.addEventListener("click", () => {
+    setInventoryPanelOpen(ui.inventoryPanel.classList.contains("is-hidden"));
+  });
+  ui.hudLoreButton.addEventListener("click", () => {
+    setLoreScrollOpen(ui.loreScroll.classList.contains("is-hidden"));
+  });
+  ui.hudStatusButton.addEventListener("click", () => {
+    setStatusPanelOpen(ui.statusPanel.classList.contains("is-hidden"));
+  });
+  ui.statusClose.addEventListener("click", () => {
+    setStatusPanelOpen(false);
   });
   ui.inventoryClose.addEventListener("click", () => {
     setInventoryPanelOpen(false);
@@ -3294,10 +3539,14 @@ function setupUi() {
   ui.rulerClose.addEventListener("click", () => {
     setRulerPanelOpen(false);
   });
+  ui.loreClose?.addEventListener("click", () => {
+    setLoreScrollOpen(false);
+  });
   ui.rulerPolitics.addEventListener("click", (event) => {
     const button = event.target.closest("[data-politics-action]");
+    const factionId = state.selectedFactionId || world.interiorFactionId;
 
-    if (!button || !world.interiorFactionId) {
+    if (!button || !factionId) {
       return;
     }
 
@@ -3306,13 +3555,13 @@ function setupUi() {
     let result = null;
 
     if (action === "enemy") {
-      result = setFactionRelation(state, world.interiorFactionId, targetFactionId, "Enemy");
+      result = setFactionRelation(state, factionId, targetFactionId, "Enemy");
     } else if (action === "neutral") {
-      result = setFactionRelation(state, world.interiorFactionId, targetFactionId, "Neutral");
+      result = setFactionRelation(state, factionId, targetFactionId, "Neutral");
     } else if (action === "request") {
-      result = requestFactionAllegiance(state, world.interiorFactionId, targetFactionId);
+      result = requestFactionAllegiance(state, factionId, targetFactionId);
     } else if (action === "accept") {
-      result = acceptFactionAllegiance(state, world.interiorFactionId, targetFactionId);
+      result = acceptFactionAllegiance(state, factionId, targetFactionId);
     }
 
     if (result) {
@@ -3322,17 +3571,18 @@ function setupUi() {
   });
   ui.leftHandIcon.parentElement.addEventListener("click", () => clearHand("left"));
   ui.rightHandIcon.parentElement.addEventListener("click", () => clearHand("right"));
-  document.querySelector("#claim-poi").addEventListener("click", () => runAction(claimNearestPoi(state)));
-  document.querySelector("#spawn-event").addEventListener("click", () => {
-    spawnDynamicEvent(state);
-    markPersistenceDirty();
-    refreshUi();
-  });
-  document.querySelector("#resolve-event").addEventListener("click", () => runAction(resolveDynamicEvent(state)));
-  document.querySelector("#simulate-raid").addEventListener("click", () => runAction(simulateRaid(state)));
   setupInventoryControls();
 
   window.addEventListener("keydown", (event) => {
+    if (event.code === "KeyL" && !isTypingInField(event.target)) {
+      event.preventDefault();
+      if (!ui.factionSelect.classList.contains("is-hidden")) {
+        return;
+      }
+      setLoreScrollOpen(ui.loreScroll.classList.contains("is-hidden"));
+      return;
+    }
+
     if (event.code === "KeyR" && !isTypingInField(event.target)) {
       event.preventDefault();
       if (!ui.factionSelect.classList.contains("is-hidden")) {
@@ -3353,6 +3603,12 @@ function setupUi() {
         return;
       }
       setBuildPanelOpen(ui.buildPanel.classList.contains("is-hidden"));
+      return;
+    }
+
+    if (event.code === "Escape" && !ui.loreScroll.classList.contains("is-hidden") && !isTypingInField(event.target)) {
+      event.preventDefault();
+      setLoreScrollOpen(false);
       return;
     }
 
@@ -3621,8 +3877,23 @@ function setupUi() {
   document.addEventListener("pointerlockchange", handlePointerLockChange);
   document.addEventListener("mousemove", handleLockedThirdPersonMouseMove);
 
-  buildMarketRows();
+  world.uiReady = true;
   refreshUi();
+}
+
+function updateHouseNameGate() {
+  if (!ui.houseNameInput || !ui.houseNameStatus || !ui.factionCards) {
+    return;
+  }
+
+  const houseName = sanitizeHouseName(ui.houseNameInput.value);
+  const valid = houseName.length > 0;
+  ui.houseNameStatus.textContent = valid ? `House ${formatHouseName(houseName)}` : "A-Z";
+  ui.houseNameStatus.classList.toggle("is-valid", valid);
+
+  for (const card of ui.factionCards.querySelectorAll("[data-faction]")) {
+    card.disabled = !valid;
+  }
 }
 
 function isDoubleMiddleClick() {
@@ -3722,24 +3993,37 @@ function updateLockedThirdPersonAim() {
     return;
   }
 
-  const target = getGroundPointFromScreenCenter();
+  const target = getAimPointFromScreenCenter();
 
   if (!target) {
     const forward = new THREE.Vector3();
     world.camera.getWorldDirection(forward);
-    forward.y = 0;
 
     if (forward.lengthSq() < 0.001) {
       return;
     }
 
     forward.normalize();
-    world.aimTarget.set(
+    const horizontalForward = forward.clone();
+    horizontalForward.y = 0;
+
+    if (horizontalForward.lengthSq() < 0.001) {
+      return;
+    }
+
+    horizontalForward.normalize();
+    world.aimPoint.set(
       state.player.position.x + forward.x * 42,
-      0,
+      getPlayerWorldElevation() + 4 + forward.y * 42,
       state.player.position.z + forward.z * 42
     );
-    world.aimDirection.copy(forward);
+    world.aimRayDirection.copy(forward);
+    world.aimTarget.set(
+      state.player.position.x + horizontalForward.x * 42,
+      0,
+      state.player.position.z + horizontalForward.z * 42
+    );
+    world.aimDirection.copy(horizontalForward);
     world.hasAim = true;
     applyAimFacing();
     return;
@@ -3755,6 +4039,7 @@ function updateLockedThirdPersonAim() {
     return;
   }
 
+  world.aimPoint.copy(target);
   world.aimTarget.copy(target);
   world.aimDirection.copy(direction.normalize());
   world.hasAim = true;
@@ -3790,30 +4075,157 @@ function clearHand(hand) {
   refreshUi();
 }
 
-function setCommandPanelOpen(open) {
-  ui.commandPanel.classList.toggle("is-hidden", !open);
-  ui.commandPanel.setAttribute("aria-hidden", String(!open));
-  ui.menuToggle.setAttribute("aria-expanded", String(open));
-  ui.menuToggle.classList.toggle("is-active", open);
+function setLoreScrollOpen(open) {
+  if (!ui.loreScroll) {
+    return;
+  }
+
+  ui.loreScroll.classList.toggle("is-hidden", !open);
+  ui.loreScroll.setAttribute("aria-hidden", String(!open));
+  ui.hudLoreButton.setAttribute("aria-expanded", String(open));
+  ui.hudLoreButton.classList.toggle("is-active", open);
 
   if (open) {
     releaseLockedCameraForMenu();
+    setStatusPanelOpen(false);
     setInventoryPanelOpen(false);
     setBuildPanelOpen(false);
     closeNpcTradePanel();
     closeStewardPanel();
     closeDepotPanel();
+    setRulerPanelOpen(false);
+    renderLoreScroll();
+  }
+}
+
+function renderLoreScroll() {
+  if (!ui.loreBody || !ui.loreMeta) {
+    return;
+  }
+
+  const volumes = Array.isArray(state.lore?.volumes)
+    ? state.lore.volumes.slice().sort((a, b) => a.number - b.number)
+    : [];
+  ui.loreMeta.textContent = volumes.length
+    ? `${volumes.length} ${volumes.length === 1 ? "addition" : "additions"} written`
+    : "Opening";
+
+  ui.loreBody.innerHTML = `
+    ${renderLoreStory(state.lore?.story ?? state.lore?.opening ?? "", getLoreProgress(state))}
+    ${volumes.length ? renderLoreAdditionList(volumes) : ""}
+  `;
+}
+
+function renderLoreStory(story, progress) {
+  return `
+    <article class="lore-volume">
+      <header>
+        <div>
+          <strong>The Book So Far</strong>
+          <small>Living chronicle</small>
+        </div>
+      </header>
+      ${renderLoreParagraphs(story || "The chronicle has not yet begun.")}
+      ${renderLoreProgress(progress)}
+    </article>
+  `;
+}
+
+function renderLoreProgress(progress) {
+  const percent = Math.max(0, Math.min(100, Math.floor(Number(progress?.percent) || 0)));
+  const completed = Math.max(0, Math.floor(Number(progress?.completed) || 0));
+  const required = Math.max(1, Math.floor(Number(progress?.required) || 1));
+  const remaining = Math.max(0, Math.floor(Number(progress?.remaining) || 0));
+  const label = remaining === 0
+    ? "The next part is ready to be written."
+    : `${remaining} ${remaining === 1 ? "record" : "records"} until the next part is added.`;
+
+  return `
+    <section class="lore-progress" aria-label="Next chronicle progress">
+      <div>
+        <strong>${percent}% of next volume finished</strong>
+        <span>${completed} / ${required} records gathered</span>
+      </div>
+      <div class="lore-progress-meter" style="--value: ${percent}%"><span></span></div>
+      <p>${label}</p>
+    </section>
+  `;
+}
+
+function renderLoreAdditionList(volumes) {
+  return volumes.map((volume) => renderLoreVolume(volume)).join("");
+}
+
+function renderLoreVolume(volume) {
+  const awarded = volume.renownAwards?.[state.player.id] ?? 0;
+  const awardLine = awarded > 0 ? `<span>${awarded} renown</span>` : "";
+  return `
+    <article class="lore-volume">
+      <header>
+        <div>
+          <strong>${escapeHtml(volume.title ?? `Addition ${volume.number}`)}</strong>
+          <small>${formatLoreTime(volume.createdAt)}</small>
+        </div>
+        ${awardLine}
+      </header>
+      ${renderLoreParagraphs(volume.text ?? "")}
+    </article>
+  `;
+}
+
+function renderLoreParagraphs(text) {
+  return escapeHtml(text)
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br />")}</p>`)
+    .join("");
+}
+
+function formatLoreTime(value) {
+  const seconds = Math.max(0, Math.floor(Number(value) || 0));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m ${remainder}s`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function setStatusPanelOpen(open) {
+  ui.statusPanel.classList.toggle("is-hidden", !open);
+  ui.statusPanel.setAttribute("aria-hidden", String(!open));
+  ui.hudStatusButton.setAttribute("aria-expanded", String(open));
+  ui.hudStatusButton.classList.toggle("is-active", open);
+
+  if (open) {
+    releaseLockedCameraForMenu();
+    setLoreScrollOpen(false);
+    setInventoryPanelOpen(false);
+    setBuildPanelOpen(false);
+    closeNpcTradePanel();
+    closeStewardPanel();
+    closeDepotPanel();
+    setRulerPanelOpen(false, { leaveSeat: false });
+    renderStatusPanel();
   }
 }
 
 function setInventoryPanelOpen(open) {
   ui.inventoryPanel.classList.toggle("is-hidden", !open);
   ui.inventoryPanel.setAttribute("aria-hidden", String(!open));
+  ui.hudPlayerButton.setAttribute("aria-expanded", String(open));
+  ui.hudPlayerButton.classList.toggle("is-active", open);
   ui.hotbar.classList.toggle("is-hidden", open || !ui.buildPanel.classList.contains("is-hidden"));
 
   if (open) {
     releaseLockedCameraForMenu();
-    setCommandPanelOpen(false);
+    setLoreScrollOpen(false);
+    setStatusPanelOpen(false);
     setBuildPanelOpen(false);
     closeNpcTradePanel();
     closeStewardPanel();
@@ -3830,7 +4242,8 @@ function setBuildPanelOpen(open) {
 
   if (open) {
     releaseLockedCameraForMenu();
-    setCommandPanelOpen(false);
+    setLoreScrollOpen(false);
+    setStatusPanelOpen(false);
     setInventoryPanelOpen(false);
     closeNpcTradePanel();
     closeStewardPanel();
@@ -3847,10 +4260,13 @@ function isTypingInField(target) {
 function setRulerPanelOpen(open, options = {}) {
   ui.rulerPanel.classList.toggle("is-hidden", !open);
   ui.rulerPanel.setAttribute("aria-hidden", String(!open));
+  ui.hudFactionButton.setAttribute("aria-expanded", String(open));
+  ui.hudFactionButton.classList.toggle("is-active", open);
 
   if (open) {
     releaseLockedCameraForMenu();
-    setCommandPanelOpen(false);
+    setLoreScrollOpen(false);
+    setStatusPanelOpen(false);
     setInventoryPanelOpen(false);
     setBuildPanelOpen(false);
     closeNpcTradePanel();
@@ -3863,7 +4279,7 @@ function setRulerPanelOpen(open, options = {}) {
 }
 
 function renderRulerPanel() {
-  const factionId = world.interiorFactionId;
+  const factionId = state.selectedFactionId || world.interiorFactionId;
   const faction = factionId ? FACTION_LOOKUP[factionId] : null;
 
   if (!faction) {
@@ -3872,8 +4288,8 @@ function renderRulerPanel() {
   }
 
   const rulerName = getFactionRulerName(state, factionId);
-  ui.rulerTitle.textContent = `${faction.name} Throne`;
-  ui.rulerStatus.textContent = rulerName ? `Ruler: ${rulerName}` : "No ruler";
+  ui.rulerTitle.textContent = `Faction: ${faction.name}`;
+  ui.rulerStatus.textContent = `${rulerName ? `King: ${rulerName}` : "No king"} | ${faction.trait}`;
   ui.rulerMembers.innerHTML = renderRulerMembers(factionId);
   ui.rulerResources.innerHTML = renderRulerResources(factionId);
   ui.rulerPolitics.innerHTML = renderRulerPolitics(factionId);
@@ -3882,21 +4298,60 @@ function renderRulerPanel() {
 function renderRulerMembers(factionId) {
   const rulerName = getFactionRulerName(state, factionId);
   const members = getFactionMembers(state, factionId);
+  const faction = FACTION_LOOKUP[factionId];
 
   if (!members.length) {
     return `<div class="notice">No members have joined this faction.</div>`;
   }
 
-  return members
-    .map(
-      (member) => `
-        <article class="ruler-row">
-          <strong>${member.name}</strong>
-          <span>${member.name === rulerName ? "Ruler" : "Member"} | ${Math.round(member.renown)} renown</span>
-        </article>
-      `
-    )
-    .join("");
+  const houses = new Map();
+  for (const member of members) {
+    const houseName = formatHouseName(member.houseName) || "Wanderers";
+    if (!houses.has(houseName)) {
+      houses.set(houseName, []);
+    }
+    houses.get(houseName).push(member);
+  }
+
+  return `
+    <article class="status-card">
+      <strong>${faction.name}</strong>
+      <p>${faction.summary}</p>
+      <span>${rulerName ? `King ${rulerName}` : "The throne is unclaimed."}</span>
+    </article>
+    ${[...houses.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([houseName, houseMembers]) => renderHouseFolder(houseName, houseMembers, rulerName))
+      .join("")}
+  `;
+}
+
+function renderHouseFolder(houseName, members, rulerName) {
+  const sortedMembers = members
+    .slice()
+    .sort((a, b) => Number(b.renown || 0) - Number(a.renown || 0) || String(a.name).localeCompare(String(b.name)));
+  const isPlayerHouse = sortedMembers.some((member) => member.playerId === state.player.id);
+
+  return `
+    <details class="house-folder" ${isPlayerHouse ? "open" : ""}>
+      <summary>
+        <strong>House ${escapeHtml(houseName)}</strong>
+        <span>${sortedMembers.length} ${sortedMembers.length === 1 ? "member" : "members"}</span>
+      </summary>
+      <div class="house-members">
+        ${sortedMembers
+          .map(
+            (member) => `
+              <article class="house-member">
+                <strong>${escapeHtml(member.name)}</strong>
+                <span>${member.name === rulerName ? "King" : "Member"} | ${Math.round(member.renown)} lore</span>
+              </article>
+            `
+          )
+          .join("")}
+      </div>
+    </details>
+  `;
 }
 
 function renderRulerResources(factionId) {
@@ -3920,6 +4375,7 @@ function renderRulerResources(factionId) {
 
 function renderRulerPolitics(factionId) {
   const governance = state.factionGovernance[factionId];
+  const canManage = isFactionRuler(state, factionId);
 
   return FACTIONS.filter((faction) => faction.id !== factionId)
     .map((faction) => {
@@ -3932,18 +4388,68 @@ function renderRulerPolitics(factionId) {
           <strong>${faction.name}</strong>
           <span>${relation}${hasRequest ? " | request waiting" : ""}${requested ? " | requested" : ""}</span>
           <div class="politics-actions">
-            <button data-politics-action="enemy" data-target-faction="${faction.id}" type="button">Enemy</button>
-            <button data-politics-action="neutral" data-target-faction="${faction.id}" type="button">Neutral</button>
+            <button data-politics-action="enemy" data-target-faction="${faction.id}" type="button" ${canManage ? "" : "disabled"}>Enemy</button>
+            <button data-politics-action="neutral" data-target-faction="${faction.id}" type="button" ${canManage ? "" : "disabled"}>Neutral</button>
             ${
               hasRequest
-                ? `<button data-politics-action="accept" data-target-faction="${faction.id}" type="button">Accept Allegiance</button>`
-                : `<button data-politics-action="request" data-target-faction="${faction.id}" type="button">Request Allegiance</button>`
+                ? `<button data-politics-action="accept" data-target-faction="${faction.id}" type="button" ${canManage ? "" : "disabled"}>Accept Allegiance</button>`
+                : `<button data-politics-action="request" data-target-faction="${faction.id}" type="button" ${canManage ? "" : "disabled"}>Request Allegiance</button>`
             }
           </div>
         </article>
       `;
     })
     .join("");
+}
+
+function renderStatusPanel() {
+  if (!ui.statusBody || !ui.statusSummary) {
+    return;
+  }
+
+  const faction = state.selectedFactionId ? FACTION_LOOKUP[state.selectedFactionId] : null;
+  const zone = getZone(state);
+  const interiorFaction = world.interiorFactionId ? FACTION_LOOKUP[world.interiorFactionId] : null;
+  const interiorPoi = world.activePoiInteriorId ? state.pois.find((poi) => poi.id === world.activePoiInteriorId) : null;
+  const nearest = getNearestPoi(state);
+  const locationName =
+    world.sceneMode === "interior" && interiorFaction
+      ? `${interiorFaction.name} Keep`
+      : world.sceneMode === "poiInterior" && interiorPoi
+        ? interiorPoi.name
+        : zone.label;
+  const nearestLabel = nearest
+    ? `${nearest.poi.name} | ${Math.round(nearest.distance)}m | ${
+        nearest.poi.ownerFactionId ? FACTION_LOOKUP[nearest.poi.ownerFactionId].name : "Neutral"
+      }`
+    : "No point of interest nearby";
+
+  ui.statusSummary.textContent = `${locationName} | ${Math.round(state.player.hp ?? MULTIPLAYER_MAX_HEALTH)} HP`;
+  ui.statusBody.innerHTML = `
+    <article class="status-card">
+      <strong>Location</strong>
+      <span>${escapeHtml(locationName)}</span>
+      <p>${escapeHtml(nearestLabel)}</p>
+    </article>
+    <article class="status-card">
+      <strong>Player</strong>
+      <span>${escapeHtml(state.player.name)} | ${Math.round(state.player.hp ?? MULTIPLAYER_MAX_HEALTH)} HP</span>
+      <p>${faction ? `Sworn to ${escapeHtml(faction.name)}` : "Unsworn"}</p>
+    </article>
+    <article class="status-card">
+      <strong>World Event</strong>
+      ${
+        state.activeEvent
+          ? `<span>${escapeHtml(state.activeEvent.name)} | ${Math.ceil(state.activeEvent.timer)}s</span><p>Loot: ${escapeHtml(state.activeEvent.item.name)}</p>`
+          : "<span>No active dynamic event.</span><p>The field is quiet for now.</p>"
+      }
+    </article>
+    <article class="status-card">
+      <strong>Carry</strong>
+      <span>Gold ${Math.round(state.player.gold)}</span>
+      <p>${RESOURCE_TYPES.map((resource) => `${resource.name} ${state.player.resources[resource.id]}`).join(" | ")}</p>
+    </article>
+  `;
 }
 
 function setupInventoryControls() {
@@ -4222,32 +4728,6 @@ function setupDebugTools() {
         .sort((a, b) => a.distance - b.distance)[0] ?? null
     })
   };
-}
-
-function buildMarketRows() {
-  ui.marketList.innerHTML = RESOURCE_TYPES.map(
-    (resource) => `
-      <article class="market-row" data-market-row="${resource.id}">
-        <span class="swatch" style="background: ${resource.color}"></span>
-        <strong>${resource.name}</strong>
-        <span class="price" data-buy-price="${resource.id}">0</span>
-        <span class="price" data-sell-price="${resource.id}">0</span>
-        <button data-buy="${resource.id}" type="button">Buy</button>
-        <button data-sell="${resource.id}" type="button">Sell</button>
-      </article>
-    `
-  ).join("");
-
-  ui.marketList.addEventListener("click", (event) => {
-    const buyButton = event.target.closest("[data-buy]");
-    const sellButton = event.target.closest("[data-sell]");
-
-    if (buyButton) {
-      runAction(buyResource(state, buyButton.dataset.buy));
-    } else if (sellButton) {
-      runAction(sellResource(state, sellButton.dataset.sell));
-    }
-  });
 }
 
 function renderBuildPanel() {
@@ -4535,9 +5015,10 @@ function openNpcTradePanel(npcId) {
   ui.npcTradePanel.classList.remove("is-hidden");
   ui.npcTradePanel.setAttribute("aria-hidden", "false");
   releaseLockedCameraForMenu();
+  setLoreScrollOpen(false);
   closeStewardPanel();
   closeDepotPanel();
-  setCommandPanelOpen(false);
+  setStatusPanelOpen(false);
   setInventoryPanelOpen(false);
   setBuildPanelOpen(false);
   setRulerPanelOpen(false);
@@ -4561,9 +5042,10 @@ function openStewardPanel() {
   ui.stewardPanel.classList.remove("is-hidden");
   ui.stewardPanel.setAttribute("aria-hidden", "false");
   releaseLockedCameraForMenu();
+  setLoreScrollOpen(false);
   closeNpcTradePanel();
   closeDepotPanel();
-  setCommandPanelOpen(false);
+  setStatusPanelOpen(false);
   setInventoryPanelOpen(false);
   setBuildPanelOpen(false);
   setRulerPanelOpen(false);
@@ -4596,9 +5078,10 @@ function openDepotPanel(depotId) {
   ui.depotPanel.classList.remove("is-hidden");
   ui.depotPanel.setAttribute("aria-hidden", "false");
   releaseLockedCameraForMenu();
+  setLoreScrollOpen(false);
   closeNpcTradePanel();
   closeStewardPanel();
-  setCommandPanelOpen(false);
+  setStatusPanelOpen(false);
   setInventoryPanelOpen(false);
   setBuildPanelOpen(false);
   setRulerPanelOpen(false);
@@ -5021,14 +5504,10 @@ function updateMovement(deltaSeconds) {
     x: clamp(state.player.position.x + activeMove.x * activeSpeed * deltaSeconds, bounds.minX, bounds.maxX),
     z: clamp(state.player.position.z + activeMove.z * activeSpeed * deltaSeconds, bounds.minZ, bounds.maxZ)
   };
-  const resolvedPosition = world.sceneMode === "outdoor"
-    ? resolveOutdoorSceneryCollision(nextPosition)
-    : nextPosition;
-
-  state.player.position.x = clamp(resolvedPosition.x, bounds.minX, bounds.maxX);
-  state.player.position.z = clamp(resolvedPosition.z, bounds.minZ, bounds.maxZ);
+  moveLocalPlayerTo(nextPosition, bounds);
   settlePlayerSupportAfterMove();
   applyLocalPlayerKnockbackMotion(deltaSeconds, bounds);
+  resolveLocalPlayerActorCollisions(bounds);
 }
 
 function applyLocalPlayerKnockbackMotion(deltaSeconds, bounds) {
@@ -5043,14 +5522,18 @@ function applyLocalPlayerKnockbackMotion(deltaSeconds, bounds) {
     x: clamp(state.player.position.x + velocity.x * deltaSeconds, bounds.minX, bounds.maxX),
     z: clamp(state.player.position.z + velocity.z * deltaSeconds, bounds.minZ, bounds.maxZ)
   };
+  moveLocalPlayerTo(nextPosition, bounds);
+  dampKnockbackVelocity(velocity, deltaSeconds);
+  settlePlayerSupportAfterMove();
+}
+
+function moveLocalPlayerTo(position, bounds, radius = PLAYER_COLLISION_RADIUS) {
   const resolvedPosition = world.sceneMode === "outdoor"
-    ? resolveOutdoorSceneryCollision(nextPosition, 1.05)
-    : nextPosition;
+    ? resolveOutdoorSceneryCollision(position, radius)
+    : position;
 
   state.player.position.x = clamp(resolvedPosition.x, bounds.minX, bounds.maxX);
   state.player.position.z = clamp(resolvedPosition.z, bounds.minZ, bounds.maxZ);
-  dampKnockbackVelocity(velocity, deltaSeconds);
-  settlePlayerSupportAfterMove();
 }
 
 function getPlayerSupportOffset(position) {
@@ -5256,6 +5739,7 @@ function updateAimFromPointer(event) {
     return;
   }
 
+  world.aimPoint.copy(target);
   world.aimTarget.copy(target);
   world.aimDirection.copy(direction.normalize());
   world.hasAim = true;
@@ -5289,6 +5773,10 @@ function getGroundPointFromScreenCenter() {
   return getGroundPointFromNdc(new THREE.Vector2(0, 0));
 }
 
+function getAimPointFromScreenCenter() {
+  return getAimPointFromNdc(new THREE.Vector2(0, 0));
+}
+
 function getNdcFromPointer(event) {
   if (isLockedThirdPersonCamera()) {
     return new THREE.Vector2(0, 0);
@@ -5305,6 +5793,7 @@ function getGroundPointFromNdc(ndc) {
   const target = new THREE.Vector3();
 
   world.raycaster.setFromCamera(ndc, world.camera);
+  world.aimRayDirection.copy(world.raycaster.ray.direction).normalize();
   if (world.sceneMode === "outdoor" && world.meshes.terrain) {
     const terrainHit = world.raycaster.intersectObject(world.meshes.terrain, false)[0];
     if (terrainHit) {
@@ -5313,6 +5802,37 @@ function getGroundPointFromNdc(ndc) {
   }
 
   return world.raycaster.ray.intersectPlane(world.groundPlane, target) ? target : null;
+}
+
+function getAimPointFromNdc(ndc) {
+  const fallbackTarget = new THREE.Vector3();
+
+  world.raycaster.setFromCamera(ndc, world.camera);
+  world.aimRayDirection.copy(world.raycaster.ray.direction).normalize();
+
+  const combatMeshes = getActiveCombatTargets()
+    .map((target) => target.mesh)
+    .filter((mesh) => mesh?.isObject3D);
+  const combatHit = combatMeshes.length
+    ? world.raycaster.intersectObjects(combatMeshes, true)[0]
+    : null;
+
+  if (combatHit) {
+    return combatHit.point;
+  }
+
+  if (world.sceneMode === "outdoor" && world.meshes.terrain) {
+    const terrainHit = world.raycaster.intersectObject(world.meshes.terrain, false)[0];
+    if (terrainHit) {
+      return terrainHit.point;
+    }
+  }
+
+  if (world.raycaster.ray.intersectPlane(world.groundPlane, fallbackTarget)) {
+    return fallbackTarget;
+  }
+
+  return world.raycaster.ray.origin.clone().addScaledVector(world.raycaster.ray.direction, 90);
 }
 
 function applyAimFacing() {
@@ -5580,7 +6100,7 @@ function isBlockingLocationInput() {
   return (
     !ui.inventoryPanel.classList.contains("is-hidden") ||
     !ui.buildPanel.classList.contains("is-hidden") ||
-    !ui.commandPanel.classList.contains("is-hidden") ||
+    !ui.statusPanel.classList.contains("is-hidden") ||
     !ui.npcTradePanel.classList.contains("is-hidden") ||
     !ui.stewardPanel.classList.contains("is-hidden") ||
     !ui.depotPanel.classList.contains("is-hidden") ||
@@ -5991,7 +6511,7 @@ function enterOutpostTower(structureId) {
   closeNpcTradePanel();
   closeStewardPanel();
   closeDepotPanel();
-  setCommandPanelOpen(false);
+  setStatusPanelOpen(false);
   setInventoryPanelOpen(false);
   setBuildPanelOpen(false);
   flash("You climbed into the outpost.");
@@ -6236,6 +6756,11 @@ function tryAttackFromPointer(hand, rangedChargePower = 0) {
   } else {
     attackDirection.set(0, 0, 1);
   }
+
+  const aimPoint = world.hasAim ? world.aimPoint.clone() : null;
+  const aimRayDirection = world.aimRayDirection.lengthSq() > 0.001
+    ? world.aimRayDirection.clone().normalize()
+    : null;
   world.attacks[hand] = {
     hand,
     itemName: result.item.name,
@@ -6248,6 +6773,8 @@ function tryAttackFromPointer(hand, rangedChargePower = 0) {
     knockback: result.stats.knockback ?? 0,
     speed: result.stats.speed,
     direction: attackDirection,
+    aimPoint,
+    aimRayDirection,
     chargePower,
     slashDirection,
     elapsed: 0,
@@ -6693,9 +7220,11 @@ function updatePlayerRespawnStatus() {
 
   state.player.dead = false;
   state.player.hp = state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
+  beginNewPlayerLife(state);
+  markPlayerPersistenceDue();
   world.multiplayer.localDefeated = false;
   world.multiplayer.respawnAt = 0;
-  flash("You respawned at your faction hub.");
+  flash(`You respawned as ${state.player.name}.`);
   updatePlayerHealthBar();
   refreshUi();
 }
@@ -6791,6 +7320,9 @@ function buildLocalPlayerPayload() {
   return {
     id: state.player.id,
     name: state.player.name,
+    houseName: state.player.houseName,
+    firstName: state.player.firstName,
+    lifeNumber: state.player.lifeNumber,
     renown: state.player.renown,
     factionId: state.selectedFactionId,
     position: { ...state.player.position },
@@ -6860,7 +7392,9 @@ function syncLocalPlayerHealth(player) {
   } else if (!state.player.dead && (wasDead || world.multiplayer.localDefeated)) {
     world.multiplayer.localDefeated = false;
     state.player.hp = state.player.maxHp;
-    flash("You respawned at your faction hub.");
+    beginNewPlayerLife(state);
+    markPlayerPersistenceDue();
+    flash(`You respawned as ${state.player.name}.`);
   }
 }
 
@@ -6925,6 +7459,8 @@ function updateRemotePlayers(deltaSeconds) {
     remote.group.scale.lerp(new THREE.Vector3(1, 1, 1), Math.min(1, deltaSeconds * 7));
     animateRemotePlayer(remote, deltaSeconds);
   }
+
+  resolveRemotePlayerBodyCollisions();
 }
 
 function animateRemotePlayer(remote, deltaSeconds) {
@@ -7326,17 +7862,32 @@ function applyProfiledWeaponPose(container, attack, progress, options = {}) {
       poseAttackArm(options.hand, -1.1 + chop * 1.5, side * (0.2 + attackSide * side * sweep * 0.22), -attackSide * (phase.anticipation * 0.22 - chop * 0.34), 0.5 + phase.anticipation * 0.28 - chop * 0.16, -0.07 * sweep, side * attackSide * 0.06 * chop);
     }
   } else if (profile.kind === "unarmed") {
-    const strike = phase.commit;
-    const arc = phase.followThrough;
-    container.position.z += arc * (pose.reach ?? 1) - phase.recover * 0.32;
-    container.position.y += phase.anticipation * (pose.lift ?? 0.28) + arc * 0.18 - strike * 0.1;
-    container.position.x += side * (-0.68 * phase.anticipation + 1.12 * strike - 0.42 * phase.recover);
-    container.rotation.x += -0.12 - arc * 0.58 + phase.recover * 0.14;
-    container.rotation.y += side * (-phase.anticipation * 0.36 + strike * 0.54 - phase.recover * 0.18);
-    container.rotation.z += side * (-phase.anticipation * 1.1 + strike * 1.72 - phase.recover * 0.62);
+    const chamber = phase.anticipation * (1 - phase.commit * 0.82);
+    const swing = phase.commit * (1 - phase.recover * 0.9);
+    const centerFinish = Math.max(0, swing - phase.recover * 0.18);
+    const snap = phase.followThrough;
+    const reach = (pose.reach ?? 1.15) * rangeScale;
+    const chamberDepth = pose.chamber ?? 0.5;
+    container.position.z += -chamberDepth * chamber + reach * swing - phase.recover * 0.24;
+    container.position.x += side * ((pose.lateral ?? 0.56) * chamber - (pose.centerLine ?? 0.42) * centerFinish + 0.08 * phase.recover);
+    container.position.y += (pose.lift ?? 0.34) * chamber - 0.12 * swing + snap * 0.06;
+    container.rotation.x += (pose.windupX ?? -0.52) * chamber + (pose.strikeX ?? -1.04) * snap * 0.3 + (pose.recoverX ?? -0.14) * phase.recover;
+    container.rotation.y += side * (-0.28 * chamber + 0.22 * swing - 0.04 * phase.recover);
+    container.rotation.z += side * ((pose.windupZ ?? -0.72) * chamber + (pose.strikeZ ?? 0.54) * swing + (pose.recoverZ ?? -0.12) * phase.recover);
 
     if (!options.mob) {
-      poseAttackArm(options.hand, -0.42 - arc * 0.52 + phase.recover * 0.28, side * (0.12 + strike * 0.42 - phase.recover * 0.16), side * (-phase.anticipation * 0.34 + strike * 0.48), 0.68 + arc * 0.28 - phase.recover * 0.12, -0.08 * arc, side * (-phase.anticipation * 0.12 + strike * 0.18));
+      const armBaseX = pose.armBaseX ?? -0.38;
+      const armChamberX = pose.armChamberX ?? -0.42;
+      const armStrikeX = pose.armStrikeX ?? -1.22;
+      poseAttackArm(
+        options.hand,
+        armBaseX + armChamberX * chamber + armStrikeX * swing + phase.recover * 0.18,
+        side * (0.34 * chamber - 0.28 * centerFinish - phase.recover * 0.06),
+        side * (-0.34 * chamber + 0.3 * swing),
+        (pose.elbowBase ?? 0.72) * chamber + (pose.elbowStrike ?? 0.24) * swing + 0.26 * phase.recover,
+        (pose.wristStrike ?? -0.05) * swing,
+        side * (-0.16 * chamber + 0.12 * swing)
+      );
     }
   } else {
     const cut = phase.commit;
@@ -7595,6 +8146,7 @@ function updatePveEnemies(deltaSeconds) {
   }
 
   resolvePveMobCollisions(world.pveEnemies, { outdoor: false });
+  resolvePveMobPlayerCollisions(world.pveEnemies, { outdoor: false });
   document.body.dataset.pveEnemiesAlive = String(world.pveEnemies.filter((enemy) => !enemy.dead).length);
 }
 
@@ -7668,6 +8220,7 @@ function updateOutdoorDungeonMonsters(deltaSeconds) {
   }
 
   resolvePveMobCollisions(world.outdoorMonsters, { outdoor: true });
+  resolvePveMobPlayerCollisions(world.outdoorMonsters, { outdoor: true });
   world.outdoorMonsters = world.outdoorMonsters.filter((monster) => !monster.removed);
   document.body.dataset.outdoorMonstersAlive = String(world.outdoorMonsters.filter((monster) => !monster.dead).length);
 }
@@ -7838,27 +8391,20 @@ function resolveMeleeHitAtSwingMoment(attack, progress) {
 function spawnProjectile(hand, attack) {
   const mount = hand === "left" ? world.leftHandMount : world.rightHandMount;
   const start = new THREE.Vector3();
-  const direction = world.aimDirection.clone();
-  direction.y = 0;
-
-  if (direction.lengthSq() < 0.001) {
-    direction.set(0, 0, 1);
-  }
-
-  direction.normalize();
+  const direction = getHorizontalProjectileDirection(attack);
   const horizontalSpeed = getProjectileHorizontalSpeed(attack);
   const adjustedHorizontalSpeed = horizontalSpeed;
   const chargePower = attack.chargePower ?? 0;
   const gravity = attack.kind === "crossbow" ? 15 : 24 + chargePower * 8;
-  const verticalVelocity = attack.kind === "crossbow" ? 3.4 : 3.8 + chargePower * 4.6;
-  const velocity = new THREE.Vector3(
-    direction.x * adjustedHorizontalSpeed,
-    verticalVelocity,
-    direction.z * adjustedHorizontalSpeed
-  );
 
   mount.getWorldPosition(start);
   start.addScaledVector(direction, attack.kind === "crossbow" ? 1.2 : 0.85);
+  const velocity = getProjectileLaunchVelocity(start, attack, direction, adjustedHorizontalSpeed, gravity);
+  const velocityDirection = velocity.clone();
+  velocityDirection.y = 0;
+  if (velocityDirection.lengthSq() > 0.001) {
+    direction.copy(velocityDirection.normalize());
+  }
 
   const projectile = {
     mesh: createProjectileMesh(attack.kind, attack.chargePower),
@@ -7871,6 +8417,7 @@ function spawnProjectile(hand, attack) {
     damage: attack.damage,
     penetration: attack.penetration ?? 0,
     knockback: attack.knockback ?? 0,
+    itemName: attack.itemName,
     itemType: attack.itemType,
     profile: attack.profile ?? getCombatProfile(attack.itemType),
     speed: adjustedHorizontalSpeed,
@@ -7885,6 +8432,83 @@ function spawnProjectile(hand, attack) {
   document.body.dataset.projectilesFired = String(world.projectilesFired);
   document.body.dataset.projectilesActive = String(world.projectiles.length);
   attack.projectileSpawned = true;
+}
+
+function getHorizontalProjectileDirection(attack) {
+  const direction = attack?.direction?.clone?.() ?? world.aimDirection.clone();
+  direction.y = 0;
+
+  if (direction.lengthSq() < 0.001) {
+    direction.set(0, 0, 1);
+  }
+
+  return direction.normalize();
+}
+
+function getProjectileLaunchVelocity(start, attack, direction, horizontalSpeed, gravity) {
+  const fallbackVerticalVelocity = attack.kind === "crossbow"
+    ? 3.4
+    : 3.8 + (attack.chargePower ?? 0) * 4.6;
+  const fallback = new THREE.Vector3(
+    direction.x * horizontalSpeed,
+    fallbackVerticalVelocity,
+    direction.z * horizontalSpeed
+  );
+  const aimPoint = getProjectileAimPoint(start, attack);
+
+  if (!aimPoint) {
+    return fallback;
+  }
+
+  const offset = aimPoint.clone().sub(start);
+  const horizontalOffset = new THREE.Vector3(offset.x, 0, offset.z);
+  const horizontalDistance = horizontalOffset.length();
+
+  if (horizontalDistance < 0.1) {
+    const rayDirection = attack?.aimRayDirection?.clone?.() ?? world.aimRayDirection.clone();
+    if (rayDirection.lengthSq() < 0.001) {
+      return fallback;
+    }
+
+    rayDirection.normalize();
+    return rayDirection.multiplyScalar(horizontalSpeed);
+  }
+
+  const launchDirection = horizontalOffset.normalize();
+  const flightTime = horizontalDistance / horizontalSpeed;
+  const verticalVelocity = (offset.y + 0.5 * gravity * flightTime * flightTime) / flightTime;
+
+  return new THREE.Vector3(
+    launchDirection.x * horizontalSpeed,
+    verticalVelocity,
+    launchDirection.z * horizontalSpeed
+  );
+}
+
+function getProjectileAimPoint(start, attack) {
+  const aimPoint = attack?.aimPoint?.clone?.() ?? (world.hasAim ? world.aimPoint.clone() : null);
+
+  if (!aimPoint || aimPoint.distanceToSquared(start) < 0.01) {
+    return null;
+  }
+
+  const horizontalOffset = new THREE.Vector3(aimPoint.x - start.x, 0, aimPoint.z - start.z);
+  const horizontalDistance = horizontalOffset.length();
+  const maxDistance = Math.max(8, attack.range ?? 42);
+
+  if (horizontalDistance <= maxDistance) {
+    return aimPoint;
+  }
+
+  const rayDirection = attack?.aimRayDirection?.clone?.() ?? world.aimRayDirection.clone();
+  const verticalSlope = rayDirection.lengthSq() > 0.001 ? rayDirection.normalize().y : 0;
+  const cappedDirection = horizontalOffset.normalize();
+
+  return new THREE.Vector3(
+    start.x + cappedDirection.x * maxDistance,
+    start.y + verticalSlope * maxDistance,
+    start.z + cappedDirection.z * maxDistance
+  );
 }
 
 function spawnTowerProjectile(drawPower) {
@@ -8829,12 +9453,12 @@ function wearArmorItems(armorItems, rawDamage) {
 
 function damageCombatTarget(target, amount, source, attack) {
   if (target.isStructure) {
-    damageStructureTarget(target, amount, source);
+    damageStructureTarget(target, amount, source, attack);
     return;
   }
 
   if (target.isCourier) {
-    damageCourierTarget(target, amount, source);
+    damageCourierTarget(target, amount, source, attack);
     return;
   }
 
@@ -8851,7 +9475,7 @@ function damageCombatTarget(target, amount, source, attack) {
   damagePveEnemy(target, amount, source, attack);
 }
 
-function damageStructureTarget(target, amount, source) {
+function damageStructureTarget(target, amount, source, attack = null) {
   const structure = target.structure;
 
   if (!structure || structure.hp <= 0) {
@@ -8883,7 +9507,7 @@ function damageStructureTarget(target, amount, source) {
   }
 }
 
-function damageCourierTarget(target, amount, source) {
+function damageCourierTarget(target, amount, source, attack = null) {
   const courier = target.courier;
 
   if (!courier || (courier.hp ?? 0) <= 0) {
@@ -8985,6 +9609,13 @@ function sendPlayerAttack(target, amount, source, attack) {
 
       if (result.target) {
         syncRemotePlayer(result.target);
+      }
+
+      if (result.defeated && source !== "outpost") {
+        recordPlayerKillLore(state, result.target ?? target.snapshot ?? target, {
+          weaponName: attack?.itemName ?? source ?? "arms"
+        });
+        markPersistenceDirty();
       }
 
       flash(result.message ?? `${target.name} hit.`);
@@ -9385,6 +10016,207 @@ function resolvePveMobCollisions(mobs, options = {}) {
       }
     }
   }
+}
+
+function resolveLocalPlayerActorCollisions(bounds) {
+  if (!bounds || state.player.dead || world.outpostTower.active) {
+    return;
+  }
+
+  const actors = [
+    ...getActivePveBodyCollisionActors(),
+    ...getActiveRemotePlayerCollisionActors()
+  ];
+
+  if (!actors.length) {
+    return;
+  }
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const actor of actors) {
+      separateLocalPlayerFromActor(actor, bounds);
+    }
+  }
+
+  settlePlayerSupportAfterMove();
+}
+
+function resolvePveMobPlayerCollisions(mobs, options = {}) {
+  const activeMobs = mobs.filter((mob) => mob?.mesh?.visible && !mob.dead && !mob.removed);
+  const players = getActivePlayerBodyCollisionActors();
+
+  if (!activeMobs.length || !players.length) {
+    return;
+  }
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const mob of activeMobs) {
+      for (const player of players) {
+        separatePveMobFromPlayer(mob, player, options);
+      }
+    }
+  }
+}
+
+function resolveRemotePlayerBodyCollisions() {
+  const remotes = getActiveRemotePlayerCollisionActors();
+
+  if (!remotes.length) {
+    return;
+  }
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    if (!state.player.dead && !world.outpostTower.active) {
+      const localPlayer = getLocalPlayerBodyCollisionActor();
+
+      for (const remote of remotes) {
+        separateRemotePlayerFromActor(remote, localPlayer);
+      }
+    }
+
+    for (let aIndex = 0; aIndex < remotes.length; aIndex += 1) {
+      for (let bIndex = aIndex + 1; bIndex < remotes.length; bIndex += 1) {
+        separateRemotePlayerPair(remotes[aIndex], remotes[bIndex]);
+      }
+    }
+  }
+}
+
+function separateLocalPlayerFromActor(actor, bounds) {
+  const position = getCollisionActorPosition(actor);
+  const dx = state.player.position.x - position.x;
+  const dz = state.player.position.z - position.z;
+  const separation = getCollisionSeparation(dx, dz, PLAYER_COLLISION_RADIUS, actor.radius, state.player.id, actor.id);
+
+  if (!separation) {
+    return;
+  }
+
+  moveLocalPlayerTo({
+    x: state.player.position.x + separation.nx * separation.overlap,
+    z: state.player.position.z + separation.nz * separation.overlap
+  }, bounds);
+}
+
+function separatePveMobFromPlayer(mob, player, options) {
+  const mobPosition = getCollisionActorPosition(mob);
+  const playerPosition = getCollisionActorPosition(player);
+  const dx = mobPosition.x - playerPosition.x;
+  const dz = mobPosition.z - playerPosition.z;
+  const separation = getCollisionSeparation(dx, dz, mob.radius, player.radius, mob.id, player.id);
+
+  if (!separation) {
+    return;
+  }
+
+  movePveEntityTo(mob, {
+    x: mob.mesh.position.x + separation.nx * separation.overlap,
+    z: mob.mesh.position.z + separation.nz * separation.overlap
+  }, options);
+}
+
+function separateRemotePlayerFromActor(remote, actor) {
+  const remotePosition = getCollisionActorPosition(remote);
+  const actorPosition = getCollisionActorPosition(actor);
+  const dx = remotePosition.x - actorPosition.x;
+  const dz = remotePosition.z - actorPosition.z;
+  const separation = getCollisionSeparation(dx, dz, remote.radius, actor.radius, remote.id, actor.id);
+
+  if (!separation) {
+    return;
+  }
+
+  moveRemotePlayerVisualTo(remote, {
+    x: remote.group.position.x + separation.nx * separation.overlap,
+    z: remote.group.position.z + separation.nz * separation.overlap
+  });
+}
+
+function separateRemotePlayerPair(first, second) {
+  const dx = first.group.position.x - second.group.position.x;
+  const dz = first.group.position.z - second.group.position.z;
+  const separation = getCollisionSeparation(dx, dz, first.radius, second.radius, first.id, second.id);
+
+  if (!separation) {
+    return;
+  }
+
+  const push = separation.overlap * 0.5;
+  moveRemotePlayerVisualTo(first, {
+    x: first.group.position.x + separation.nx * push,
+    z: first.group.position.z + separation.nz * push
+  });
+  moveRemotePlayerVisualTo(second, {
+    x: second.group.position.x - separation.nx * push,
+    z: second.group.position.z - separation.nz * push
+  });
+}
+
+function getCollisionSeparation(dx, dz, firstRadius = 1.1, secondRadius = 1.1, firstId = "", secondId = "") {
+  let distance = Math.hypot(dx, dz);
+  const minimumDistance = firstRadius + secondRadius + ACTOR_COLLISION_PADDING;
+
+  if (distance >= minimumDistance) {
+    return null;
+  }
+
+  if (distance < 0.001) {
+    const angle = getStableSeparationAngle(firstId, secondId);
+    return {
+      nx: Math.cos(angle),
+      nz: Math.sin(angle),
+      overlap: minimumDistance
+    };
+  }
+
+  return {
+    nx: dx / distance,
+    nz: dz / distance,
+    overlap: minimumDistance - distance
+  };
+}
+
+function getActivePveBodyCollisionActors() {
+  return getActiveCombatEnemies().filter((enemy) => enemy?.mesh?.visible && !enemy.dead && !enemy.removed);
+}
+
+function getActivePlayerBodyCollisionActors() {
+  const players = [];
+
+  if (!state.player.dead && !world.outpostTower.active) {
+    players.push(getLocalPlayerBodyCollisionActor());
+  }
+
+  players.push(...getActiveRemotePlayerCollisionActors());
+  return players;
+}
+
+function getLocalPlayerBodyCollisionActor() {
+  return {
+    id: state.player.id,
+    mesh: world.playerMesh,
+    position: state.player.position,
+    radius: PLAYER_COLLISION_RADIUS
+  };
+}
+
+function getActiveRemotePlayerCollisionActors() {
+  if (!world.multiplayer.enabled) {
+    return [];
+  }
+
+  return [...world.remotePlayers.values()].filter(
+    (remote) => remote.group.visible && !remote.dead && isRemotePlayerInCurrentScene(remote.snapshot)
+  );
+}
+
+function getCollisionActorPosition(actor) {
+  return actor?.position ?? actor?.mesh?.position ?? actor?.group?.position ?? { x: 0, z: 0 };
+}
+
+function moveRemotePlayerVisualTo(remote, position) {
+  remote.group.position.x = position.x;
+  remote.group.position.z = position.z;
 }
 
 function separatePveMobPair(first, second, options) {
@@ -9997,9 +10829,10 @@ function updateCamera(deltaSeconds) {
 
   if (isLockedThirdPersonCamera()) {
     const { cameraPosition, lookTarget } = getLockedThirdPersonCameraFrame(target, orbitDistance);
-    world.camera.position.lerp(cameraPosition, Math.min(1, deltaSeconds * 9));
+    world.camera.position.copy(cameraPosition);
     world.camera.lookAt(lookTarget);
     applyCombatCameraImpulse();
+    updateLockedThirdPersonAim();
     document.body.dataset.cameraYaw = cameraYaw.toFixed(3);
     document.body.dataset.cameraPitch = world.cameraPitch.toFixed(3);
     document.body.dataset.cameraDistance = world.cameraDistance.toFixed(1);
@@ -10545,8 +11378,8 @@ function refreshUi() {
   const interiorFaction = world.interiorFactionId ? FACTION_LOOKUP[world.interiorFactionId] : null;
   const interiorPoi = world.activePoiInteriorId ? state.pois.find((poi) => poi.id === world.activePoiInteriorId) : null;
   ui.hudFaction.textContent = faction?.name ?? "Unsworn";
+  ui.hudPlayer.textContent = state.player.name;
   ui.hudRenown.textContent = String(state.player.renown);
-  ui.hudGold.textContent = String(Math.round(state.player.gold));
   const statusLabel =
     world.sceneMode === "interior" && interiorFaction
       ? `${interiorFaction.name} Keep`
@@ -10569,27 +11402,9 @@ function refreshUi() {
     `
     ).join("")}`;
 
-  for (const resource of RESOURCE_TYPES) {
-    document.querySelector(`[data-buy-price="${resource.id}"]`).textContent = Math.round(
-      state.market[resource.id].buy
-    );
-    document.querySelector(`[data-sell-price="${resource.id}"]`).textContent = Math.round(
-      state.market[resource.id].sell
-    );
-  }
   renderNpcTradePanel();
   renderStewardPanel();
   renderDepotPanel();
-
-  const nearest = getNearestPoi(state);
-  if (nearest) {
-    const owner = nearest.poi.ownerFactionId ? FACTION_LOOKUP[nearest.poi.ownerFactionId].name : "Neutral";
-    ui.nearestPoi.textContent = `${nearest.poi.name} (${Math.round(nearest.distance)}m, ${owner})`;
-  }
-
-  ui.eventCard.textContent = state.activeEvent
-    ? `${state.activeEvent.name} | ${Math.ceil(state.activeEvent.timer)}s | loot: ${state.activeEvent.item.name}`
-    : "No active dynamic event.";
 
   renderStructureList();
   if (!ui.buildPanel.classList.contains("is-hidden")) {
@@ -10604,6 +11419,15 @@ function refreshUi() {
   ui.inventoryStatus.textContent = wornCount ? `${wornCount} worn` : "Ready";
   renderInventoryPanel();
   renderHotbar();
+  if (!ui.loreScroll.classList.contains("is-hidden")) {
+    renderLoreScroll();
+  }
+  if (!ui.rulerPanel.classList.contains("is-hidden")) {
+    renderRulerPanel();
+  }
+  if (!ui.statusPanel.classList.contains("is-hidden")) {
+    renderStatusPanel();
+  }
 
   renderToasts();
 }
@@ -10828,6 +11652,9 @@ function animate() {
     tickCouriers(state, deltaSeconds);
   }
   tickEvent(state, deltaSeconds);
+  if (tickLoreSystem(state)) {
+    markPersistenceDirty();
+  }
   updatePersistence(deltaSeconds);
   updateWorld(deltaSeconds);
 
@@ -10915,7 +11742,7 @@ function createTerrainMaterial() {
         float incline = smoothstep(0.045, 0.24, length(normal.xz));
         float highStone = smoothstep(7.5, 12.0, vWorldPos.y) * 0.12;
         float rockAmount = clamp(incline + highStone, 0.0, 1.0);
-        vec3 grass = texture2D(grassMap, vUv * 28.0).rgb;
+        vec3 grass = texture2D(grassMap, vUv * 22.0).rgb;
         vec3 rock = texture2D(rockMap, vWorldPos.xz * 0.055 + vec2(vWorldPos.y * 0.018, 0.0)).rgb;
         vec3 baseColor = mix(grass, rock, rockAmount);
         vec3 lightDir = normalize(vec3(-0.48, 0.82, -0.3));
@@ -10955,6 +11782,17 @@ function getTerrainHeightAt(x, z) {
   return clamp(height, 0, 13.5);
 }
 
+function getTerrainGrassAmountAt(x, z) {
+  const sample = 1.6;
+  const height = getTerrainHeightAt(x, z);
+  const heightX = getTerrainHeightAt(x + sample, z) - getTerrainHeightAt(x - sample, z);
+  const heightZ = getTerrainHeightAt(x, z + sample) - getTerrainHeightAt(x, z - sample);
+  const normal = new THREE.Vector3(-heightX, sample * 2, -heightZ).normalize();
+  const incline = smoothstep(0.045, 0.24, Math.hypot(normal.x, normal.z));
+  const highStone = smoothstep(7.5, 12.0, height) * 0.12;
+  return 1 - clamp(incline + highStone, 0, 1);
+}
+
 function smoothstep(edge0, edge1, value) {
   const x = clamp((value - edge0) / (edge1 - edge0), 0, 1);
   return x * x * (3 - 2 * x);
@@ -10980,20 +11818,37 @@ function createGrassTexture() {
     const hue = 70 + Math.random() * 38;
     const lightness = 22 + Math.random() * 20;
     context.fillStyle = `hsla(${hue}, 34%, ${lightness}%, ${Math.random() * 0.34})`;
-    context.beginPath();
-    context.arc(x, y, radius, 0, Math.PI * 2);
-    context.fill();
+
+    for (const offsetX of [-512, 0, 512]) {
+      for (const offsetY of [-512, 0, 512]) {
+        context.beginPath();
+        context.arc(x + offsetX, y + offsetY, radius, 0, Math.PI * 2);
+        context.fill();
+      }
+    }
   }
 
-  for (let index = 0; index < 420; index += 1) {
+  for (let index = 0; index < 900; index += 1) {
     const x = Math.random() * 512;
     const y = Math.random() * 512;
-    context.strokeStyle = `hsla(${82 + Math.random() * 24}, 42%, ${28 + Math.random() * 16}%, 0.28)`;
-    context.lineWidth = 0.8 + Math.random() * 1.1;
-    context.beginPath();
-    context.moveTo(x, y);
-    context.lineTo(x + Math.random() * 9 - 4.5, y - 5 - Math.random() * 10);
-    context.stroke();
+    const bladeLength = 4 + Math.random() * 13;
+    const lean = Math.random() * 8 - 4;
+    context.strokeStyle = `hsla(${82 + Math.random() * 26}, ${38 + Math.random() * 18}%, ${24 + Math.random() * 22}%, ${0.2 + Math.random() * 0.22})`;
+    context.lineWidth = 0.45 + Math.random() * 1.15;
+
+    for (const offsetX of [-512, 0, 512]) {
+      for (const offsetY of [-512, 0, 512]) {
+        context.beginPath();
+        context.moveTo(x + offsetX, y + offsetY);
+        context.quadraticCurveTo(
+          x + offsetX + lean * 0.35,
+          y + offsetY - bladeLength * 0.55,
+          x + offsetX + lean,
+          y + offsetY - bladeLength
+        );
+        context.stroke();
+      }
+    }
   }
 
   const texture = new THREE.CanvasTexture(canvasTexture);

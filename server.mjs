@@ -19,6 +19,10 @@ const respawnDelayMs = 3500;
 const worldTickMs = 5000;
 const poiWorkerDeliveryAmount = 20;
 const courierResourceIds = ["gold", ...RESOURCE_TYPES.map((resource) => resource.id)];
+const maxHistoryTransactions = 120;
+const maxHistoryVolumes = 40;
+const loreSchemaVersion = 2;
+const recordedLoreEventTypes = new Set(["player_killed", "poi_claimed", "ruler_claimed", "ruler_killed"]);
 const poiWorkerNames = {
   gold: "Factor",
   iron: "Miner",
@@ -335,7 +339,23 @@ function createDefaultWorldState() {
     structures: [],
     couriers: [],
     activeEvent: null,
+    lore: createDefaultLoreState(),
     lastEvolvedAt: Date.now()
+  };
+}
+
+function createDefaultLoreState() {
+  const opening = createOpeningLoreText();
+  return {
+    version: loreSchemaVersion,
+    story: opening,
+    opening,
+    openingPrompt: createOpeningLorePrompt(),
+    transactions: [],
+    volumes: [],
+    nextVolumeNumber: 1,
+    renownAwardsByPlayerId: {},
+    pendingStartedAt: null
   };
 }
 
@@ -354,6 +374,7 @@ function normalizeWorldState(snapshot) {
     structures: Array.isArray(source.structures) ? source.structures.filter(isPlainObject).slice(0, 250) : [],
     couriers: Array.isArray(source.couriers) ? source.couriers.filter(isPlainObject).slice(0, 250) : [],
     activeEvent: isPlainObject(source.activeEvent) ? source.activeEvent : null,
+    lore: normalizeLoreState(source.lore, defaults.lore),
     lastEvolvedAt: clampNumber(source.lastEvolvedAt, 0, Date.now()) || Date.now()
   };
 }
@@ -368,8 +389,15 @@ function normalizePlayerSnapshot(playerId, snapshot) {
       ...player,
       id: playerId,
       name: sanitizeText(player.name, 32) || "Player",
+      houseName: sanitizeHouseName(player.houseName),
+      firstName: sanitizeText(player.firstName, 24),
+      lifeNumber: clampNumber(player.lifeNumber, 0, Number.MAX_SAFE_INTEGER),
       gold: clampNumber(player.gold, 0, Number.MAX_SAFE_INTEGER),
       renown: clampNumber(player.renown, 0, Number.MAX_SAFE_INTEGER),
+      historyRenownClaimed: clampNumber(player.historyRenownClaimed, 0, Number.MAX_SAFE_INTEGER),
+      historyRenownVersion: Number.isFinite(Number(player.historyRenownVersion))
+        ? clampNumber(player.historyRenownVersion, 0, Number.MAX_SAFE_INTEGER)
+        : 0,
       resources: normalizeResourceBag(player.resources, Object.fromEntries(RESOURCE_TYPES.map((resource) => [resource.id, 0])))
     }
   };
@@ -769,6 +797,79 @@ function normalizePois(source, defaults) {
   });
 }
 
+function normalizeLoreState(source, defaults = createDefaultLoreState()) {
+  const lore = isPlainObject(source) ? source : {};
+
+  if (lore.version !== loreSchemaVersion) {
+    return createDefaultLoreState();
+  }
+
+  return {
+    version: loreSchemaVersion,
+    story: sanitizeLoreText(lore.story, defaults.story, 20000),
+    opening: sanitizeLoreText(lore.opening, defaults.opening, 2400),
+    openingPrompt: sanitizeLoreText(lore.openingPrompt, defaults.openingPrompt, 3000),
+    transactions: normalizeLoreEntries(lore.transactions, maxHistoryTransactions).filter((entry) =>
+      recordedLoreEventTypes.has(entry.type)
+    ),
+    volumes: normalizeLoreEntries(lore.volumes, maxHistoryVolumes),
+    nextVolumeNumber: clampNumber(lore.nextVolumeNumber, 1, Number.MAX_SAFE_INTEGER) || defaults.nextVolumeNumber,
+    renownAwardsByPlayerId: normalizeRenownAwards(lore.renownAwardsByPlayerId),
+    pendingStartedAt: Number.isFinite(Number(lore.pendingStartedAt))
+      ? clampNumber(lore.pendingStartedAt, 0, Number.MAX_SAFE_INTEGER)
+      : null
+  };
+}
+
+function sanitizeLoreText(value, fallback, maxLength) {
+  return typeof value === "string" && value.trim() ? value.slice(0, maxLength) : fallback;
+}
+
+function normalizeLoreEntries(entries, maxEntries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  return entries.filter(isPlainObject).slice(-maxEntries);
+}
+
+function normalizeRenownAwards(source) {
+  if (!isPlainObject(source)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([playerId, amount]) => [sanitizeText(playerId, 80), clampNumber(amount, 0, Number.MAX_SAFE_INTEGER)])
+      .filter(([playerId]) => Boolean(playerId))
+      .slice(0, 1000)
+  );
+}
+
+function createOpeningLorePrompt() {
+  return `Start a medieval tale. Set the scene using these factions by name: ${FACTIONS.map((faction) => faction.name).join(", ")}. Mention these places by name: ${POIS.map((poi) => poi.name).join(", ")}.`;
+}
+
+function createOpeningLoreText() {
+  const factionNames = formatList(FACTIONS.map((faction) => faction.name));
+  const poiNames = formatList(POIS.map((poi) => poi.name));
+  return `In the wild crownlands, ${factionNames} raised their banners beneath a restless sky. Between them lay ${poiNames}, places of quarry dust, wheat, iron, market cries, and old dungeon shadows, where every oath waited to become history.`;
+}
+
+function formatList(values) {
+  const clean = values.filter(Boolean);
+
+  if (clean.length <= 1) {
+    return clean[0] ?? "";
+  }
+
+  if (clean.length === 2) {
+    return `${clean[0]} and ${clean[1]}`;
+  }
+
+  return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
+}
+
 function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -842,6 +943,9 @@ function upsertPlayer(payload) {
   }
 
   player.name = payload.name;
+  player.houseName = payload.houseName;
+  player.firstName = payload.firstName;
+  player.lifeNumber = payload.lifeNumber;
   player.renown = payload.renown;
   player.factionId = payload.factionId;
   player.position = player.dead ? player.position : payload.position;
@@ -984,6 +1088,9 @@ function sanitizePlayerPayload(body) {
   return {
     id,
     name: sanitizeText(body.name, 32) || "Player",
+    houseName: sanitizeHouseName(body.houseName),
+    firstName: sanitizeText(body.firstName, 24),
+    lifeNumber: clampNumber(body.lifeNumber, 0, Number.MAX_SAFE_INTEGER),
     renown: clampNumber(body.renown, 0, Number.MAX_SAFE_INTEGER),
     factionId: sanitizeText(body.factionId, 40) || null,
     position: sanitizePosition(body.position),
@@ -1074,6 +1181,9 @@ function serializePlayer(player) {
   return {
     id: player.id,
     name: player.name,
+    houseName: player.houseName ?? "",
+    firstName: player.firstName ?? "",
+    lifeNumber: player.lifeNumber ?? 0,
     renown: player.renown ?? 0,
     factionId: player.factionId,
     position: player.position,
@@ -1168,6 +1278,14 @@ function sanitizeText(value, maxLength) {
   }
 
   return value.replace(/[^\w .:'-]/g, "").trim().slice(0, maxLength);
+}
+
+function sanitizeHouseName(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 18);
 }
 
 function isPortAvailable(port) {

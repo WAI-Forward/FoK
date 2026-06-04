@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>King of Kingdoms 3D</title>
-    <link rel="stylesheet" href="./styles.css?v=0.6.9" />
+    <link rel="stylesheet" href="./styles.css?v=0.7.2" />
     <script type="importmap">
       {
         "imports": {
@@ -22,28 +22,32 @@
         <div class="faction-shell">
           <p class="eyebrow">King of Kingdoms 3D</p>
           <h1 id="faction-title">Choose your banner</h1>
+          <label class="house-field">
+            <span>House</span>
+            <input id="house-name" type="text" maxlength="18" placeholder="BARATHEON" autocomplete="off" spellcheck="false" />
+            <strong id="house-name-status">A-Z</strong>
+          </label>
           <div id="faction-cards" class="faction-cards"></div>
         </div>
       </section>
 
       <section class="hud topbar" aria-label="World state">
-        <button id="menu-toggle" class="menu-toggle" type="button" aria-controls="command-panel" aria-expanded="false">Menu</button>
-        <div>
-          <span class="label">Faction</span>
+        <button id="hud-faction-button" class="hud-menu-button" type="button" aria-controls="ruler-panel" aria-expanded="false">
+          <span>Faction:</span>
           <strong id="hud-faction">Unsworn</strong>
-        </div>
-        <div>
-          <span class="label">Renown</span>
+        </button>
+        <button id="hud-player-button" class="hud-menu-button" type="button" aria-controls="inventory-panel" aria-expanded="false">
+          <span>Player</span>
+          <strong id="hud-player">Player</strong>
+        </button>
+        <button id="hud-lore-button" class="hud-menu-button" type="button" aria-controls="lore-scroll" aria-expanded="false">
+          <span>Lore:</span>
           <strong id="hud-renown">0</strong>
-        </div>
-        <div>
-          <span class="label">Gold</span>
-          <strong id="hud-gold">0</strong>
-        </div>
-        <div>
-          <span class="label">Status</span>
+        </button>
+        <button id="hud-status-button" class="hud-menu-button" type="button" aria-controls="status-panel" aria-expanded="false">
+          <span>Status</span>
           <strong id="hud-zone">Wildlands</strong>
-        </div>
+        </button>
       </section>
 
       <section class="resources" aria-label="Player resources">
@@ -192,50 +196,27 @@
         <div id="structure-list" class="structure-list"></div>
       </section>
 
-      <section id="command-panel" class="hud command-panel is-hidden" aria-label="Command panel" aria-hidden="true">
-        <div class="panel-chrome">
-          <strong>Menu</strong>
-          <button id="menu-close" class="menu-close" type="button" aria-label="Close menu">Close</button>
-        </div>
-        <div class="panel-tabs" role="tablist" aria-label="Command views">
-          <button class="tab is-active" data-panel="market" type="button">Market</button>
-          <button class="tab" data-panel="world" type="button">World</button>
-        </div>
-
-        <div class="panel-view is-active" data-panel-view="market">
-          <header class="panel-heading">
-            <h2>Market</h2>
-            <span>AoE pricing</span>
-          </header>
-          <div id="market-list" class="market-list"></div>
-        </div>
-
-        <div class="panel-view" data-panel-view="world">
-          <header class="panel-heading">
-            <h2>Field</h2>
-            <span id="nearest-poi">No POI nearby</span>
-          </header>
-          <div class="action-grid">
-            <button id="claim-poi" class="primary" type="button">Claim POI</button>
-            <button id="spawn-event" type="button">Scout Event</button>
-            <button id="resolve-event" type="button">Resolve Event</button>
-            <button id="simulate-raid" type="button">Raid Pulse</button>
-          </div>
-          <div id="event-card" class="notice"></div>
-        </div>
-
-      </section>
-
-      <section id="ruler-panel" class="hud ruler-panel is-hidden" aria-label="Faction management" aria-hidden="true">
+      <section id="status-panel" class="hud status-panel is-hidden" aria-label="Status details" aria-hidden="true">
         <div class="panel-chrome">
           <div>
-            <strong id="ruler-title">Faction Throne</strong>
-            <span id="ruler-status">Ruler management</span>
+            <strong>Status</strong>
+            <span id="status-summary">Wildlands</span>
           </div>
-          <button id="ruler-close" class="menu-close" type="button" aria-label="Close ruler menu">Close</button>
+          <button id="status-close" class="menu-close" type="button" aria-label="Close status">Close</button>
         </div>
-        <div class="panel-tabs" role="tablist" aria-label="Ruler views">
-          <button class="ruler-tab is-active" data-ruler-panel="members" type="button">Members</button>
+        <div id="status-body" class="status-body"></div>
+      </section>
+
+      <section id="ruler-panel" class="hud ruler-panel is-hidden" aria-label="Faction details" aria-hidden="true">
+        <div class="panel-chrome">
+          <div>
+            <strong id="ruler-title">Faction</strong>
+            <span id="ruler-status">Faction details</span>
+          </div>
+          <button id="ruler-close" class="menu-close" type="button" aria-label="Close faction menu">Close</button>
+        </div>
+        <div class="panel-tabs" role="tablist" aria-label="Faction views">
+          <button class="ruler-tab is-active" data-ruler-panel="members" type="button">Houses</button>
           <button class="ruler-tab" data-ruler-panel="resources" type="button">Resources</button>
           <button class="ruler-tab" data-ruler-panel="politics" type="button">Politics</button>
         </div>
@@ -244,9 +225,23 @@
         <div id="ruler-politics" class="ruler-view" data-ruler-view="politics"></div>
       </section>
 
+      <section id="lore-scroll" class="lore-scroll is-hidden" aria-label="Chronicle scroll" aria-hidden="true">
+        <div class="lore-paper">
+          <header class="lore-header">
+            <div>
+              <span>Chronicle</span>
+              <strong>History Volumes</strong>
+              <small id="lore-meta">No volumes</small>
+            </div>
+            <button id="lore-close" class="menu-close" type="button" aria-label="Close chronicle">Close</button>
+          </header>
+          <div id="lore-body" class="lore-body"></div>
+        </div>
+      </section>
+
       <section id="toast-log" class="toast-log" aria-live="polite"></section>
     </main>
 
-    <script type="module" src="./src/main.js?v=0.8.0"></script>
+    <script type="module" src="./src/main.js?v=0.8.5"></script>
   </body>
 </html>
