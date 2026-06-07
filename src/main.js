@@ -3316,7 +3316,7 @@ function createRemotePlayerVisual(player) {
 
   world.scene.add(group);
 
-  return {
+  const remote = {
     id: player.id,
     name: player.name,
     isRemotePlayer: true,
@@ -3362,6 +3362,8 @@ function createRemotePlayerVisual(player) {
     targetHeadRotation: player.headRotation ?? 0,
     lastDamagedAt: player.lastDamagedAt ?? 0
   };
+
+  return remote;
 }
 
 function setupUi() {
