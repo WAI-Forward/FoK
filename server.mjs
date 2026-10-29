@@ -1,4 +1,16 @@
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { isInOwnCastle, regenerateHealth } from './src/health.js';
+import { captureHistory, mergeHistory, normalizeHistory, historyRenown } from './src/history.js';
+import { writeArchiveChapter } from './server-history.mjs';
+import { cheatCatalog, parseCheat, executeCheat } from './src/cheats.js';
+import { createAuth } from "./server-auth.mjs";
+import { isShield, resolveShieldBlock } from "./src/combat-motion.js";
+import { createDeathDrops, pickupDeathDrop } from "./src/death-loot.js";
+import { clearPlayerResources, syncResourceReceipts, reconcileResourceTransfers, transferFactionResource } from "./src/resource-transfers.js";
+import { accruePoiIncome, normalizeIncomeTotals, reconcilePoiIncome } from "./src/poi-income.js";
+import { createGameState, foundFaction, updateFactionIdentity } from "./src/state.js";
+import { normalizeFactions } from "./src/factions.js";
+import { clampWorldPosition } from "./src/world-layout.js";
+import { createReadStream, existsSync, readFileSync, statSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createProbeServer } from "node:net";
 import { networkInterfaces } from "node:os";
@@ -8,6 +20,8 @@ import { createMarket } from "./src/economy.js";
 import { FACTIONS, POIS, RESOURCE_TYPES } from "./src/game-data.js";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
+const auth = createAuth(root);
+const localSaveFile = join(process.env.KOK_DATA_DIR || join(root, "data"), "realm-save.json");
 const preferredPort = Number.parseInt(process.env.PORT ?? "5173", 10);
 const maxPortAttempts = 20;
 const host = "0.0.0.0";
@@ -22,7 +36,7 @@ const courierResourceIds = ["gold", ...RESOURCE_TYPES.map((resource) => resource
 const maxHistoryTransactions = 120;
 const maxHistoryVolumes = 40;
 const loreSchemaVersion = 2;
-const recordedLoreEventTypes = new Set(["player_killed", "poi_claimed", "ruler_claimed", "ruler_killed"]);
+const recordedLoreEventTypes = new Set(["player_killed", "poi_claimed", "ruler_claimed", "ruler_killed", "faction_founded"]);
 const poiWorkerNames = {
   gold: "Factor",
   iron: "Miner",
@@ -33,11 +47,25 @@ const poiWorkerNames = {
 const armorSlots = new Set(["head", "chest", "gloves", "feet"]);
 const armorTypes = new Set(["Helmet", "Chestplate", "Gloves", "Feet"]);
 const players = new Map();
+const cheatSessions = new Set();
 const memoryPersistence = {
   world: createDefaultWorldState(),
   players: new Map()
 };
+if (existsSync(localSaveFile)) {
+  const saved = JSON.parse(readFileSync(localSaveFile, "utf8"));
+  memoryPersistence.world = saved.world;
+  memoryPersistence.players = new Map(saved.players);
+}
+function flushLocalSave() {
+  mkdirSync(resolve(localSaveFile, ".."), { recursive: true });
+  writeFileSync(localSaveFile + ".tmp", JSON.stringify({ world: memoryPersistence.world, players: [...memoryPersistence.players] }));
+  renameSync(localSaveFile + ".tmp", localSaveFile);
+}
 let dbPoolPromise = null;
+let multiplayerSnapshotSequence = 0;
+let worldSnapshotSequence = 0;
+let worldRequestQueue = Promise.resolve();
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -57,6 +85,8 @@ const mimeTypes = {
 function resolveRequestPath(url) {
   const requestUrl = new URL(url, "http://localhost");
   const decodedPath = decodeURIComponent(requestUrl.pathname);
+  if (!(decodedPath === "/" || ["/index.html", "/styles.css"].includes(decodedPath) || /^\/(src|assets)\//.test(decodedPath) || decodedPath.startsWith("/node_modules/three/") || /^\/tools\/weapon-preview\.(html|js)$/.test(decodedPath))) return null;
+  if (decodedPath.split(/[\\/]/).some(part => part.startsWith("."))) return null;
   const safePath = normalize(decodedPath)
     .replace(/^[/\\]+/, "")
     .replace(/^(\.\.[/\\])+/, "");
@@ -76,13 +106,16 @@ function resolveRequestPath(url) {
 const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", "http://localhost");
 
+  if (requestUrl.pathname.startsWith("/auth/") || requestUrl.pathname.startsWith("/api/auth/")) {
+    void auth.handle(request, response, requestUrl); return;
+  }
   if (requestUrl.pathname.startsWith("/api/multiplayer/")) {
     void handleMultiplayerRequest(request, response, requestUrl);
     return;
   }
 
   if (requestUrl.pathname.startsWith("/api/world/")) {
-    void handleWorldRequest(request, response, requestUrl);
+    worldRequestQueue = worldRequestQueue.then(() => handleWorldRequest(request, response, requestUrl));
     return;
   }
 
@@ -101,29 +134,93 @@ const server = createServer((request, response) => {
 });
 
 async function handleWorldRequest(request, response, requestUrl) {
+  if (requestUrl.pathname.startsWith('/api/world/cheats')) {
+    try { await handleCheatRequest(request, response, requestUrl); }
+    catch (error) { writeJson(response, error.status || 400, { ok: false, message: error.message }); }
+    return;
+  }
   try {
     if (request.method === "GET" && requestUrl.pathname === "/api/world/state") {
-      const playerId = sanitizeText(requestUrl.searchParams.get("playerId"), 80);
-      writeJson(response, 200, await loadPersistentState(playerId));
+      const playerId = auth.playerId(request, requestUrl.searchParams.get("playerId"));
+      writeJson(response, 200, {
+        ...await loadPersistentState(playerId),
+        snapshotSequence: ++worldSnapshotSequence
+      });
+      return;
+    }
+
+    if (request.method === "POST" && ["/api/world/found-faction", "/api/world/update-faction"].includes(requestUrl.pathname)) {
+      const body = await readJsonBody(request);
+      const playerId = auth.playerId(request, body?.playerId);
+      const live = players.get(playerId);
+      const nearThrone = live?.sceneMode === "interior" && live.interiorFactionId === body.castleId &&
+        Math.hypot(live.position.x, live.position.z + 20.3) <= 7.5 && !live.dead;
+      if (!playerId || !nearThrone || !body.seated) {
+        writeJson(response, 200, { ok: false, message: "Sit on the castle's throne to manage its faction." }); return;
+      }
+      const saved = await loadPersistentState(playerId);
+      const player = normalizePlayerSnapshot(playerId, body.player);
+      const state = Object.assign(createGameState(), saved.world, player);
+      // A stale client cannot leave its existing faction by changing its payload.
+      state.selectedFactionId = [saved.player?.selectedFactionId, live.factionId, player.selectedFactionId].find(id => saved.world.factions[id]) || null;
+      const action = requestUrl.pathname === "/api/world/update-faction" ? updateFactionIdentity : foundFaction;
+      const result = action(state, body.castleId, body.draft, { castleId: live.interiorFactionId, seated: true });
+      if (!result.ok) { writeJson(response, 200, result); return; }
+      const payload = await savePersistentState(playerId, { world: state, player: { selectedFactionId: state.selectedFactionId, player: state.player } }, true);
+      writeJson(response, 200, { ...payload, message: result.message, snapshotSequence: ++worldSnapshotSequence }); return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/world/pickup-drop") {
+      const body = await readJsonBody(request);
+      const playerId = auth.playerId(request, body?.playerId);
+      const saved = await loadPersistentState(playerId);
+      const result = saved.player ? pickupDeathDrop(saved.world, saved.player, players.get(playerId), body.dropId, 5.5) : { ok: false, message: "Player unavailable." };
+      if (!result.ok) { writeJson(response, 200, result); return; }
+      const payload = await savePersistentState(playerId, { world: saved.world, player: saved.player }, true, true);
+      writeJson(response, 200, { ...payload, ...result, snapshotSequence: ++worldSnapshotSequence }); return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/world/give-resource") {
+      const body = await readJsonBody(request);
+      const playerId = auth.playerId(request, body?.playerId);
+      const saved = await loadPersistentState(playerId);
+      const requestId = sanitizeText(body.requestId, 80);
+      if (!requestId) { writeJson(response, 400, { ok: false, message: "Missing transfer request id." }); return; }
+      const requestKey = `${playerId}:${requestId}`;
+      if (saved.world.resourceTransferRequests[requestKey]) {
+        writeJson(response, 200, { ...saved, message: saved.world.resourceTransferRequests[requestKey], snapshotSequence: ++worldSnapshotSequence }); return;
+      }
+      const recipient = (await loadPersistentState(sanitizeText(body.recipientId, 80))).player;
+      if (players.get(playerId)?.dead || players.get(body.recipientId)?.dead) {
+        writeJson(response, 200, { ok: false, message: "Wait until both players are alive." }); return;
+      }
+      const result = transferFactionResource(saved.world, playerId, recipient, body.factionId, body.resourceId, body.amount);
+      if (!result.ok) { writeJson(response, 200, result); return; }
+      saved.world.resourceTransferRequests[requestKey] = result.message;
+      await savePersistentState(recipient.player.id, { world: saved.world, player: recipient }, true, true);
+      writeJson(response, 200, { ...await loadPersistentState(playerId), ...result, snapshotSequence: ++worldSnapshotSequence });
       return;
     }
 
     if (request.method === "POST" && requestUrl.pathname === "/api/world/snapshot") {
       const body = await readJsonBody(request);
-      const playerId = sanitizeText(body?.playerId, 80);
+      const playerId = auth.playerId(request, body?.playerId);
 
       if (!playerId) {
         writeJson(response, 400, { ok: false, message: "Missing player id." });
         return;
       }
 
-      writeJson(response, 200, await savePersistentState(playerId, body));
+      writeJson(response, 200, {
+        ...await savePersistentState(playerId, body),
+        snapshotSequence: ++worldSnapshotSequence
+      });
       return;
     }
 
     writeJson(response, 404, { ok: false, message: "World endpoint not found." });
   } catch (error) {
-    writeJson(response, 500, {
+    writeJson(response, error.status || 500, {
       ok: false,
       message: error instanceof Error ? error.message : "World persistence request failed."
     });
@@ -135,9 +232,10 @@ async function loadPersistentState(playerId) {
 
   if (!pool) {
     const world = evolveWorldState(memoryPersistence.world);
+    memoryPersistence.world = world;
     return {
       ok: true,
-      storage: "memory",
+      storage: "disk",
       serverTime: Date.now(),
       world,
       player: playerId ? memoryPersistence.players.get(playerId) ?? null : null
@@ -168,19 +266,93 @@ async function loadPersistentState(playerId) {
   };
 }
 
-async function savePersistentState(playerId, body) {
+const narrationJobs = new Set();
+function scheduleNarration(world) {
+  if (!process.env.OPENAI_API_KEY || !process.env.FOK_LORE_MODEL) return;
+  const chapter = world.history.chapters.find(c => c.source === 'recorded-events' && !narrationJobs.has(c.id));
+  if (!chapter) return;
+  narrationJobs.add(chapter.id);
+  const copy = structuredClone(world), epoch = copy.history.bookEpoch;
+  // Network generation never holds the gameplay/save queue. Apply only to the same book edition.
+  void writeArchiveChapter(copy, { chapterId: chapter.id }).then(result => {
+    worldRequestQueue = worldRequestQueue.then(async () => {
+      const saved = await loadPersistentState(null);
+      const current = saved.world.history;
+      const index = current.chapters.findIndex(c => c.id === chapter.id);
+      if (!result || current.bookEpoch !== epoch || index < 0) return;
+      current.chapters[index] = result;
+      const pool = await getDbPool();
+      if (pool) await pool.query('UPDATE kok_world_state SET state = $1::jsonb, updated_at = now() WHERE id = $2', [JSON.stringify(saved.world), 'primary']);
+      else { memoryPersistence.world = saved.world; flushLocalSave(); }
+    }).catch(error => console.error('Could not save history narrative', error.message));
+    return worldRequestQueue;
+  }).catch(error => console.error('Could not generate history narrative', error.message)).finally(() => narrationJobs.delete(chapter.id));
+}
+
+async function savePersistentState(playerId, body, founding = false, resourceAction = false) {
+  const saved = await loadPersistentState(playerId);
+  if (!founding && (Number(body?.cheatRevision) || 0) !== (saved.world.cheatRevision || 0)) return saved;
+  if (body?.world && !founding) {
+    const current = (await loadPersistentState(playerId)).world;
+    reconcilePoiIncome(body.world, current);
+    reconcileResourceTransfers(body.world, current);
+    body.world.history = mergeHistory(current.history, body.world.history);
+    body.world.elapsed = Math.max(current.elapsed, Number(body.world.elapsed) || 0);
+    body.world.resourceTransferRequests = current.resourceTransferRequests;
+    body.world.deathDrops = current.deathDrops;
+    // Founding is an atomic server action; older world snapshots cannot erase it.
+    body.world.resetAllRevision = current.resetAllRevision || 0;
+    body.world.factions = current.factions;
+    body.world.factionMembers ??= {};
+    body.world.factionGovernance ??= {};
+    body.world.factionResources ??= {};
+    for (const id of Object.keys(current.factionGovernance)) {
+      const oldRuler = body.world.factionGovernance?.[id]?.rulerPlayerId;
+      if (oldRuler && current.history.events.some(e => e.type === "ruler_succeeded" && e.subject?.playerId === oldRuler && e.factionId === id)) {
+        body.world.factionGovernance[id] = current.factionGovernance[id];
+        body.world.factionMembers[id] = current.factionMembers[id];
+      }
+      if (!current.factions[id]) {
+        body.world.factionMembers[id] = [];
+        body.world.factionGovernance[id] = current.factionGovernance[id];
+        body.world.factionResources[id] = current.factionResources[id];
+      }
+    }
+    for (const id of Object.keys(current.factions)) {
+      body.world.factionGovernance ??= {};
+      body.world.factionMembers ??= {};
+      if (current.factionMembers[id]?.some(member => member.playerId === current.factions[id].founderPlayerId) && !body.world.factionMembers[id]?.some(member => member.playerId === current.factions[id].founderPlayerId)) {
+        body.world.factionMembers[id] = current.factionMembers[id];
+        body.world.factionGovernance[id] = current.factionGovernance[id];
+      }
+    }
+    if (body.world.lore && current.lore.nextVolumeNumber > (body.world.lore.nextVolumeNumber || 1)) body.world.lore = current.lore;
+  }
   const player = normalizePlayerSnapshot(playerId, body?.player);
+  if (playerId.startsWith("guest-")) {
+    player.player.houseName = "";
+    player.player.name = player.player.firstName || "Traveller";
+  } else if (saved.player?.player.houseName) {
+    player.player.houseName = saved.player.player.houseName;
+    player.player.name = player.player.firstName + " " + player.player.houseName.charAt(0) + player.player.houseName.slice(1).toLowerCase();
+  }
+  if (!resourceAction && saved.player) syncResourceReceipts(player.player, saved.player.player);
   const pool = await getDbPool();
   let world = null;
 
   if (!pool) {
     world = body?.world ? normalizeWorldState(body.world) : evolveWorldState(memoryPersistence.world);
-    world.lastEvolvedAt = Date.now();
+    captureHistory(world, player);
+    if (player.selectedFactionId && !world.factions[player.selectedFactionId]) player.selectedFactionId = null;
+    await writeArchiveChapter(world, { apiKey: null });
+    player.player.renown = historyRenown(world.history, playerId);
     memoryPersistence.world = world;
     memoryPersistence.players.set(playerId, player);
+    flushLocalSave();
+    scheduleNarration(world);
     return {
       ok: true,
-      storage: "memory",
+      storage: "disk",
       serverTime: Date.now(),
       world,
       player
@@ -190,24 +362,39 @@ async function savePersistentState(playerId, body) {
   await ensureDatabaseSchema(pool);
   if (body?.world) {
     world = normalizeWorldState(body.world);
-    world.lastEvolvedAt = Date.now();
   } else {
     const worldResult = await pool.query("SELECT state FROM kok_world_state WHERE id = $1", ["primary"]);
     world = evolveWorldState(normalizeWorldState(worldResult.rows[0]?.state));
   }
 
-  await pool.query(
-    `INSERT INTO kok_world_state (id, state, updated_at)
-     VALUES ($1, $2::jsonb, now())
-     ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
-    ["primary", JSON.stringify(world)]
-  );
-  await pool.query(
-    `INSERT INTO kok_player_state (player_id, state, updated_at)
-     VALUES ($1, $2::jsonb, now())
-     ON CONFLICT (player_id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
-    [playerId, JSON.stringify(player)]
-  );
+  captureHistory(world, player);
+    if (player.selectedFactionId && !world.factions[player.selectedFactionId]) player.selectedFactionId = null;
+  await writeArchiveChapter(world, { apiKey: null });
+  player.player.renown = historyRenown(world.history, playerId);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO kok_world_state (id, state, updated_at)
+       VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
+      ["primary", JSON.stringify(world)]
+    );
+    await client.query(
+      `INSERT INTO kok_player_state (player_id, state, updated_at)
+       VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (player_id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
+      [playerId, JSON.stringify(player)]
+    );
+
+    await client.query("COMMIT");
+    scheduleNarration(world);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 
   return {
     ok: true,
@@ -230,7 +417,7 @@ async function createDbPool() {
   const connectionString = readDatabaseAddress();
 
   if (!connectionString) {
-    console.warn("World persistence is using memory: no database address found.");
+    console.warn("World persistence is using local disk: no database address found.");
     return null;
   }
 
@@ -246,14 +433,13 @@ async function createDbPool() {
     console.log("World persistence connected to PostgreSQL.");
     return pool;
   } catch (error) {
-    console.warn(
-      `World persistence is using memory: ${error instanceof Error ? error.message : "PostgreSQL unavailable."}`
-    );
-    return null;
+    dbPoolPromise = null;
+    throw new Error("Database unavailable. Your saved progress has not been changed.");
   }
 }
 
 function readDatabaseAddress() {
+  if (process.env.KOK_STORAGE === "disk") return "";
   if (process.env.KOK_DATABASE_URL || process.env.DATABASE_URL) {
     return normalizeDatabaseAddress(process.env.KOK_DATABASE_URL || process.env.DATABASE_URL);
   }
@@ -304,9 +490,10 @@ async function ensureDatabaseSchema(pool) {
 
 function createDefaultWorldState() {
   return {
-    version: 1,
+    version: 2,
     elapsed: 0,
     market: createMarket(),
+    factions: {},
     factionMembers: Object.fromEntries(FACTIONS.map((faction) => [faction.id, []])),
     factionGovernance: Object.fromEntries(
       FACTIONS.map((faction) => [
@@ -320,12 +507,17 @@ function createDefaultWorldState() {
         }
       ])
     ),
+    houseRelations: {},
     factionResources: Object.fromEntries(
       FACTIONS.map((faction) => [
         faction.id,
       {
         gold: 500,
         items: [],
+        blacksmith: {
+          xp: 0,
+          level: 1
+        },
         resources: {
             wood: 100,
             stone: 80,
@@ -339,6 +531,7 @@ function createDefaultWorldState() {
     structures: [],
     couriers: [],
     activeEvent: null,
+    history: normalizeHistory(),
     lore: createDefaultLoreState(),
     lastEvolvedAt: Date.now()
   };
@@ -365,15 +558,24 @@ function normalizeWorldState(snapshot) {
 
   return {
     ...defaults,
+    cheatRevision: Math.max(0, Number(source.cheatRevision) || 0),
+    resetAllRevision: Math.max(0, Number(source.resetAllRevision) || 0),
     elapsed: clampNumber(source.elapsed, 0, Number.MAX_SAFE_INTEGER),
+    poiIncomeTotals: normalizeIncomeTotals(source.poiIncomeTotals),
+    resourceTransferTotals: normalizeIncomeTotals(source.resourceTransferTotals),
+    resourceTransferRequests: source.resourceTransferRequests ?? {},
+    deathDrops: Array.isArray(source.deathDrops) ? source.deathDrops : [],
+    factions: normalizeFactions(source.factions),
     market: normalizeMarket(source.market, defaults.market),
     factionMembers: normalizeFactionMembers(source.factionMembers, defaults.factionMembers),
     factionGovernance: normalizeFactionGovernance(source.factionGovernance, defaults.factionGovernance),
+    houseRelations: normalizeHouseRelations(source.houseRelations),
     factionResources: normalizeFactionResources(source.factionResources, defaults.factionResources),
     pois: normalizePois(source.pois, defaults.pois),
     structures: Array.isArray(source.structures) ? source.structures.filter(isPlainObject).slice(0, 250) : [],
     couriers: Array.isArray(source.couriers) ? source.couriers.filter(isPlainObject).slice(0, 250) : [],
     activeEvent: isPlainObject(source.activeEvent) ? source.activeEvent : null,
+    history: normalizeHistory(source.history),
     lore: normalizeLoreState(source.lore, defaults.lore),
     lastEvolvedAt: clampNumber(source.lastEvolvedAt, 0, Date.now()) || Date.now()
   };
@@ -394,6 +596,7 @@ function normalizePlayerSnapshot(playerId, snapshot) {
       lifeNumber: clampNumber(player.lifeNumber, 0, Number.MAX_SAFE_INTEGER),
       gold: clampNumber(player.gold, 0, Number.MAX_SAFE_INTEGER),
       renown: clampNumber(player.renown, 0, Number.MAX_SAFE_INTEGER),
+      prowess: clampNumber(player.prowess ?? player.renown, 0, Number.MAX_SAFE_INTEGER),
       historyRenownClaimed: clampNumber(player.historyRenownClaimed, 0, Number.MAX_SAFE_INTEGER),
       historyRenownVersion: Number.isFinite(Number(player.historyRenownVersion))
         ? clampNumber(player.historyRenownVersion, 0, Number.MAX_SAFE_INTEGER)
@@ -413,19 +616,22 @@ function evolveWorldState(snapshot) {
   }
 
   const elapsedSeconds = (elapsedTicks * worldTickMs) / 1000;
+  const evolutionStartedAt = world.lastEvolvedAt;
+  const evolutionEndedAt = evolutionStartedAt + elapsedTicks * worldTickMs;
 
+  accruePoiIncome(world, elapsedSeconds);
   ensureServerDepotCamels(world);
   ensureServerPoiWorkers(world);
   const deliveredCouriers = [];
 
   for (const courier of world.couriers) {
     if (isServerDepotCamel(courier)) {
-      advanceServerDepotCamel(world, courier, elapsedSeconds);
+      advanceServerDepotCamel(world, courier, evolutionStartedAt, evolutionEndedAt);
       continue;
     }
 
     if (isServerPoiWorker(courier)) {
-      advanceServerPoiWorker(world, courier, elapsedSeconds);
+      advanceServerPoiWorker(world, courier, evolutionStartedAt, evolutionEndedAt);
       continue;
     }
 
@@ -465,6 +671,7 @@ function evolveWorldState(snapshot) {
     return courier.progress < 1;
   });
   world.elapsed += elapsedSeconds;
+  captureHistory(world);
   world.lastEvolvedAt += elapsedTicks * worldTickMs;
   return world;
 }
@@ -507,7 +714,7 @@ function createServerDepotCamel(depot) {
   return courier;
 }
 
-function advanceServerDepotCamel(world, courier, elapsedSeconds) {
+function advanceServerDepotCamel(world, courier, evolutionStartedAt, evolutionEndedAt) {
   const depot = world.structures.find((structure) => structure.id === courier.fromStructureId);
   const faction = FACTIONS.find((entry) => entry.id === courier.ownerFactionId);
 
@@ -523,7 +730,8 @@ function advanceServerDepotCamel(world, courier, elapsedSeconds) {
   courier.duration = Math.max(5, distance2D(depot.position, faction.position) / 12);
   courier.hp = numberOrDefault(courier.hp, 65);
   courier.maxHp = numberOrDefault(courier.maxHp, 65);
-  courier.progress = Math.max(0, Number(courier.progress) || 0) + elapsedSeconds / courier.duration;
+  prepareServerCourierRoute(courier, evolutionStartedAt);
+  courier.progress = Math.max(0, (evolutionEndedAt - courier.routeStartedAt) / (courier.duration * 1000));
 
   let safety = 0;
   while (courier.progress >= 1 && safety < 24) {
@@ -541,6 +749,10 @@ function advanceServerDepotCamel(world, courier, elapsedSeconds) {
       courier.position = { ...depot.position };
       courier.target = { ...faction.position };
     }
+
+    courier.routeStartedAt += courier.duration * 1000;
+    courier.routeRevision += 1;
+    updateServerCourierRouteId(courier);
   }
 }
 
@@ -649,7 +861,7 @@ function createServerPoiWorker(poi) {
   return courier;
 }
 
-function advanceServerPoiWorker(world, courier, elapsedSeconds) {
+function advanceServerPoiWorker(world, courier, evolutionStartedAt, evolutionEndedAt) {
   const poi = world.pois.find((entry) => entry.id === courier.fromPoiId);
   const faction = FACTIONS.find((entry) => entry.id === courier.ownerFactionId);
 
@@ -665,7 +877,8 @@ function advanceServerPoiWorker(world, courier, elapsedSeconds) {
   courier.duration = Math.max(6, distance2D(poi.position, faction.position) / 10);
   courier.hp = numberOrDefault(courier.hp, 55);
   courier.maxHp = numberOrDefault(courier.maxHp, 55);
-  courier.progress = Math.max(0, Number(courier.progress) || 0) + elapsedSeconds / courier.duration;
+  prepareServerCourierRoute(courier, evolutionStartedAt);
+  courier.progress = Math.max(0, (evolutionEndedAt - courier.routeStartedAt) / (courier.duration * 1000));
 
   let safety = 0;
   while (courier.progress >= 1 && safety < 24) {
@@ -683,7 +896,27 @@ function advanceServerPoiWorker(world, courier, elapsedSeconds) {
       courier.position = { ...poi.position };
       courier.target = { ...faction.position };
     }
+
+    courier.routeStartedAt += courier.duration * 1000;
+    courier.routeRevision += 1;
+    updateServerCourierRouteId(courier);
   }
+}
+
+function prepareServerCourierRoute(courier, evolutionStartedAt) {
+  const durationMs = Math.max(1, Number(courier.duration) || 1) * 1000;
+  const progress = Math.max(0, Math.min(1, Number(courier.progress) || 0));
+  const routeStartedAt = Number(courier.routeStartedAt);
+
+  courier.routeRevision = Math.max(0, Math.floor(Number(courier.routeRevision) || 0));
+  courier.routeStartedAt = Number.isFinite(routeStartedAt) && routeStartedAt <= evolutionStartedAt
+    ? routeStartedAt
+    : evolutionStartedAt - progress * durationMs;
+  updateServerCourierRouteId(courier);
+}
+
+function updateServerCourierRouteId(courier) {
+  courier.routeId = `${courier.id}:${courier.routeRevision}:${courier.direction}`;
 }
 
 function loadServerPoiWorker(courier, poi) {
@@ -732,11 +965,19 @@ function normalizeFactionResources(source, defaults) {
         {
           gold: numberOrDefault(store?.gold, defaults[faction.id].gold),
           items: Array.isArray(store?.items) ? store.items.filter(isPlainObject).slice(0, 500) : defaults[faction.id].items,
+          blacksmith: normalizeBlacksmithProgress(store?.blacksmith, defaults[faction.id].blacksmith),
           resources: normalizeResourceBag(store?.resources, defaults[faction.id].resources)
         }
       ];
     })
   );
+}
+
+function normalizeBlacksmithProgress(source, defaults = { xp: 0, level: 1 }) {
+  return {
+    xp: numberOrDefault(source?.xp, defaults.xp ?? 0),
+    level: clampNumber(source?.level, 1, 10) || defaults.level || 1
+  };
 }
 
 function normalizeResourceBag(source, defaults) {
@@ -784,13 +1025,38 @@ function normalizeFactionGovernance(source, defaults) {
   );
 }
 
+function normalizeHouseRelations(source) {
+  if (!isPlainObject(source)) {
+    return {};
+  }
+
+  const relations = {};
+  for (const [sourceHouse, targets] of Object.entries(source).slice(0, 250)) {
+    const sourceHouseId = sanitizeHouseName(sourceHouse);
+    if (!sourceHouseId || !isPlainObject(targets)) {
+      continue;
+    }
+
+    relations[sourceHouseId] = {};
+    for (const [targetHouse, status] of Object.entries(targets).slice(0, 250)) {
+      const targetHouseId = sanitizeHouseName(targetHouse);
+      if (targetHouseId && targetHouseId !== sourceHouseId && ["Ally", "Neutral", "Enemy"].includes(status)) {
+        relations[sourceHouseId][targetHouseId] = status;
+      }
+    }
+  }
+
+  return relations;
+}
+
 function normalizePois(source, defaults) {
   return defaults.map((defaultPoi) => {
     const poi = Array.isArray(source) ? source.find((entry) => entry?.id === defaultPoi.id) : null;
     const ownerFactionId = sanitizeText(poi?.ownerFactionId, 40);
     return {
       ...defaultPoi,
-      ownerFactionId: FACTIONS.some((faction) => faction.id === ownerFactionId) ? ownerFactionId : null,
+      ownerFactionId: defaultPoi.type !== "Library" && FACTIONS.some((faction) => faction.id === ownerFactionId) ? ownerFactionId : null,
+      incomeProgress: clampNumber(poi?.incomeProgress, 0, 4.999999),
       pulse: clampNumber(poi?.pulse, 0, worldTickMs / 1000),
       workerRespawnAt: clampNumber(poi?.workerRespawnAt, 0, Number.MAX_SAFE_INTEGER)
     };
@@ -847,13 +1113,12 @@ function normalizeRenownAwards(source) {
 }
 
 function createOpeningLorePrompt() {
-  return `Start a medieval tale. Set the scene using these factions by name: ${FACTIONS.map((faction) => faction.name).join(", ")}. Mention these places by name: ${POIS.map((poi) => poi.name).join(", ")}.`;
+  return `Start a medieval tale in the Grand Library, the neutral heart of an island where a great wall scroll records the deeds of living houses. Begin with four abandoned castles, empty thrones and no faction banners. Describe the snowy Frostspine, Kingswood forests, Amberfields and Sunmere coast. Use a few places naturally from this gazetteer: ${POIS.map((poi) => poi.name).join(", ")}.`;
 }
 
 function createOpeningLoreText() {
   const factionNames = formatList(FACTIONS.map((faction) => faction.name));
-  const poiNames = formatList(POIS.map((poi) => poi.name));
-  return `In the wild crownlands, ${factionNames} raised their banners beneath a restless sky. Between them lay ${poiNames}, places of quarry dust, wheat, iron, market cries, and old dungeon shadows, where every oath waited to become history.`;
+  return `At the heart of the crownlands stood the Grand Library. Beneath its twin towers, a great scroll waited upon the wall: a place for every oath, conquest and fallen ruler to outlive the hands that shaped them.\n\nBeyond its quiet court, four abandoned castles stood with empty thrones and bare flagpoles. Roads wound through the Kingswood, past the harvests of Amberfields and the warm shores of Sunmere. In the north, snow crowned the Frostspine above the mines; far from the library, raiders lit their fires among the ruins.\n\nThe chroniclers claimed no throne. They kept the history of those who did. The next words belonged to the living.`;
 }
 
 function formatList(values) {
@@ -881,41 +1146,78 @@ async function handleMultiplayerRequest(request, response, requestUrl) {
     if (request.method === "GET" && requestUrl.pathname === "/api/multiplayer/state") {
       writeJson(response, 200, {
         serverTime: Date.now(),
+        snapshotSequence: ++multiplayerSnapshotSequence,
         players: [...players.values()].map(serializePlayer)
       });
       return;
     }
 
     if (request.method === "POST" && requestUrl.pathname === "/api/multiplayer/player") {
-      const payload = sanitizePlayerPayload(await readJsonBody(request));
+      const body = await readJsonBody(request);
+      body.id = auth.playerId(request, body?.id);
+      if (!auth.session(request).authenticated) { body.houseName = ""; body.name = body.firstName || "Traveller"; }
+      const payload = sanitizePlayerPayload(body);
 
       if (!payload) {
         writeJson(response, 400, { ok: false, message: "Invalid player payload." });
         return;
       }
 
-      const player = upsertPlayer(payload);
-      writeJson(response, 200, { ok: true, player: serializePlayer(player) });
+      const result = upsertPlayer(payload);
+      writeJson(response, 200, {
+        ok: true,
+        serverTime: Date.now(),
+        accepted: result.accepted,
+        acceptedInputSequence: result.player.lastInputSequence ?? 0,
+        player: serializePlayer(result.player)
+      });
       return;
     }
 
     if (request.method === "POST" && requestUrl.pathname === "/api/multiplayer/attack") {
-      writeJson(response, 200, resolvePlayerAttack(await readJsonBody(request)));
+      const body = await readJsonBody(request);
+      body.attackerId = auth.playerId(request, body?.attackerId);
+      writeJson(response, 200, resolvePlayerAttack(body));
       return;
     }
 
     writeJson(response, 404, { ok: false, message: "Multiplayer endpoint not found." });
   } catch (error) {
-    writeJson(response, 500, {
+    writeJson(response, error.status || 500, {
       ok: false,
       message: error instanceof Error ? error.message : "Multiplayer request failed."
     });
   }
 }
 
+function queueResourceDeath(playerId, live) {
+  const location = structuredClone(live.deathLocation ?? { position: live.position, elevation: live.elevation,
+    sceneMode: live.sceneMode, interiorFactionId: live.interiorFactionId, activePoiInteriorId: live.activePoiInteriorId });
+  const carried = live.carriedInventory ? structuredClone(live.carriedInventory) : null;
+  worldRequestQueue = worldRequestQueue.then(async () => {
+    const saved = await loadPersistentState(playerId);
+    const snapshot = saved.player ?? normalizePlayerSnapshot(playerId, {});
+    if (carried) snapshot.player.inventory = carried;
+    const version = (snapshot.player.resourceDeathVersion || 0) + 1;
+    saved.world.deathDrops.push(...createDeathDrops(snapshot.player, location, version));
+    snapshot.player.dead = true;
+    snapshot.player.hp = 0;
+    snapshot.player.lootDeathReceiptCount = snapshot.player.lootReceiptCount || 0;
+    snapshot.player.lootReceipts = [];
+    clearPlayerResources(snapshot.player);
+    snapshot.player.resourceDeathVersion = (snapshot.player.resourceDeathVersion || 0) + 1;
+    snapshot.player.resourceDeathReceipts = { ...snapshot.player.resourceReceipts };
+    await savePersistentState(playerId, { world: saved.world, player: snapshot }, true, true);
+  }).catch(error => console.error("Could not persist death resource loss", error));
+}
+
 function upsertPlayer(payload) {
   const now = Date.now();
   const existing = players.get(payload.id);
+  if (existing && payload.connectionId && existing.connectionId !== payload.connectionId) existing.lastInputSequence = 0;
+  if (existing && payload.inputSequence <= (existing.lastInputSequence ?? 0)) {
+    return { player: existing, accepted: false };
+  }
   const player = existing ?? {
     id: payload.id,
     name: payload.name,
@@ -930,10 +1232,15 @@ function upsertPlayer(payload) {
     lastDamagedBy: null,
     lastDamagedByName: null,
     lastDamageSource: null,
+    lastInputSequence: 0,
     joinedAt: now
   };
 
-  if (player.dead && now >= player.respawnAt) {
+  const castleRegenSeconds = isInOwnCastle(player) && isInOwnCastle(payload)
+    && player.factionId === payload.factionId
+    ? Math.min(1, Math.max(0, (now - (player.lastSeen ?? now)) / 1000)) : 0;
+
+  if (player.dead && now >= player.respawnAt && !payload.dead) {
     player.hp = player.maxHp;
     player.dead = false;
     player.respawnAt = 0;
@@ -942,6 +1249,7 @@ function upsertPlayer(payload) {
     player.lastDamageSource = null;
   }
 
+  player.connectionId = payload.connectionId;
   player.name = payload.name;
   player.houseName = payload.houseName;
   player.firstName = payload.firstName;
@@ -962,11 +1270,24 @@ function upsertPlayer(payload) {
   player.leftHandName = payload.leftHandName;
   player.rightHandType = payload.rightHandType;
   player.rightHandName = payload.rightHandName;
+  player.combatAttacks = payload.combatAttacks;
   player.armorItems = payload.armorItems;
+  const guardElapsed = Math.min(1, (now - (player.guardUpdatedAt ?? now)) / 1000);
+  player.guardStamina = Math.min(payload.guardStamina, Math.min(100, (player.guardStamina ?? 100) + (player.guardHand ? 0 : guardElapsed * 24)));
+  const requestedGuard = payload.guardHand;
+  const shieldType = requestedGuard === 'left' ? payload.leftHandType : requestedGuard === 'right' ? payload.rightHandType : null;
+  const validGuard = isShield(shieldType) && !player.dead && now >= (player.guardBrokenUntil ?? 0) && now - player.lastAttackAt > 250;
+  if (validGuard && requestedGuard !== player.guardHand) player.guardRaisedAt = now;
+  player.guardHand = validGuard ? requestedGuard : null;
+  player.guardUpdatedAt = now;
+  player.lastInputSequence = payload.inputSequence;
+  player.carriedInventory = payload.carriedInventory;
+  player.deathLocation = payload.deathLocation;
 
   if (payload.dead && !player.dead) {
     player.hp = 0;
     player.dead = true;
+    queueResourceDeath(player.id, player);
     player.respawnAt = Math.max(player.respawnAt ?? 0, payload.respawnAt || now + respawnDelayMs);
   } else if (!player.dead && Number.isFinite(payload.hp) && payload.hp < player.hp) {
     player.hp = Math.max(0, payload.hp);
@@ -974,12 +1295,14 @@ function upsertPlayer(payload) {
 
   if (!player.dead && player.hp <= 0) {
     player.dead = true;
+    queueResourceDeath(player.id, player);
     player.respawnAt = now + respawnDelayMs;
   }
 
+  player.hp = regenerateHealth(player, castleRegenSeconds);
   player.lastSeen = now;
   players.set(player.id, player);
-  return player;
+  return { player, accepted: true };
 }
 
 function resolvePlayerAttack(body) {
@@ -1006,13 +1329,18 @@ function resolvePlayerAttack(body) {
     return { ok: false, message: `${target.name} is not in this area.` };
   }
 
-  if (now - attacker.lastSuccessfulPvpAttackAt < 180) {
+  const attackId = sanitizeText(body?.attackId, 80);
+  const batch = attacker.meleeBatch;
+  const sameSwing = Boolean(attackId && batch?.id === attackId && now - batch.startedAt < 2000);
+  if (sameSwing && (batch.targets.has(targetId) || batch.targets.size >= 5)) return { ok: false, message: 'Already struck by this swing.' };
+  const minimumInterval = [attacker.leftHandType, attacker.rightHandType].includes('Dagger') ? 90 : 180;
+  if (!sameSwing && (now - attacker.lastSuccessfulPvpAttackAt < minimumInterval || attacker.recentSwingIds?.includes(attackId) && attackId)) {
     return { ok: false, message: "Attack is recovering." };
   }
 
   const range = clampNumber(body?.range, 0.5, maxAttackRange);
-  const damage = Math.round(clampNumber(body?.damage, 1, 80));
-  const knockback = clampNumber(body?.knockback, 0, 30);
+  let damage = Math.round(clampNumber(body?.damage, 1, 80));
+  let knockback = clampNumber(body?.knockback, 0, 30);
   const direction = normalizeDirection(body?.direction);
   const source = sanitizeText(body?.source, 40);
   const sourceName = sanitizeText(body?.sourceName, 60);
@@ -1034,12 +1362,25 @@ function resolvePlayerAttack(body) {
     }
   }
 
+  const shieldType = target.guardHand === 'left' ? target.leftHandType : target.guardHand === 'right' ? target.rightHandType : null;
+  const block = resolveShieldBlock({ type: shieldType, raised: Boolean(target.guardHand) && now - target.lastSeen < 750,
+    stamina: target.guardStamina ?? 100, age: (now - (target.guardRaisedAt ?? 0)) / 1000,
+    facing: { x: Math.sin(target.rotation), z: Math.cos(target.rotation) }, position: target.position, source: origin, damage, knockback });
+  if (block.blocked) {
+    damage = block.damage; knockback = block.knockback; target.guardStamina = block.stamina; target.lastBlockedAt = now;
+    if (block.broken) { target.guardBrokenUntil = now + 1400; target.guardHand = null; }
+  }
+  attacker.guardHand = null;
+  if (attackId) {
+    if (!sameSwing) {
+      attacker.meleeBatch = { id: attackId, startedAt: now, targets: new Set() };
+      attacker.recentSwingIds = [...(attacker.recentSwingIds ?? []), attackId].slice(-32);
+    }
+    attacker.meleeBatch.targets.add(targetId);
+  }
   target.hp = Math.max(0, target.hp - damage);
   if (knockback > 0 && knockbackDirection) {
-    target.position = {
-      x: clampNumber(target.position.x + knockbackDirection.x * knockback, -300, 300),
-      z: clampNumber(target.position.z + knockbackDirection.z * knockback, -300, 300)
-    };
+    target.position = clampWorldPosition({ x: target.position.x + knockbackDirection.x * knockback, z: target.position.z + knockbackDirection.z * knockback });
   }
   target.lastDamagedAt = now;
   target.lastDamagedBy = attacker.id;
@@ -1050,6 +1391,7 @@ function resolvePlayerAttack(body) {
 
   if (target.hp <= 0) {
     target.dead = true;
+    queueResourceDeath(target.id, target);
     target.respawnAt = now + respawnDelayMs;
   }
 
@@ -1057,10 +1399,12 @@ function resolvePlayerAttack(body) {
     ok: true,
     damage,
     knockback,
+    blocked: block.blocked,
+    parried: block.parried,
     defeated: target.dead,
     attacker: serializePlayer(attacker),
     target: serializePlayer(target),
-    message: target.dead
+    message: block.blocked && damage === 0 ? `${target.name} perfectly blocked the attack.` : target.dead
       ? `${target.name} defeated${source === "outpost" && sourceName ? ` by ${sourceName}` : ""}.`
       : `${target.name} hit${source === "outpost" && sourceName ? ` by ${sourceName}` : ""} for ${damage}.`
   };
@@ -1087,6 +1431,8 @@ function sanitizePlayerPayload(body) {
 
   return {
     id,
+    connectionId: sanitizeText(body.connectionId, 80),
+    inputSequence: clampNumber(body.inputSequence, 1, Number.MAX_SAFE_INTEGER),
     name: sanitizeText(body.name, 32) || "Player",
     houseName: sanitizeHouseName(body.houseName),
     firstName: sanitizeText(body.firstName, 24),
@@ -1094,7 +1440,7 @@ function sanitizePlayerPayload(body) {
     renown: clampNumber(body.renown, 0, Number.MAX_SAFE_INTEGER),
     factionId: sanitizeText(body.factionId, 40) || null,
     position: sanitizePosition(body.position),
-    elevation: clampNumber(body.elevation, 0, 40),
+    elevation: clampNumber(body.elevation, -20, 400),
     towerStructureId: sanitizeText(body.towerStructureId, 80) || null,
     rotation: clampNumber(body.rotation, -Math.PI * 2, Math.PI * 2),
     headRotation: clampNumber(body.headRotation, -Math.PI * 2, Math.PI * 2),
@@ -1107,6 +1453,15 @@ function sanitizePlayerPayload(body) {
     leftHandName: sanitizeText(body.leftHandName, 60) || null,
     rightHandType: sanitizeText(body.rightHandType, 40) || null,
     rightHandName: sanitizeText(body.rightHandName, 60) || null,
+    combatAttacks: Array.isArray(body.combatAttacks) ? body.combatAttacks.filter(a => a && ['left','right'].includes(a.hand)).slice(0,2).map(a => ({
+      hand: a.hand, id: sanitizeText(a.id,80), itemType: sanitizeText(a.itemType,40), comboStep: clampNumber(a.comboStep,0,2),
+      charging: a.itemType === "Flail" && a.charging === true, chargePower: clampNumber(a.chargePower ?? 0,0,1), flailReleaseAngle: clampNumber(a.flailReleaseAngle ?? 0,-Math.PI*2,Math.PI*2),
+      elapsed: clampNumber(a.elapsed,0,100), duration: clampNumber(a.duration,.1,5), direction: normalizeDirection(a.direction)
+    })) : [],
+    guardHand: ["left", "right"].includes(body.guardHand) ? body.guardHand : null,
+    guardStamina: body.guardStamina == null ? 100 : clampNumber(body.guardStamina, 0, 100),
+    carriedInventory: Array.isArray(body.carriedInventory) ? body.carriedInventory.filter(item => item && typeof item.id === "string").slice(0, 250) : null,
+    deathLocation: body.dead && body.deathLocation && Number.isFinite(body.deathLocation.position?.x) && Number.isFinite(body.deathLocation.position?.z) ? body.deathLocation : null,
     armorItems: sanitizeArmorItems(body.armorItems),
     hp: Number.isFinite(Number(body.hp)) ? clampNumber(body.hp, 0, playerMaxHealth) : null,
     maxHp: playerMaxHealth,
@@ -1116,10 +1471,7 @@ function sanitizePlayerPayload(body) {
 }
 
 function sanitizePosition(position) {
-  return {
-    x: clampNumber(position?.x, -300, 300),
-    z: clampNumber(position?.z, -300, 300)
-  };
+  return clampWorldPosition(position, 24);
 }
 
 function sanitizeArmorItems(items) {
@@ -1180,6 +1532,7 @@ function normalizeDirection(direction) {
 function serializePlayer(player) {
   return {
     id: player.id,
+    inputSequence: player.lastInputSequence ?? 0,
     name: player.name,
     houseName: player.houseName ?? "",
     firstName: player.firstName ?? "",
@@ -1201,6 +1554,11 @@ function serializePlayer(player) {
     rightHandType: player.rightHandType,
     rightHandName: player.rightHandName,
     armorItems: player.armorItems ?? [],
+    combatAttacks: player.combatAttacks ?? [],
+    guardHand: player.guardHand ?? null,
+    guardStamina: player.guardStamina ?? 100,
+    lastBlockedAt: player.lastBlockedAt ?? 0,
+    guardBrokenUntil: player.guardBrokenUntil ?? 0,
     hp: player.hp,
     maxHp: player.maxHp,
     dead: player.dead,
@@ -1346,15 +1704,58 @@ server.once("error", (error) => {
 });
 
 server.listen(port, host, async () => {
-  console.log(`King of Kingdoms 3D running at http://127.0.0.1:${port}/`);
+  console.log(`Fate of Kingdoms 3D running at http://127.0.0.1:${port}/`);
 
   for (const address of getLanAddresses()) {
-    console.log(`King of Kingdoms 3D also available at http://${address}:${port}/`);
+    console.log(`Fate of Kingdoms 3D also available at http://${address}:${port}/`);
   }
 
   const publicAddress = await getPublicAddress();
 
   if (publicAddress) {
-    console.log(`King of Kingdoms 3D also available at http://${publicAddress}:${port}/`);
+    console.log(`Fate of Kingdoms 3D also available at http://${publicAddress}:${port}/`);
   }
 });
+
+async function handleCheatRequest(request, response, requestUrl) {
+  const body = request.method === 'POST' ? await readJsonBody(request) : {};
+  const playerId = auth.playerId(request, body.playerId);
+  const sessionKey = request.headers.cookie;
+  if (requestUrl.pathname === '/api/world/cheats/unlock' && request.method === 'POST') {
+    if (body.password !== 'imacheater') { writeJson(response, 403, { ok: false, message: 'Incorrect password.' }); return; }
+    cheatSessions.add(sessionKey);
+    writeJson(response, 200, { ok: true }); return;
+  }
+  if (!cheatSessions.has(sessionKey)) { writeJson(response, 403, { ok: false, message: 'Unlock cheats first.' }); return; }
+  const saved = await loadPersistentState(playerId);
+  const pool = await getDbPool();
+  const records = structuredClone(pool ? (await pool.query('SELECT state FROM kok_player_state')).rows.map(r => r.state) : [...memoryPersistence.players.values()]);
+  const catalog = cheatCatalog(saved.world, records);
+  if (request.method === 'GET') { writeJson(response, 200, { ok: true, catalog }); return; }
+  const command = parseCheat(body.command, catalog);
+  if (command.verb === 'spawn' && command.kind === 'mob') {
+    writeJson(response, 200, { ok: true, mob: command.target, message: 'Mob spawned.' }); return;
+  }
+  const world = structuredClone(saved.world);
+  executeCheat(command, world, records, playerId);
+  world.cheatRevision = (world.cheatRevision || 0) + 1;
+  if (pool) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('UPDATE kok_world_state SET state=$1::jsonb, updated_at=now() WHERE id=$2', [JSON.stringify(world), 'primary']);
+      for (const record of records) await client.query('UPDATE kok_player_state SET state=$1::jsonb, updated_at=now() WHERE player_id=$2', [JSON.stringify(record), record.player.id]);
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  } else {
+    memoryPersistence.world = world;
+    memoryPersistence.players = new Map(records.map(p => [p.player.id, p]));
+    flushLocalSave();
+  }
+  if (command.verb === 'reset' && command.kind === 'all') players.clear();
+  for (const record of records) {
+    const live = players.get(record.player.id);
+    if (live) { live.factionId = record.selectedFactionId; live.name = record.player.name; live.hp = record.player.hp ?? live.hp; live.dead = Boolean(record.player.dead); }
+  }
+  writeJson(response, 200, { ...await loadPersistentState(playerId), message: 'Command completed.', snapshotSequence: ++worldSnapshotSequence });
+}

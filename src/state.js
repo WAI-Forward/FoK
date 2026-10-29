@@ -1,3 +1,8 @@
+import { archiveEvent, normalizeHistory, historyRenown } from './history.js';
+import { stampEquipmentMaterial } from "./equipment-materials.js";
+import { accruePoiIncome } from "./poi-income.js";
+import { getFaction, normalizeFlag, cleanText } from "./factions.js";
+import { clampWorldPosition } from "./world-layout.js";
 import {
   ARMOR_STATS,
   BUILDING_LOOKUP,
@@ -14,17 +19,19 @@ import { canPay, createMarket, formatCost, payCost } from "./economy.js";
 import { createId } from "./ids.js";
 
 const EVENT_LOCATIONS = [
-  { x: -8, z: -18 },
-  { x: 62, z: 38 },
-  { x: -68, z: 58 },
-  { x: 74, z: -42 },
-  { x: -36, z: -86 }
+  { x: -700, z: -700 },
+  { x: 650, z: -1200 },
+  { x: -1300, z: 650 },
+  { x: 1100, z: 1400 },
+  { x: 1400, z: 100 },
+  { x: 350, z: 650 },
+  { x: -500, z: 1250 }
 ];
 const HISTORY_VOLUME_RECORD_THRESHOLD = 6;
 const HISTORY_PRECEDING_VOLUME_COUNT = 3;
 const HISTORY_RENOWN_PER_MENTION = 8;
 const LORE_SCHEMA_VERSION = 2;
-const LORE_RECORDED_EVENT_TYPES = new Set(["player_killed", "poi_claimed", "ruler_claimed", "ruler_killed"]);
+const LORE_RECORDED_EVENT_TYPES = new Set(["player_killed", "poi_claimed", "ruler_claimed", "ruler_killed", "faction_founded"]);
 const FIRST_NAMES = [
   "Alden",
   "Bran",
@@ -80,6 +87,10 @@ export function createGameState() {
       {
         gold: 500,
         items: [],
+        blacksmith: {
+          xp: 0,
+          level: 1
+        },
         resources: {
           wood: 100,
           stone: 80,
@@ -91,13 +102,14 @@ export function createGameState() {
   );
 
   return {
+    factions: {},
     elapsed: 0,
     selectedFactionId: null,
     market: createMarket(),
     player: {
       id: "local-player",
       name: "You",
-      gold: 260,
+      gold: 0,
       renown: 0,
       position: { x: 0, z: 0 },
       velocity: { x: 0, z: 0 },
@@ -116,11 +128,7 @@ export function createGameState() {
       },
       hotbar: [null, null, null, null, null],
       resources: {
-        ...resources,
-        wood: 70,
-        stone: 45,
-        wheat: 30,
-        iron: 12
+        ...resources
       },
       inventory: [],
       houseName: "",
@@ -131,11 +139,13 @@ export function createGameState() {
     },
     factionMembers,
     factionGovernance,
+    houseRelations: {},
     factionResources,
     pois: POIS.map((poi) => ({ ...poi, ownerFactionId: null, pulse: 0 })),
     structures: [],
     couriers: [],
     activeEvent: null,
+    history: normalizeHistory(),
     lore: createDefaultLoreState(),
     log: []
   };
@@ -156,11 +166,11 @@ export function createDefaultLoreState() {
   };
 }
 
-function createInventoryItem(definition) {
+export function createInventoryItem(definition) {
   const weaponStats = WEAPON_STATS[definition.type];
   const armorStats = ARMOR_STATS[definition.type];
 
-  return {
+  return stampEquipmentMaterial({
     id: createId("item"),
     name: definition.name,
     type: definition.type,
@@ -170,23 +180,20 @@ function createInventoryItem(definition) {
     armor: armorStats ? { ...armorStats, material: "Leather" } : null,
     durability: definition.maxDurability,
     maxDurability: definition.maxDurability
-  };
+  });
 }
 
 export function joinFaction(state, factionId, options = {}) {
-  const faction = FACTION_LOOKUP[factionId];
+  if (!canUseFactionThrone(state, factionId)) return { ok: false, message: "As king, you can only use your own faction’s throne." };
+  const faction = state.factions?.[factionId] ? getFaction(state, factionId) : null;
   const houseName = sanitizeHouseName(options.houseName ?? state.player.houseName);
 
   if (!faction) {
     return { ok: false, message: "Choose a valid faction." };
   }
 
-  if (!houseName) {
-    return { ok: false, message: "Choose a house name." };
-  }
-
   setPlayerHouseName(state, houseName);
-  if (!state.player.firstName) {
+  if (!state.player.lifeNumber) {
     beginNewPlayerLife(state);
   } else {
     updatePlayerLineageName(state);
@@ -209,7 +216,7 @@ export function joinFaction(state, factionId, options = {}) {
 
   state.player.position.x = faction.position.x;
   state.player.position.z = faction.position.z + faction.safeRadius * 0.55;
-  state.player.renown += 5;
+  state.player.prowess = (state.player.prowess || 0) + (5);
   addLog(state, `You joined ${faction.name}.`);
   return { ok: true, message: `You joined ${faction.name}.` };
 }
@@ -221,6 +228,66 @@ export function getFactionMembers(state, factionId) {
     houseName: member.playerId === state.player.id ? state.player.houseName : member.houseName,
     renown: member.playerId === state.player.id ? state.player.renown : member.renown
   }));
+}
+
+export function getKnownHouses(state) {
+  const houses = new Map();
+
+  for (const faction of FACTIONS) {
+    for (const member of state.factionMembers[faction.id] ?? []) {
+      const houseId = sanitizeHouseName(member.houseName);
+
+      if (!houseId) {
+        continue;
+      }
+
+      const record = houses.get(houseId) ?? {
+        id: houseId,
+        name: formatHouseName(houseId),
+        factionIds: new Set(),
+        memberCount: 0
+      };
+      record.factionIds.add(faction.id);
+      record.memberCount += 1;
+      houses.set(houseId, record);
+    }
+  }
+
+  const playerHouseId = sanitizeHouseName(state.player.houseName);
+  if (playerHouseId && !houses.has(playerHouseId)) {
+    houses.set(playerHouseId, {
+      id: playerHouseId,
+      name: formatHouseName(playerHouseId),
+      factionIds: new Set(state.selectedFactionId ? [state.selectedFactionId] : []),
+      memberCount: 1
+    });
+  }
+
+  return [...houses.values()]
+    .map((house) => ({ ...house, factionIds: [...house.factionIds] }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function getHouseMembers(state, houseName) {
+  const houseId = sanitizeHouseName(houseName);
+  const members = new Map();
+
+  for (const faction of FACTIONS) {
+    for (const member of getFactionMembers(state, faction.id)) {
+      if (sanitizeHouseName(member.houseName) !== houseId) {
+        continue;
+      }
+
+      members.set(member.playerId, {
+        ...member,
+        factionId: faction.id
+      });
+    }
+  }
+
+  return [...members.values()].sort(
+    (a, b) => Number(b.renown || 0) - Number(a.renown || 0) || String(a.name).localeCompare(String(b.name))
+  );
 }
 
 export function isFactionRuler(state, factionId, playerId = state.player.id) {
@@ -237,7 +304,15 @@ export function getFactionRulerName(state, factionId) {
   return getFactionMembers(state, factionId).find((member) => member.playerId === rulerPlayerId)?.name ?? "Unknown Ruler";
 }
 
+// Rulership is authoritative even if a stale client lost its selected faction.
+export function canUseFactionThrone(state, factionId) {
+  if (!FACTION_LOOKUP[factionId]) return false;
+  const ruled = Object.entries(state.factionGovernance).filter(([, governance]) => governance.rulerPlayerId === state.player.id);
+  return ruled.length === 0 || ruled.some(([id]) => id === factionId);
+}
+
 export function claimFactionRulerSeat(state, factionId) {
+  if (!canUseFactionThrone(state, factionId)) return { ok: false, message: "As king, you can only use your own faction’s throne." };
   if (state.selectedFactionId !== factionId) {
     return { ok: false, message: "You can only rule the faction you belong to." };
   }
@@ -257,21 +332,21 @@ export function claimFactionRulerSeat(state, factionId) {
   }
 
   governance.rulerPlayerId = state.player.id;
-  state.player.renown += 25;
-  addLog(state, `You became ruler of ${FACTION_LOOKUP[factionId].name}.`);
+  state.player.prowess = (state.player.prowess || 0) + (25);
+  addLog(state, `You became ruler of ${getFaction(state, factionId).name}.`);
   syncFactionMemberRecord(state);
   recordLoreEvent(state, {
     type: "ruler_claimed",
     factionId,
     actor: createPlayerLoreActor(state),
-    summary: `${FACTION_LOOKUP[factionId].name}'s ${state.player.name} became ruler.`,
+    summary: `${getFaction(state, factionId).name}'s ${state.player.name} became ruler.`,
     details: {
-      factionName: FACTION_LOOKUP[factionId].name,
+      factionName: getFaction(state, factionId).name,
       title: "Ruler"
     },
     weight: 4
   });
-  return { ok: true, becameRuler: true, message: `You are now ruler of ${FACTION_LOOKUP[factionId].name}.` };
+  return { ok: true, becameRuler: true, message: `You are now ruler of ${getFaction(state, factionId).name}.` };
 }
 
 export function setFactionRelation(state, sourceFactionId, targetFactionId, status) {
@@ -283,15 +358,49 @@ export function setFactionRelation(state, sourceFactionId, targetFactionId, stat
     return { ok: false, message: "Choose another faction." };
   }
 
-  if (status !== "Enemy" && status !== "Neutral") {
-    return { ok: false, message: "Use an allegiance request to create an alliance." };
+  if (!isValidRelationStatus(status)) {
+    return { ok: false, message: "Choose Ally, Neutral, or Enemy." };
   }
 
   state.factionGovernance[sourceFactionId].relationStatus[targetFactionId] = status;
   state.factionGovernance[targetFactionId].relationStatus[sourceFactionId] = status;
   clearAllianceRequestBetween(state, sourceFactionId, targetFactionId);
-  addLog(state, `${FACTION_LOOKUP[sourceFactionId].name} set ${FACTION_LOOKUP[targetFactionId].name} to ${status}.`);
-  return { ok: true, message: `${FACTION_LOOKUP[targetFactionId].name} is now ${status}.` };
+  addLog(state, `${getFaction(state, sourceFactionId).name} set ${getFaction(state, targetFactionId).name} to ${status}.`);
+  return { ok: true, message: `${getFaction(state, targetFactionId).name} is now ${status}.` };
+}
+
+export function setHouseRelation(state, sourceHouseName, targetHouseName, status) {
+  const sourceHouseId = sanitizeHouseName(sourceHouseName);
+  const targetHouseId = sanitizeHouseName(targetHouseName);
+  const playerHouseId = sanitizeHouseName(state.player.houseName);
+
+  if (!sourceHouseId || sourceHouseId !== playerHouseId) {
+    return { ok: false, message: "You can only manage your own house's relations." };
+  }
+
+  if (!targetHouseId || sourceHouseId === targetHouseId) {
+    return { ok: false, message: "Choose another house." };
+  }
+
+  if (!getKnownHouses(state).some((house) => house.id === targetHouseId)) {
+    return { ok: false, message: "That house is not known in this realm." };
+  }
+
+  if (!isValidRelationStatus(status)) {
+    return { ok: false, message: "Choose Ally, Neutral, or Enemy." };
+  }
+
+  state.houseRelations ??= {};
+  state.houseRelations[sourceHouseId] ??= {};
+  state.houseRelations[targetHouseId] ??= {};
+  state.houseRelations[sourceHouseId][targetHouseId] = status;
+  state.houseRelations[targetHouseId][sourceHouseId] = status;
+  addLog(state, `House ${formatHouseName(sourceHouseId)} set House ${formatHouseName(targetHouseId)} to ${status}.`);
+  return { ok: true, message: `House ${formatHouseName(targetHouseId)} is now ${status}.` };
+}
+
+function isValidRelationStatus(status) {
+  return status === "Ally" || status === "Neutral" || status === "Enemy";
 }
 
 export function requestFactionAllegiance(state, sourceFactionId, targetFactionId) {
@@ -313,7 +422,7 @@ export function requestFactionAllegiance(state, sourceFactionId, targetFactionId
     targetGovernance.allianceRequests.push(sourceFactionId);
   }
 
-  addLog(state, `${FACTION_LOOKUP[sourceFactionId].name} requested allegiance with ${FACTION_LOOKUP[targetFactionId].name}.`);
+  addLog(state, `${getFaction(state, sourceFactionId).name} requested allegiance with ${getFaction(state, targetFactionId).name}.`);
   return { ok: true, message: "Allegiance requested." };
 }
 
@@ -331,7 +440,7 @@ export function acceptFactionAllegiance(state, sourceFactionId, requesterFaction
   governance.relationStatus[requesterFactionId] = "Ally";
   state.factionGovernance[requesterFactionId].relationStatus[sourceFactionId] = "Ally";
   governance.allianceRequests = governance.allianceRequests.filter((id) => id !== requesterFactionId);
-  addLog(state, `${FACTION_LOOKUP[sourceFactionId].name} allied with ${FACTION_LOOKUP[requesterFactionId].name}.`);
+  addLog(state, `${getFaction(state, sourceFactionId).name} allied with ${getFaction(state, requesterFactionId).name}.`);
   return { ok: true, message: "Allegiance accepted." };
 }
 
@@ -399,24 +508,27 @@ export function claimPoi(state, poiId) {
     return { ok: false, message: "That point of interest is no longer available." };
   }
 
+  if (poi.type === "Library") return { ok: false, message: "The Grand Library belongs to every chronicler. Its history is not yet claimable." };
+
   if (poi.ownerFactionId === state.selectedFactionId) {
     return { ok: false, message: `${poi.name} already flies your banner.` };
   }
 
   state.couriers = state.couriers.filter((courier) => !isPoiWorker(courier) || courier.fromPoiId !== poi.id);
   poi.ownerFactionId = state.selectedFactionId;
+  poi.incomeProgress = 0;
   poi.pulse = 1;
   poi.workerRespawnAt = 0;
-  state.player.renown += 18;
+  state.player.prowess = (state.player.prowess || 0) + (18);
   damageEquippedItem(state, 2);
-  addLog(state, `${poi.name} was claimed for ${FACTION_LOOKUP[state.selectedFactionId].name}.`);
+  addLog(state, `${poi.name} was claimed for ${getFaction(state, state.selectedFactionId).name}.`);
   recordLoreEvent(state, {
     type: "poi_claimed",
     factionId: state.selectedFactionId,
     actor: createPlayerLoreActor(state),
-    summary: `${FACTION_LOOKUP[state.selectedFactionId].name}'s ${state.player.name} claimed ${poi.name}.`,
+    summary: `${getFaction(state, state.selectedFactionId).name}'s ${state.player.name} claimed ${poi.name}.`,
     details: {
-      factionName: FACTION_LOOKUP[state.selectedFactionId].name,
+      factionName: getFaction(state, state.selectedFactionId).name,
       poiName: poi.name,
       poiType: poi.type
     },
@@ -427,6 +539,7 @@ export function claimPoi(state, poiId) {
 }
 
 export function tickFactionIncome(state, deltaSeconds, options = {}) {
+  if (options.factionIncome !== false) accruePoiIncome(state, deltaSeconds);
   const awardPlayerDividend = options.playerDividend !== false;
 
   for (const poi of state.pois) {
@@ -468,6 +581,10 @@ export function buildStructure(state, type, options = {}) {
 
   const buildPosition = normalizeBuildPosition(options.position, state.player.position);
 
+  if (Math.hypot(buildPosition.x, buildPosition.z) < 130) {
+    return { ok: false, message: "The Grand Library grounds must remain open to every traveller." };
+  }
+
   if (distance2D(buildPosition, hub) < 30) {
     return { ok: false, message: "Build beyond the inner hub perimeter." };
   }
@@ -495,7 +612,7 @@ export function buildStructure(state, type, options = {}) {
     state.couriers.push(createDepotCamel(state, structure));
   }
 
-  state.player.renown += definition.renown;
+  state.player.prowess = (state.player.prowess || 0) + (definition.renown);
   addLog(state, `${definition.name} raised in the wildlands.`);
 
   return { ok: true, structure };
@@ -511,10 +628,7 @@ function normalizeBuildPosition(position, fallback) {
     };
   }
 
-  return {
-    x: Math.max(-248, Math.min(248, Number(position.x))),
-    z: Math.max(-248, Math.min(248, Number(position.z)))
-  };
+  return clampWorldPosition(position, 60);
 }
 
 function normalizeRotation(value) {
@@ -551,7 +665,7 @@ export function depositAtNearestDepot(state) {
     return { ok: false, message: "Your satchel is empty." };
   }
 
-  state.player.renown += 6;
+  state.player.prowess = (state.player.prowess || 0) + (6);
   addLog(state, `Stored ${total} resources at the depot.`);
 
   ensureDepotCouriers(state);
@@ -577,7 +691,7 @@ export function depositToFaction(state, resourceId, quantity = 1) {
 
     state.player.gold -= amount;
     factionStore.gold = (factionStore.gold ?? 0) + amount;
-    addLog(state, `Deposited ${amount} gold into ${FACTION_LOOKUP[state.selectedFactionId].name}.`);
+    addLog(state, `Deposited ${amount} gold into ${getFaction(state, state.selectedFactionId).name}.`);
     return { ok: true, message: `Deposited ${amount} gold.` };
   }
 
@@ -589,7 +703,7 @@ export function depositToFaction(state, resourceId, quantity = 1) {
 
   state.player.resources[resourceId] -= amount;
   factionStore.resources[resourceId] = (factionStore.resources[resourceId] ?? 0) + amount;
-  addLog(state, `Deposited ${amount} ${resource.name} into ${FACTION_LOOKUP[state.selectedFactionId].name}.`);
+  addLog(state, `Deposited ${amount} ${resource.name} into ${getFaction(state, state.selectedFactionId).name}.`);
 
   return { ok: true, message: `Deposited ${amount} ${resource.name}.` };
 }
@@ -641,8 +755,8 @@ export function tickCouriers(state, deltaSeconds) {
       }
     }
 
-    state.player.renown += 10;
-    addLog(state, `Courier reached the hub for ${FACTION_LOOKUP[courier.ownerFactionId].name}.`);
+    state.player.prowess = (state.player.prowess || 0) + (10);
+    addLog(state, `Courier reached the hub for ${getFaction(state, courier.ownerFactionId).name}.`);
   }
 
   state.couriers = state.couriers.filter((courier) => {
@@ -775,7 +889,7 @@ function deliverCourierPayload(state, courier) {
   courier.items = [];
 
   if (total > 0) {
-    addLog(state, `Depot camel delivered ${total} resources to ${FACTION_LOOKUP[courier.ownerFactionId].name}.`);
+    addLog(state, `Depot camel delivered ${total} resources to ${getFaction(state, courier.ownerFactionId).name}.`);
   }
 }
 
@@ -920,7 +1034,7 @@ export function spawnDynamicEvent(state) {
     },
     reward,
     item: createLootItem(template),
-    timer: 55,
+    timer: 210,
     danger: template.danger
   };
 
@@ -965,7 +1079,7 @@ export function resolveDynamicEvent(state) {
   }
 
   state.player.inventory.push(event.item);
-  state.player.renown += 20 + event.danger * 8;
+  state.player.prowess = (state.player.prowess || 0) + (20 + event.danger * 8);
   damageEquippedItem(state, 5 + event.danger);
   addLog(state, `${event.item.name} recovered from ${event.name}.`);
   state.activeEvent = null;
@@ -1023,6 +1137,7 @@ export function repairGearAtHub(state) {
 
 export function equipItem(state, itemId, hand) {
   const item = state.player.inventory.find((entry) => entry.id === itemId);
+  if (item?.category === "Treasure") return { ok: false, message: "Treasure belongs in your pack and cannot be equipped." };
   const slot = hand === "left" ? "leftHandItemId" : "rightHandItemId";
   const otherSlot = hand === "left" ? "rightHandItemId" : "leftHandItemId";
 
@@ -1083,6 +1198,34 @@ export function getSelectedGearItem(state) {
   );
 }
 
+export function damageInventoryItem(state, item, amount) {
+  if (!item || !state.player.inventory.some((entry) => entry.id === item.id)) {
+    return { broken: false, item: null };
+  }
+
+  item.durability = Math.max(0, item.durability - Math.max(0, Number(amount) || 0));
+
+  if (item.durability > 0) {
+    return { broken: false, item };
+  }
+
+  state.player.inventory = state.player.inventory.filter((entry) => entry.id !== item.id);
+
+  for (const key of Object.keys(state.player.equipment)) {
+    if (key.endsWith("ItemId") && state.player.equipment[key] === item.id) {
+      state.player.equipment[key] = null;
+    }
+  }
+
+  state.player.hotbar = state.player.hotbar.map((itemId) => (itemId === item.id ? null : itemId));
+
+  if (state.player.selectedGearItemId === item.id) {
+    state.player.selectedGearItemId = state.player.inventory[0]?.id ?? null;
+  }
+
+  return { broken: true, item };
+}
+
 export function isWeaponItem(item) {
   return Boolean(item?.weapon);
 }
@@ -1091,13 +1234,16 @@ export function isArmorItem(item) {
   return Boolean(item?.armor);
 }
 
-export function performWeaponAttack(state, hand) {
+export function performWeaponAttack(state, hand, options = {}) {
   const item = getEquippedItem(state, hand);
   const attackKey = hand === "left" ? "lastLeftAttackAt" : "lastRightAttackAt";
+  const cooldownScale = Math.max(0.1, Number(options.cooldownScale) || 1);
+  const explicitCooldown = Number.isFinite(options.cooldownSeconds)
+    ? Math.max(0, options.cooldownSeconds) : null;
 
   if (!item) {
     const emptyHandStats = WEAPON_STATS["Empty Hand"];
-    const cooldown = 1 / emptyHandStats.frequency;
+    const cooldown = explicitCooldown ?? (1 / emptyHandStats.frequency) * cooldownScale;
     const readyAt = state.player.equipment[attackKey] + cooldown;
 
     if (state.elapsed < readyAt) {
@@ -1135,7 +1281,7 @@ export function performWeaponAttack(state, hand) {
     return { ok: false, message: `${item.name} is broken.` };
   }
 
-  const cooldown = 1 / item.weapon.frequency;
+  const cooldown = explicitCooldown ?? (1 / item.weapon.frequency) * cooldownScale;
   const readyAt = state.player.equipment[attackKey] + cooldown;
 
   if (state.elapsed < readyAt) {
@@ -1147,13 +1293,14 @@ export function performWeaponAttack(state, hand) {
   }
 
   state.player.equipment[attackKey] = state.elapsed;
-  item.durability = Math.max(0, item.durability - 1);
+
 
   return {
     ok: true,
     hand,
     item,
     stats: item.weapon,
+    broken: false,
     message: `${item.name} attack: ${item.weapon.damage} damage, ${item.weapon.penetration} penetration, ${item.weapon.knockback ?? 0} knockback.`
   };
 }
@@ -1188,7 +1335,7 @@ export function damageEquippedItem(state, amount) {
     return;
   }
 
-  item.durability = Math.max(0, item.durability - amount);
+  damageInventoryItem(state, item, amount);
 }
 
 export function sanitizeHouseName(value) {
@@ -1205,12 +1352,12 @@ export function setPlayerHouseName(state, value) {
   return state.player.houseName;
 }
 
-export function beginNewPlayerLife(state) {
-  if (!state.player.houseName) {
-    return state.player.name;
-  }
+export function randomPlayerFirstName(previousName) {
+  return randomItem(FIRST_NAMES.filter(name => name !== previousName));
+}
 
-  state.player.firstName = randomItem(FIRST_NAMES);
+export function beginNewPlayerLife(state, firstName) {
+  state.player.firstName = formatHouseName(firstName) || randomPlayerFirstName(state.player.firstName);
   state.player.lifeNumber = Math.max(0, Math.floor(Number(state.player.lifeNumber) || 0)) + 1;
   updatePlayerLineageName(state);
   syncFactionMemberRecord(state);
@@ -1218,13 +1365,9 @@ export function beginNewPlayerLife(state) {
 }
 
 export function updatePlayerLineageName(state) {
-  if (!state.player.houseName) {
-    return state.player.name;
-  }
-
   const firstName = state.player.firstName || randomItem(FIRST_NAMES);
   state.player.firstName = firstName;
-  state.player.name = `${firstName} ${formatHouseName(state.player.houseName)}`;
+  state.player.name = [firstName, formatHouseName(state.player.houseName)].filter(Boolean).join(" ");
   return state.player.name;
 }
 
@@ -1254,14 +1397,14 @@ export function recordPlayerKillLore(state, defeatedPlayer, options = {}) {
     return null;
   }
 
-  const defeatedFaction = defeatedPlayer.factionId ? FACTION_LOOKUP[defeatedPlayer.factionId] : null;
+  const defeatedFaction = defeatedPlayer.factionId ? getFaction(state, defeatedPlayer.factionId) : null;
   const wasRuler = defeatedPlayer.factionId
     ? state.factionGovernance[defeatedPlayer.factionId]?.rulerPlayerId === defeatedPlayer.id
     : false;
   const weaponName = options.weaponName ?? "arms";
   const summary = wasRuler
-    ? `${FACTION_LOOKUP[state.selectedFactionId].name}'s ${state.player.name} killed ${defeatedFaction?.name ?? "a rival faction"}'s ruler ${defeatedPlayer.name} using ${weaponName}.`
-    : `${FACTION_LOOKUP[state.selectedFactionId].name}'s ${state.player.name} defeated ${defeatedPlayer.name} using ${weaponName}.`;
+    ? `${(getFaction(state, state.selectedFactionId)?.name ?? "Unsworn")}'s ${state.player.name} killed ${defeatedFaction?.name ?? "a rival faction"}'s ruler ${defeatedPlayer.name} using ${weaponName}.`
+    : `${(getFaction(state, state.selectedFactionId)?.name ?? "Unsworn")}'s ${state.player.name} defeated ${defeatedPlayer.name} using ${weaponName}.`;
 
   return recordLoreEvent(state, {
     type: wasRuler ? "ruler_killed" : "player_killed",
@@ -1270,7 +1413,7 @@ export function recordPlayerKillLore(state, defeatedPlayer, options = {}) {
     subject: createExternalPlayerLoreActor(defeatedPlayer),
     summary,
     details: {
-      factionName: FACTION_LOOKUP[state.selectedFactionId].name,
+      factionName: (getFaction(state, state.selectedFactionId)?.name ?? "Unsworn"),
       defeatedFactionName: defeatedFaction?.name ?? "Unknown faction",
       weaponName,
       wasRuler
@@ -1306,13 +1449,14 @@ export function recordLoreEvent(state, event) {
     weight: Math.max(1, Math.min(5, Math.floor(Number(event.weight) || 1)))
   };
 
+  archiveEvent(state, transaction);
   state.lore.transactions.push(transaction);
   state.lore.transactions = state.lore.transactions.slice(-120);
   if (state.lore.pendingStartedAt === null) {
     state.lore.pendingStartedAt = state.elapsed;
   }
 
-  return maybeWriteHistoryVolume(state);
+  return type === "faction_founded" ? writeHistoryVolume(state) : maybeWriteHistoryVolume(state);
 }
 
 export function tickLoreSystem(state) {
@@ -1336,24 +1480,11 @@ export function getLoreProgress(state) {
 export function claimLoreRenownAwards(state) {
   ensureLoreState(state);
   const playerId = state.player.id;
-  const totalAward = Math.max(0, Math.floor(Number(state.lore.renownAwardsByPlayerId?.[playerId]) || 0));
-  if (state.player.historyRenownVersion !== LORE_SCHEMA_VERSION) {
-    state.player.historyRenownClaimed = 0;
-    state.player.historyRenownVersion = LORE_SCHEMA_VERSION;
-  }
-
-  const alreadyClaimed = Math.max(0, Math.floor(Number(state.player.historyRenownClaimed) || 0));
-  const gain = Math.max(0, totalAward - alreadyClaimed);
-
-  if (!gain) {
-    return 0;
-  }
-
-  state.player.renown += gain;
-  state.player.historyRenownClaimed = totalAward;
-  state.player.historyRenownVersion = LORE_SCHEMA_VERSION;
+  const total = historyRenown(state.history, playerId);
+  const gain = Math.max(0, total - (state.player.renown || 0));
+  state.player.renown = total;
+  state.player.historyRenownClaimed = total;
   syncFactionMemberRecord(state);
-  addLog(state, `The chronicles named you. Gained ${gain} renown.`);
   return gain;
 }
 
@@ -1362,6 +1493,7 @@ function createPlayerLoreActor(state) {
     playerId: state.player.id,
     name: state.player.name,
     houseName: state.player.houseName,
+    lifeNumber: state.player.lifeNumber,
     factionId: state.selectedFactionId
   };
 }
@@ -1450,6 +1582,7 @@ function writeHistoryVolume(state) {
     title: createHistoryVolumeTitle(volumeNumber, transactions),
     createdAt: Math.max(0, Number(state.elapsed) || 0),
     previousVolumeIds: previousVolumes.map((volume) => volume.id),
+    foundings: transactions.filter(event => event.type === "faction_founded").map(event => event.details),
     transactionIds: transactions.map((transaction) => transaction.id),
     mentionCounts,
     renownAwards,
@@ -1510,7 +1643,7 @@ function createHistoryPrompt(transactions, storySoFar) {
 }
 
 function formatEventsForHistoryPrompt(transactions) {
-  return transactions.map((event) => `- ${event.summary}`).join("\n");
+  return transactions.map((event) => `- ${event.summary}${event.details?.mission ? ` Mission: ${event.details.mission}` : ""}`).join("\n");
 }
 
 function appendStorySection(storySoFar, nextSection) {
@@ -1518,13 +1651,12 @@ function appendStorySection(storySoFar, nextSection) {
 }
 
 function createOpeningLorePrompt() {
-  return `Start a medieval tale. Set the scene using these factions by name: ${FACTIONS.map((faction) => faction.name).join(", ")}. Mention these places by name: ${POIS.map((poi) => poi.name).join(", ")}.`;
+  return `Start a medieval tale in the Grand Library, the neutral heart of an island where a great wall scroll records the deeds of living houses. Begin with four abandoned castles, empty thrones and no faction banners. Describe the snowy Frostspine, Kingswood forests, Amberfields and Sunmere coast. Use a few places naturally from this gazetteer: ${POIS.map((poi) => poi.name).join(", ")}.`;
 }
 
 function createOpeningLoreText() {
   const factionNames = formatList(FACTIONS.map((faction) => faction.name));
-  const poiNames = formatList(POIS.map((poi) => poi.name));
-  return `In the wild crownlands, ${factionNames} raised their banners beneath a restless sky. Between them lay ${poiNames}, places of quarry dust, wheat, iron, market cries, and old dungeon shadows, where every oath waited to become history.`;
+  return `At the heart of the crownlands stood the Grand Library. Beneath its twin towers, a great scroll waited upon the wall: a place for every oath, conquest and fallen ruler to outlive the hands that shaped them.\n\nBeyond its quiet court, four abandoned castles stood with empty thrones and bare flagpoles. Roads wound through the Kingswood, past the harvests of Amberfields and the warm shores of Sunmere. In the north, snow crowned the Frostspine above the mines; far from the library, raiders lit their fires among the ruins.\n\nThe chroniclers claimed no throne. They kept the history of those who did. The next words belonged to the living.`;
 }
 
 function formatList(values) {
@@ -1543,7 +1675,8 @@ function formatList(values) {
 
 function createHistoryVolumeTitle(volumeNumber, transactions) {
   const strongest = transactions.slice().sort((a, b) => b.weight - a.weight)[0];
-  const factionName = strongest?.factionId ? FACTION_LOOKUP[strongest.factionId]?.name : null;
+  const factionName = strongest?.details?.factionName;
+  if (strongest?.type === "faction_founded") return `Volume ${volumeNumber}: The Founding of ${factionName}`;
   const theme = strongest ? getHistoryTheme(strongest.type) : "Unwritten Roads";
   return `Volume ${volumeNumber}: ${factionName ? `${theme} of ${factionName}` : theme}`;
 }
@@ -1552,6 +1685,7 @@ function getHistoryTheme(type) {
   const themes = {
     player_killed: "Blood in the Field",
     poi_claimed: "Banners Raised",
+    faction_founded: "A Kingdom Founded",
     ruler_claimed: "Crowns Taken",
     ruler_killed: "Crowns Broken"
   };
@@ -1560,6 +1694,7 @@ function getHistoryTheme(type) {
 }
 
 function narrateTransaction(event) {
+  if (event.type === "faction_founded") return `${event.summary} Their founding pledge was: "${event.details.mission}"`;
   if (event.type === "ruler_claimed") {
     return `${event.actor?.name ?? "A claimant"} took the throne, and the hall answered with steel-edged silence.`;
   }
@@ -1620,6 +1755,7 @@ function normalizeLoreActor(actor) {
     playerId,
     name,
     houseName: sanitizeHouseName(actor.houseName),
+    lifeNumber: Math.max(1, Number(actor.lifeNumber) || 1),
     factionId
   };
 }
@@ -1646,7 +1782,7 @@ function createLootItem(template) {
   const weaponStats = WEAPON_STATS[itemType];
   const armorStats = ARMOR_STATS[itemType];
 
-  return {
+  return stampEquipmentMaterial({
     id: createId("item"),
     name: `${root} ${itemType}`,
     type: itemType,
@@ -1656,7 +1792,7 @@ function createLootItem(template) {
     armor: armorStats ? { ...armorStats, material: root } : null,
     durability: maxDurability,
     maxDurability
-  };
+  });
 }
 
 function randomItem(items) {
@@ -1673,4 +1809,42 @@ function randomBetweenInt(min, max) {
 
 function capitalize(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+export function foundFaction(state, castleId, draft, context = {}) {
+  if (!canUseFactionThrone(state, castleId)) return { ok: false, message: "As king, you can only use your own faction’s throne." };
+  if (!FACTION_LOOKUP[castleId]) return { ok: false, message: "Unknown castle." };
+  if (state.factions?.[castleId]) return { ok: false, message: "This castle has already been claimed." };
+  if (state.selectedFactionId) return { ok: false, message: "You already belong to a faction." };
+  if (context.castleId !== castleId || !context.seated) return { ok: false, message: "Sit on this castle's throne first." };
+  const name = cleanText(draft?.name, 40), mission = cleanText(draft?.mission, 400);
+  if (name.length < 3 || mission.length < 10) return { ok: false, message: "Enter a faction name (3Ã¢â‚¬â€œ40 characters) and mission (10Ã¢â‚¬â€œ400 characters)." };
+  if (Object.values(state.factions ?? {}).some(f => f.name.toLowerCase() === name.toLowerCase())) return { ok: false, message: "That faction name is already taken." };
+
+  const founding = { name, mission, flag: normalizeFlag(draft.flag), founderPlayerId: state.player.id, founderName: state.player.name, foundedAt: state.elapsed };
+  state.factions ??= {};
+  state.factions[castleId] = founding;
+  const position = { ...state.player.position };
+  joinFaction(state, castleId);
+  state.player.position = position;
+  state.factionGovernance[castleId].rulerPlayerId = state.player.id;
+  state.player.prowess = (state.player.prowess || 0) + (25);
+  syncFactionMemberRecord(state);
+  recordLoreEvent(state, { type: "faction_founded", factionId: castleId, actor: createPlayerLoreActor(state),
+    summary: `${state.player.name} founded ${name} in an abandoned castle and became its first king.`,
+    details: { ...founding, factionName: name, rulerName: state.player.name, castleId }, weight: 5 });
+  return { ok: true, message: `You founded ${name} and became its king.` };
+}
+
+export function updateFactionIdentity(state, castleId, draft, context = {}) {
+  if (!canUseFactionThrone(state, castleId)) return { ok: false, message: "As king, you can only use your own faction’s throne." };
+  const faction = state.factions?.[castleId];
+  if (!faction || !isFactionRuler(state, castleId)) return { ok: false, message: "Only this faction's king can change its identity." };
+  if (context.castleId !== castleId || !context.seated) return { ok: false, message: "Sit on your faction's throne to edit it." };
+  const name = cleanText(draft?.name, 40), mission = cleanText(draft?.mission, 400);
+  if (name.length < 3 || mission.length < 10) return { ok: false, message: "Enter a name (3-40 characters) and mission (10-400 characters)." };
+  if (Object.entries(state.factions).some(([id, f]) => id !== castleId && f.name.toLowerCase() === name.toLowerCase())) return { ok: false, message: "That faction name is already taken." };
+  Object.assign(faction, { name, mission, flag: normalizeFlag(draft?.flag) });
+  addLog(state, `${state.player.name} updated ${name}'s charter and banner.`);
+  return { ok: true, message: "Faction name, mission and flag updated." };
 }

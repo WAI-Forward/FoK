@@ -1,6 +1,66 @@
+import { DUNGEON_GATE_HOLD_SECONDS, createDungeonGate, advanceDungeonGate, isNearDungeonGate, constrainToDungeonAntechamber, crossesClosedDungeonGate } from "./dungeon-gate.js";
+import { SORCERERS, createElementalGem, createSorcererVisual, SorcererSpells, updateCollapseDebris } from "./dungeon-bosses.js";
+import { chooseCampTentSpawn, stepTentExit } from './camp-spawning.js';
+import { attachMobModel } from './mob-models.js';
+import { createPerformanceDiagnostics, isDiagnosticsShortcut } from './performance-diagnostics.js';
+import { applyGremlinSize, restoreGremlinRewards } from './gremlin-scaling.js';
+import { resolveNearbyMobPairs } from './mob-collisions.js';
+import { BloodEffects } from './blood-effects.js';
+import { statusPickCandidates } from './status-picking.js';
+import { pickCombatAimPoint, terrainAimCandidates } from './aim-picking.js';
+import { takeMobUpdate, moveMobInSteps, updateStructureTransform } from './update-budget.js';
+import { isInOwnCastle, regenerateHealth, reconcileHealth } from './health.js';
+import { LIBRARY_TABLE_DISPLAYS } from './library-displays.js';
+import { simulationSteps } from './frame-timing.js';
+import { normalizeHistory, mergeHistory, historyRenown } from './history.js';
+import { renderArchive, selectArchiveDisplay } from './history-ui.js';
+import { createCheatConsole } from './cheat-console.js';
+import { METAL_TIERS, equipmentMaterial, equipmentName, stampEquipmentMaterial } from "./equipment-materials.js";
+import { equipmentArtUrl } from "./equipment-art.js";
+import { createInventoryPreview } from "./inventory-preview.js";
+import { createGroundSmashEffect, updateGroundSmashEffect } from "./ground-smash.js";
+import { getJumpAttack, canStartDaggerAirAttack, consumeDaggerAirStrike, canSpearVault, applySpearVaultLift, startSpearJump, isGroundSmashTarget, GROUND_SMASH_RADIUS } from "./jump-attacks.js";
+import { createGroundCoverInstances, createFootpaths } from './ground-cover.js';
+import { createLocalShadows } from "./daylight-shadows.js";
+import { createCampLights, updateCampLights, campFireFlicker } from "./camp-art.js";
+import { CAMP_CHEST_REACH, claimCampChest, updateCampChest } from "./camp-loot.js";
+import { INLAND_LAKES, lakeDistance, shoreScale, nearestLake, tileTouchesLake } from "./waterways.js";
+import { createCoastalWaterGeometry } from "./water-art.js";
+import { createBuildableArchitecture } from "./structure-art.js";
+import { CASTLE_GATE_Z, CASTLE_FOUNDATION_RADIUS, CASTLE_INTERIOR, castleEntrance, createCastleExterior, createCastleInteriorDetails } from "./castle-art.js";
+import { LIBRARY_INTERIOR_WIDTH_SCALE, POI_HALL, createPoiInteriorArt, createDungeonInteriorDetails, interiorUv } from "./poi-interior-art.js";
+import { surface } from "./poi-architecture.js";
+import { createPoiArchitecture } from "./poi-architecture.js";
+import { chooseAccount, retryAccount, finishAccountLoading, showSaveStatus } from "./account.js";
+import { getPoiWorkstation, isWithinWorkstationReach, rayHitsWorkstation, createPoiWorkstationModel } from "./poi-workstations.js";
+import { createRoutePlanner } from "./navigation.js";
+import { NIGHT_CAMP_CAP, raidSpawnSources, raidTargets, nearestRaidTarget, advanceRaidCapture, reclaimPoiForWilderness } from "./night-raids.js";
+import { createRoadMask, roadSpeedMultiplier } from "./roads.js";
+import { clearPlayerInventory, createDeathDrops, sameLootScene } from "./death-loot.js";
+import { clearPlayerResources, syncResourceReceipts } from "./resource-transfers.js";
+import { factionProduction } from "./poi-income.js";
+import { createRoyalCape, animateRoyalCape } from "./royal-cape.js";
+import { createCameraOcclusion } from "./camera-occlusion.js";
+import { createWorldLabels } from "./world-labels.js";
+import { createMinimap } from "./minimap.js";
+import { getFaction, flagSvg, flagPixels, normalizeFlag, normalizeFactions } from "./factions.js";
+import { updateInstanceDetail, SpatialGrid, partitionInstances, createTerrainTile, isWithinRenderDistance, getRenderPixelRatio, WORLD_RENDER_DISTANCE, TERRAIN_DETAIL_DISTANCE } from "./world-performance.js";
+import { createRockPart, rockVariant, rockColliderProfile, rockSurfaceWorldY } from "./rock-art.js";
+import { createLibraryExterior, createLibraryInterior, createInstancedLandscape, createPoiSetting, createCampModel } from "./world-art.js";
+import { WORLD_EXTENT, SNOW_LINE, LIBRARY_ID, LIBRARY_SCROLL_POSITION, REGIONS, MOB_CAMPS, distanceToCoast, clampWorldPosition, getNaturalHeight, getRegionAt, createWorldRoutes, selectCampForSpawn } from "./world-layout.js";
 import * as THREE from "three";
+import { createMarketFurnishings, MARKET_SHOPKEEP_POSITION } from "./market-interior.js";
+import { applyJumpAnimation, stepJumpAnimation } from "./jump-animation.js";
+import { attachWarriorModel } from "./warrior-model.js";
+import { attachArmourModel } from "./armour-models.js";
+import { flailChargePower, flailSpinAngle, getFlailReleaseAngle } from "./flail-dynamics.js";
+import { MELEE_STYLES, sampleMeleeMotion, canWeaveAttack, isShield, resolveShieldBlock, getStrikeWindow } from "./combat-motion.js";
+import { getComboCadence, getComboIndex, createComboChain } from "./combo-timing.js";
+import { CombatTrails } from "./combat-trails.js";
+import { attachWeaponModel, createBowString, updateBowString, focusedSwingAngles, reachHand, createFlailModel, updateFlailModel, simulateFlailModel, seatWeaponInHand } from "./weapon-models.js";
 import {
   getCombatAttackDuration,
+  getCombatComboTiming,
   getCombatDamage,
   getCombatHitMoment,
   getCombatKind,
@@ -15,11 +75,18 @@ import {
 import { buyResource, canPay, sellResource } from "./economy.js?v=0.5.4";
 import { createId } from "./ids.js";
 import {
+  appendRemoteSnapshot,
+  estimateServerTime,
+  getCourierProgressAt,
+  observeServerClock,
+  sampleRemoteSnapshots
+} from "./network-sync.js";
+import {
   ARMOR_STATS,
   BUILDING_DEFINITIONS,
   BUILDING_LOOKUP,
-  FACTIONS,
-  FACTION_LOOKUP,
+  FACTIONS as CASTLES,
+
   ITEM_DEFINITIONS,
   POIS,
   RESOURCE_LOOKUP,
@@ -28,13 +95,17 @@ import {
   WEAPON_STATS
 } from "./game-data.js";
 import {
+  foundFaction,
+  updateFactionIdentity,
   beginNewPlayerLife,
+  randomPlayerFirstName,
   buildStructure,
-  acceptFactionAllegiance,
   claimPoi,
   claimFactionRulerSeat,
+  canUseFactionThrone,
   claimLoreRenownAwards,
   createGameState,
+  damageInventoryItem,
   depositToFaction,
   distance2D,
   equipItem,
@@ -42,6 +113,8 @@ import {
   getEquippedItem,
   getFactionMembers,
   getFactionRulerName,
+  getHouseMembers,
+  getKnownHouses,
   getLoreProgress,
   getNearestPoi,
   getSelectedGearItem,
@@ -53,9 +126,9 @@ import {
   normalizeLoreState,
   performWeaponAttack,
   recordPlayerKillLore,
-  requestFactionAllegiance,
   sanitizeHouseName,
   setFactionRelation,
+  setHouseRelation,
   selectGearItem,
   setPlayerHouseName,
   syncFactionMemberRecord,
@@ -67,16 +140,32 @@ import {
 } from "./state.js";
 
 const canvas = document.querySelector("#game-canvas");
+const heraldryTextures = new Map();
 const state = createGameState();
+const FACTION_LOOKUP = Object.fromEntries(CASTLES.map(castle => [castle.id, null]));
+for (const castle of CASTLES) Object.defineProperty(FACTION_LOOKUP, castle.id, { get: () => getFaction(state, castle.id) });
+const FACTIONS = CASTLES.map(castle => new Proxy(castle, { get: (_, key) => getFaction(state, castle.id)?.[key] }));
 const GAME_FLAGS = {
   pve: readBooleanFlag("pve", true)
 };
 const MULTIPLAYER_MAX_HEALTH = 100;
 const MULTIPLAYER_SEND_INTERVAL = 0.12;
 const MULTIPLAYER_POLL_INTERVAL = 0.18;
+const REMOTE_INTERPOLATION_DELAY_MS = 150;
+const REMOTE_MAX_EXTRAPOLATION_MS = 250;
+const REMOTE_TELEPORT_DISTANCE = 18;
 const PLAYER_RESPAWN_DELAY_MS = 3500;
 const PERSISTENCE_SAVE_INTERVAL = 4;
 const PERSISTENCE_POLL_INTERVAL = 6;
+const DAY_DURATION_SECONDS = 300;
+const NIGHT_DURATION_SECONDS = 300;
+const DAY_NIGHT_CYCLE_SECONDS = DAY_DURATION_SECONDS + NIGHT_DURATION_SECONDS;
+const DAWN_DUSK_BLEND_SECONDS = 36;
+const MAX_TERRAIN_LAMP_LIGHTS = 16;
+const MAX_STREET_LAMP_POINT_LIGHTS = 8;
+const STREET_LAMP_TERRAIN_LIGHT_RADIUS = 58;
+const STREET_LAMP_POINT_LIGHT_RADIUS = 54;
+const STREET_LAMP_LOCAL_LIGHT_OFFSET = { x: 2.55, y: 6.45, z: 0 };
 const BLOOD_SPLAT_LIFETIME = 1.28;
 const BLOOD_SPLAT_DROPLET_COUNT = 12;
 const WALL_BODY_SIZE = { width: 14.4, height: 4.4, depth: 2.4 };
@@ -86,7 +175,8 @@ const LOCKED_THIRD_PERSON_CAMERA = {
   distanceScale: 0.38,
   minDistance: 16,
   maxDistance: 30,
-  minPitch: 0.14,
+  minPitch: -1.12,
+  framingMinPitch: 0.14,
   maxPitch: 1.42,
   shoulderOffset: 4.8,
   baseHeight: 5.8,
@@ -96,6 +186,13 @@ const LOCKED_THIRD_PERSON_CAMERA = {
   focusHeight: 4.8,
   pitchFocusOffset: 10
 };
+const OUTPOST_TOWER_CAMERA = {
+  minPitch: -1.12,
+  maxPitch: 0.72,
+  sensitivity: 0.0028
+};
+const account = await chooseAccount();
+const connectionId = crypto.randomUUID();
 initializeNetworkIdentity();
 const HAND_CONFIG = {
   left: {
@@ -111,33 +208,40 @@ const HAND_CONFIG = {
 };
 const TRADE_NPCS = [
   {
-    id: "lumberjack",
-    name: "Lumberjack",
-    resourceId: "wood",
-    position: { x: -24, z: 7 },
-    color: "#7f4d25"
-  },
-  {
-    id: "mason",
-    name: "Mason",
-    resourceId: "stone",
-    position: { x: -8, z: 9 },
-    color: "#878986"
-  },
-  {
-    id: "farmer",
-    name: "Farmer",
-    resourceId: "wheat",
-    position: { x: 8, z: 9 },
-    color: "#c9aa45"
-  },
-  {
-    id: "blacksmith",
-    name: "Blacksmith",
-    resourceId: "iron",
-    position: { x: 24, z: 7 },
-    color: "#505762"
+    id: "shopkeep",
+    name: "Shopkeep",
+    resourceIds: ["wood", "stone", "wheat", "iron"],
+    position: MARKET_SHOPKEEP_POSITION,
+    color: "#8f5a31"
   }
+];
+const BLACKSMITH_STOCK_SIZE = 5;
+const BLACKSMITH_NPC = {
+  id: "blacksmith",
+  name: "Blacksmith",
+  position: { x: 50, z: -8 },
+  color: "#3f4145"
+};
+const BLACKSMITH_MAX_STOCK_SIZE = 8;
+const BLACKSMITH_BUY_XP_RATE = 0.16;
+const BLACKSMITH_SELL_XP_RATE = 0.22;
+const BLACKSMITH_MAX_LEVEL = 10;
+const BLACKSMITH_WEAPON_PREFIXES = [
+  "Tempered",
+  "Balanced",
+  "Keen",
+  "Stout",
+  "Hardened",
+  "Fine",
+  "Hammered",
+  "True"
+];
+const BLACKSMITH_MASTER_PREFIXES = [
+  "Masterwork",
+  "King-forged",
+  "Runed",
+  "Perfected",
+  "Warborn"
 ];
 const DEPOSIT_RESOURCES = [
   { id: "gold", name: "Gold" },
@@ -154,19 +258,87 @@ const BODY_EQUIP_SLOTS = [
   { id: "leftHand", label: "Left hand", stateKey: "leftHandItemId", hand: "left" },
   { id: "rightHand", label: "Right hand", stateKey: "rightHandItemId", hand: "right" }
 ];
+const ITEM_ICON_SVGS = {
+  Flail: `<path class="item-icon-wood" d="m18 53 12-27"/><path class="item-icon-detail" d="M30 26 33 18 40 14 47 20 47 28"/><path class="item-icon-metal" d="m47 25 4 5 6 1-3 6 1 6-7-1-5 4-3-6-5-3 5-5 1-6Z"/>`,
+  Axe: `
+    <path class="item-icon-wood" d="M29 52 43 18" />
+    <path class="item-icon-edge" d="M39 11c8 1 13 6 15 14-8 5-16 6-24 2 2-8 5-13 9-16Z" />
+    <path class="item-icon-detail" d="M34 28c5 1 10 0 15-3" />`,
+  Bow: `
+    <path class="item-icon-wood" d="M40 8c-15 12-17 36 0 48" />
+    <path class="item-icon-detail" d="M40 8 40 56" />
+    <path class="item-icon-edge" d="M25 36h20" />
+    <path class="item-icon-edge" d="m42 32 7 4-7 4" />`,
+  Chestplate: `
+    <path class="item-icon-metal" d="M19 16 28 10h8l9 6 5 31-7 8H21l-7-8 5-31Z" />
+    <path class="item-icon-detail" d="M28 12v15l-8 10M36 12v15l8 10M23 50h18" />`,
+  Crossbow: `
+    <path class="item-icon-wood" d="M32 16v37" />
+    <path class="item-icon-edge" d="M13 20c12 9 26 9 38 0" />
+    <path class="item-icon-detail" d="M16 20h32M23 31h18" />
+    <path class="item-icon-edge" d="M32 10v18" />`,
+  Dagger: `
+    <path class="item-icon-edge" d="M34 8 42 31 31 42 22 33 34 8Z" />
+    <path class="item-icon-detail" d="M34 11 31 39" />
+    <path class="item-icon-gold" d="M20 35 29 44M17 39l8 8" />
+    <path class="item-icon-wood" d="m17 47 7-7" />`,
+  Feet: `
+    <path class="item-icon-leather" d="M16 34h14l4 11c-5 4-13 5-21 2v-6l3-7Z" />
+    <path class="item-icon-leather" d="M36 34h14l3 7v6c-8 3-16 2-21-2l4-11Z" />
+    <path class="item-icon-detail" d="M14 44h17M33 44h17" />`,
+  Gloves: `
+    <path class="item-icon-leather" d="M18 18c8 3 13 10 14 21l-8 10-13-14 7-17Z" />
+    <path class="item-icon-leather" d="M46 18c-8 3-13 10-14 21l8 10 13-14-7-17Z" />
+    <path class="item-icon-detail" d="M24 26 17 37M40 26l7 11" />`,
+  Helmet: `
+    <path class="item-icon-metal" d="M15 34c1-16 9-24 17-24s16 8 17 24l-5 13H20l-5-13Z" />
+    <path class="item-icon-detail" d="M18 34h28M24 46v-9M32 46v-12M40 46v-9" />`,
+  "Long Bow": `
+    <path class="item-icon-wood" d="M43 5c-20 15-22 39 0 54" />
+    <path class="item-icon-detail" d="M43 5 43 59" />
+    <path class="item-icon-edge" d="M20 37h27" />
+    <path class="item-icon-edge" d="m44 33 8 4-8 4" />`,
+  "Long Shield": `
+    <path class="item-icon-metal" d="M32 8 48 15v16c0 12-6 21-16 25-10-4-16-13-16-25V15l16-7Z" />
+    <path class="item-icon-gold" d="M32 12v39" />
+    <path class="item-icon-detail" d="M20 23h24M20 34h24" />`,
+  "Long Sword": `
+    <path class="item-icon-edge" d="M34 5 41 36 32 49 23 36 30 5h4Z" />
+    <path class="item-icon-detail" d="M32 8v38" />
+    <path class="item-icon-gold" d="M20 42h24" />
+    <path class="item-icon-wood" d="M32 44v13" />`,
+  Shield: `
+    <path class="item-icon-metal" d="M32 9 48 17v14c0 11-6 19-16 24-10-5-16-13-16-24V17l16-8Z" />
+    <path class="item-icon-gold" d="M32 13v37" />
+    <path class="item-icon-detail" d="M20 25h24" />`,
+  Spear: `
+    <path class="item-icon-wood" d="M17 54 42 19" />
+    <path class="item-icon-edge" d="M45 8 54 15 42 22 38 18 45 8Z" />
+    <path class="item-icon-detail" d="M40 18 44 21" />`,
+  Sword: `
+    <path class="item-icon-edge" d="M32 7 39 35 32 45 25 35 32 7Z" />
+    <path class="item-icon-detail" d="M32 10v32" />
+    <path class="item-icon-gold" d="M21 40h22" />
+    <path class="item-icon-wood" d="M32 42v13" />`
+};
 const ARMOR_VISUAL_SLOT_IDS = ["head", "chest", "gloves", "feet"];
 const LOCATION_HOLD_DURATION = 1.05;
+const POI_DOOR_INTERACTION_RANGE = 6.5;
 const POI_FLAG_HOLD_DURATION = 1.35;
 const POI_FLAG_POSITION = { x: -23, z: -12 };
 const POI_FLAG_INTERACTION_RANGE = 6.2;
+const WORK_ACTION_DURATION = 1.15;
+const DUAL_HAND_WORK_SPEED_MULTIPLIER = 1.5;
+const POINTER_BUTTON_LEFT = 1;
+const POINTER_BUTTON_RIGHT = 2;
 const JUMP_VELOCITY = 21.75;
 const JUMP_GRAVITY = 46;
-const DIVE_DURATION = 0.58;
-const DIVE_SPEED = 42;
-const DIVE_COOLDOWN = 2;
-const DIVE_VERTICAL_VELOCITY = -6.5;
-const ROCK_PLATFORM_HEIGHT = 2.55;
-const ROCK_PLATFORM_RADIUS_SCALE = 0.82;
+const ROLL_DURATION = 0.9;
+const ROLL_DOUBLE_TAP_MS = 300;
+const ROLL_SPEED = 32;
+const ROLL_DIVE_SPEED_BOOST = 12;
+const ROLL_COOLDOWN = 0.65;
+const ROLL_VERTICAL_VELOCITY = 3;
 const DUNGEON_ENEMY_SPAWNS = [
   { name: "Hollow Guard", position: { x: -24, z: -24 }, hp: 55, color: "#7d54b8" },
   { name: "Crypt Raider", position: { x: 24, z: -24 }, hp: 45, color: "#9b7250" },
@@ -174,12 +346,27 @@ const DUNGEON_ENEMY_SPAWNS = [
   { name: "Hollow Acolyte", position: { x: 20, z: 16 }, hp: 38, color: "#5b477f" },
   { name: "Ebon Sentinel", position: { x: 0, z: -38 }, hp: 95, color: "#3d4249" }
 ];
-const OUTDOOR_DUNGEON_MONSTERS = [
-  { name: "Hollow Stalker", hp: 34, color: "#5b477f", speed: 8.2, radius: 1.05 },
-  { name: "Ebon Crawler", hp: 42, color: "#3d4249", speed: 7.4, radius: 1.15 },
-  { name: "Crypt Mauler", hp: 62, color: "#7d54b8", speed: 6.2, radius: 1.3 }
+const PVE_CREATURE_TEMPLATES = [
+  { name: "Hollow Stalker", hp: 30, color: "#5b477f", skinColor: "#7c6aa1", speed: 8.4, radius: 1.05 },
+  { name: "Ebon Crawler", hp: 38, color: "#303942", skinColor: "#59656c", speed: 7.8, radius: 1.12 },
+  { name: "Crypt Gnawer", hp: 46, color: "#654a78", skinColor: "#92749e", speed: 7.1, radius: 1.2 }
 ];
+const PVE_RAIDER_TEMPLATES = [
+  { name: "Orc Reaver", hp: 78, color: "#6e4d91", skinColor: "#9d8b74", speed: 6.15, radius: 1.18 },
+  { name: "Orc Marauder", hp: 92, color: "#3d4249", skinColor: "#8f806e", speed: 5.75, radius: 1.22 },
+  { name: "Orc Warden", hp: 108, color: "#77573d", skinColor: "#a18c72", speed: 5.35, radius: 1.28 }
+];
+const PVE_RAIDER_SPAWN_CHANCE = 0.22;
 const OUTDOOR_DUNGEON_MONSTER_SPAWN_INTERVAL = 6.5;
+const OUTDOOR_DUNGEON_MONSTER_RING_PADDING = 2.5;
+const OUTDOOR_DUNGEON_MONSTER_SPAWN_BUFFER = 10;
+const OUTDOOR_DUNGEON_MONSTER_TRACK_RANGE = 105;
+const DUNGEON_COLLAPSE_WARNING_SECONDS = 240;
+const DUNGEON_RESPAWN_SECONDS = 300;
+const DUNGEON_ROOM_CELL_SIZE = 72;
+const DUNGEON_ROOM_ROW_SPACING = 68;
+const DUNGEON_CORRIDOR_WIDTH = 15;
+const DUNGEON_TREASURE_PICKUP_RANGE = 7;
 const ENTITY_STATUS_CHANGED_VISIBLE_DURATION = 2.8;
 const PVE_STATUS_BAR_HEIGHT = 7.15;
 const REMOTE_STATUS_BAR_HEIGHT = 7.35;
@@ -188,6 +375,12 @@ const PVE_MOB_COLLISION_PADDING = 0.22;
 const ACTOR_COLLISION_PADDING = 0.12;
 const PLAYER_COLLISION_RADIUS = 1.15;
 const PVE_KNOCKBACK_IMPULSE_SCALE = 4.2;
+const SPEAR_KNOCKBACK_IMPULSE_SCALE = 5.1;
+const SPEAR_KNOCKBACK_MAX_SPEED = 16;
+const SPEAR_HIT_STAGGER_DURATION = 0.28;
+const PVE_SHOVE_KNOCKBACK_IMPULSE_SCALE = 4.8;
+const PVE_SHOVE_KNOCKBACK_MAX_SPEED = 17.5;
+const PVE_SHOVE_STAGGER_DURATION = 0.42;
 const PLAYER_KNOCKBACK_IMPULSE_SCALE = 3.2;
 const KNOCKBACK_MAX_SPEED = 13.5;
 const KNOCKBACK_DAMPING = 8.8;
@@ -216,7 +409,8 @@ const PVE_ARMOR_MATERIALS = [
   { name: "Bronze", tier: 3, color: "#b37a3a", defense: 1.18, resistance: 1.1, toughness: 1.12, durability: 1.08, metalness: 0.34 },
   { name: "Iron", tier: 4, color: "#858b8f", defense: 1.42, resistance: 1.28, toughness: 1.36, durability: 1.24, metalness: 0.42 },
   { name: "Steel", tier: 5, color: "#c5c9c8", defense: 1.72, resistance: 1.48, toughness: 1.62, durability: 1.46, metalness: 0.52 },
-  { name: "Mithril", tier: 6, color: "#9fd7d0", defense: 2.05, resistance: 1.72, toughness: 1.92, durability: 1.72, metalness: 0.58 }
+  { name: "Mithril", tier: 6, color: "#70d6cf", defense: 2.05, resistance: 1.72, toughness: 1.92, durability: 1.72, metalness: 0.58 },
+  { name: "Adamant", tier: 7, color: "#a68ad4", defense: 2.4, resistance: 2, toughness: 2.25, durability: 2, metalness: 0.65 }
 ];
 const ARMOR_MATERIAL_FALLBACKS = {
   "starfallen": { color: "#88bdf4", metalness: 0.48 },
@@ -229,55 +423,58 @@ const ARMOR_MATERIAL_FALLBACKS = {
   "silk road": { color: "#c49b62", metalness: 0.06 },
   "sunmarked": { color: "#d8aa48", metalness: 0.18 }
 };
-const TERRAIN_SIZE = 520;
+const PLAYABLE_HALF = WORLD_EXTENT;
+const WORLD_ROUTES = createWorldRoutes(POIS, FACTIONS);
+const FOOTPATHS = createFootpaths(WORLD_ROUTES, MOB_CAMPS);
+const GROUND_ROUTE_GRIDS = new Map([WORLD_ROUTES, FOOTPATHS].map(routes => [routes, new SpatialGrid(routes.flatMap(route => route.slice(1).map((b,i) => {
+  const a=route[i];
+  return {a,b,x:(a.x+b.x)/2,z:(a.z+b.z)/2,radius:Math.hypot(b.x-a.x,b.z-a.z)/2};
+})),48)]));
+const TERRAIN_SIZE = WORLD_EXTENT * 2 + 500;
 const TERRAIN_HALF = TERRAIN_SIZE / 2;
-const TERRAIN_SEGMENTS = 156;
-const LONG_GRASS_PATCH_COUNT = 115;
-const LONG_GRASS_BLADES_PER_PATCH = 22;
-const TERRAIN_LEVELS = [
-  { x: -210, z: -210, height: 2.2, radius: 78, falloff: 34 },
-  { x: 210, z: -210, height: 7.6, radius: 76, falloff: 36 },
-  { x: -210, z: 210, height: 4.4, radius: 80, falloff: 32 },
-  { x: 210, z: 210, height: 10.8, radius: 78, falloff: 36 },
-  { x: 0, z: 0, height: 3.3, radius: 48, falloff: 42 },
-  { x: -110, z: 120, height: 5.2, radius: 54, falloff: 34 },
-  { x: 126, z: 42, height: 6.8, radius: 62, falloff: 30 }
-];
-const OUTDOOR_SCENERY = [
-  { type: "tree", x: -172, z: -132, scale: 1.2 },
-  { type: "tree", x: -154, z: -156, scale: 0.95 },
-  { type: "tree", x: -102, z: -172, scale: 1.1 },
-  { type: "tree", x: -184, z: 50, scale: 1.35 },
-  { type: "tree", x: -160, z: 84, scale: 0.9 },
-  { type: "tree", x: -122, z: 88, scale: 1.15 },
-  { type: "tree", x: -84, z: 148, scale: 1.05 },
-  { type: "tree", x: -36, z: 182, scale: 1.25 },
-  { type: "tree", x: 58, z: 174, scale: 0.95 },
-  { type: "tree", x: 96, z: 146, scale: 1.2 },
-  { type: "tree", x: 152, z: 122, scale: 1.05 },
-  { type: "tree", x: 184, z: -24, scale: 1.0 },
-  { type: "tree", x: 158, z: -62, scale: 1.28 },
-  { type: "tree", x: 104, z: -142, scale: 0.92 },
-  { type: "tree", x: 54, z: -184, scale: 1.1 },
-  { type: "tree", x: -48, z: -88, scale: 0.9 },
-  { type: "tree", x: 44, z: 82, scale: 1.0 },
-  { type: "rock", x: -132, z: -88, scale: 1.15 },
-  { type: "rock", x: -92, z: -132, scale: 0.9 },
-  { type: "rock", x: -46, z: -152, scale: 1.25 },
-  { type: "rock", x: -132, z: 128, scale: 0.9 },
-  { type: "rock", x: -72, z: 102, scale: 1.05 },
-  { type: "rock", x: 26, z: 138, scale: 1.1 },
-  { type: "rock", x: 84, z: 98, scale: 0.85 },
-  { type: "rock", x: 144, z: 10, scale: 1.25 },
-  { type: "rock", x: 102, z: -34, scale: 0.95 },
-  { type: "rock", x: 36, z: -118, scale: 1.05 },
-  { type: "rock", x: -16, z: -48, scale: 0.9 },
-  { type: "rock", x: 26, z: 30, scale: 1.15 }
-];
+const TERRAIN_FOUNDATIONS = [...FACTIONS, ...POIS, ...MOB_CAMPS].map(landmark => ({ ...landmark, height: getNaturalHeight(landmark.position.x, landmark.position.z) }));
+const LONG_GRASS_PATCH_COUNT = 3600;
+const LONG_GRASS_BLADES_PER_PATCH = 56;
+const INLAND_LAKE = INLAND_LAKES[0];
+const WATER_WADING_SPEED_MULTIPLIER = 0.48;
+const WATER_SPLASH_INTERVAL = 0.16;
+const BIOME_REGIONS = { kingswood: REGIONS.find(region => region.id === "forest"), quarryHighlands: REGIONS.find(region => region.id === "alpine") };
+
+const POI_EXTERIOR_LAYOUTS = {
+  "north-quarry": createPoiExteriorLayout("#777873", "#41433f", [
+    { x: 0, z: -4, width: 46, depth: 32, height: 11 },
+    { x: 23, z: -8, width: 18, depth: 20, height: 8 }
+  ]),
+  kingswood: createPoiExteriorLayout("#81532f", "#3f2b22", [
+    { x: 0, z: -4, width: 46, depth: 32, height: 11 },
+    { x: -23, z: -8, width: 18, depth: 20, height: 8 }
+  ]),
+  millfield: createPoiExteriorLayout("#94412f", "#4b2922", [
+    { x: 0, z: -4, width: 48, depth: 32, height: 12 },
+    { x: 25, z: -8, width: 18, depth: 20, height: 9 }
+  ]),
+  blackridge: createPoiExteriorLayout("#44484e", "#242629", [
+    { x: 0, z: -4, width: 48, depth: 32, height: 11 },
+    { x: -25, z: -8, width: 18, depth: 20, height: 9 }
+  ]),
+  "river-market": createPoiExteriorLayout("#9a6841", "#6f3e31", [
+    { x: 0, z: -4, width: 50, depth: 30, height: 11 },
+    { x: -26, z: -7, width: 16, depth: 22, height: 8 },
+    { x: 26, z: -7, width: 16, depth: 22, height: 8 }
+  ]),
+  "ebon-hollow": createPoiExteriorLayout("#303238", "#17181c", [
+    { x: 0, z: -5, width: 44, depth: 30, height: 12 },
+    { x: -23, z: -9, width: 12, depth: 16, height: 10 },
+    { x: 23, z: -9, width: 12, depth: 16, height: 10 }
+  ])
+};
 
 const world = {
   scene: new THREE.Scene(),
   outdoorRoot: new THREE.Group(),
+  campModels: [],
+  campChests: [],
+  campLights: createCampLights(),
   interiorRoot: new THREE.Group(),
   poiInteriorRoot: new THREE.Group(),
   sceneMode: "outdoor",
@@ -285,11 +482,13 @@ const world = {
   activePoiInteriorId: null,
   baseEntryAction: null,
   renderer: new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true }),
-  camera: new THREE.PerspectiveCamera(48, 1, 0.1, 900),
+  camera: new THREE.PerspectiveCamera(48, 1, 0.1, 1800),
   raycaster: new THREE.Raycaster(),
+  worldLabels: createWorldLabels(),
   groundPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
   aimTarget: new THREE.Vector3(0, 0, 1),
   aimPoint: new THREE.Vector3(0, 0, 1),
+  aimRayOrigin: new THREE.Vector3(0, 0, 0),
   aimRayDirection: new THREE.Vector3(0, 0, 1),
   aimDirection: new THREE.Vector3(0, 0, 1),
   hasAim: false,
@@ -297,6 +496,12 @@ const world = {
   keys: new Set(),
   frames: 0,
   renderStatsTimer: 0,
+  lighting: {
+    ambient: null,
+    sun: null,
+    isNight: false,
+    nightAmount: 0
+  },
   hoveredStatusEntityKey: null,
   meshes: {
     factions: new Map(),
@@ -311,10 +516,23 @@ const world = {
     scenery: null
   },
   courierVisuals: new Map(),
+  serverClock: {
+    initialized: false,
+    offsetMs: 0
+  },
   sceneryColliders: [],
+  poiExteriorColliders: [],
+  castleExteriorColliders: [],
+  waterSplashes: [],
+  waterSplashCooldown: 0,
   hoverBases: [],
+  interiorCameraWalls: [],
+  cameraOcclusion: createCameraOcclusion(),
   tradeNpcs: [],
   activeTradeNpcId: null,
+  blacksmithNpcs: [],
+  blacksmithStock: [],
+  blacksmithStockByFaction: {},
   stewardNpcs: [],
   stewardPanelOpen: false,
   depotPanelOpen: false,
@@ -328,10 +546,21 @@ const world = {
   projectiles: [],
   projectilesFired: 0,
   outpostDefenses: new Map(),
-  bloodSplats: [],
+  bloodEffects: null,
   bloodSplatTexture: null,
   droppedItems: [],
-  pveEnemies: [],
+  dungeons: new Map(),
+  dungeonContextId: null,
+  get dungeon() {
+    const id = this.dungeonContextId ?? state.pois.find(poi => poi.id === this.activePoiInteriorId && poi.type === "Dungeon")?.id ?? "ebon-hollow";
+    if (!this.dungeons.has(id)) this.dungeons.set(id, {
+      id, status: "active", generation: 0, collapseTimer: 0, respawnTimer: 0,
+      warningTimer: 0, layout: null, contentRoot: null, treasure: null, chests: [], enemies: []
+    });
+    return this.dungeons.get(id);
+  },
+  get pveEnemies() { return this.dungeon.enemies; },
+  set pveEnemies(enemies) { this.dungeon.enemies = enemies; },
   remotePlayers: new Map(),
   pveEnemySeq: 0,
   outdoorMonsters: [],
@@ -355,6 +584,8 @@ const world = {
     position: { x: 0, z: 0 },
     elevation: 15.7,
     aimDirection: new THREE.Vector3(0, -0.12, 1),
+    yaw: Math.PI,
+    pitch: -0.12,
     drawStartedAt: 0,
     shotCooldown: 0
   },
@@ -366,6 +597,10 @@ const world = {
     left: 0,
     right: 0
   },
+  comboChains: { left: null, right: null },
+  weaveQueue: null,
+  flailCharge: null,
+  guard: { hand: null, stamina: 100, raisedAt: -10, brokenUntil: 0 },
   combatDebug: {
     hitboxes: false,
     objects: []
@@ -390,10 +625,12 @@ const world = {
     supportOffset: 0,
     knockbackVelocity: new THREE.Vector3(0, 0, 0),
     jumping: false,
-    diving: false,
-    diveElapsed: 0,
-    diveCooldown: 0,
-    diveDirection: new THREE.Vector3(0, 0, 1)
+    rolling: false,
+    rollElapsed: 0,
+    rollCooldown: 0,
+    rollDirection: new THREE.Vector3(0, 0, 1),
+    airborneDirection: new THREE.Vector3(0, 0, 0),
+    airborneSpeed: 0
   },
   multiplayer: {
     enabled: location.protocol !== "file:",
@@ -403,20 +640,27 @@ const world = {
     pollInFlight: false,
     failed: false,
     localDefeated: false,
-    respawnAt: 0
+    respawnAt: 0,
+    nextInputSequence: Math.floor(Date.now() * 1000),
+    lastAckedInputSequence: 0,
+    lastSnapshotSequence: 0
   },
   persistence: {
     enabled: location.protocol !== "file:",
     online: false,
     storage: "none",
+    incomeSupported: null,
     dirty: false,
     saveTimer: PERSISTENCE_SAVE_INTERVAL,
     pollTimer: PERSISTENCE_POLL_INTERVAL,
     saveInFlight: false,
-    loadInFlight: false
+    loadInFlight: false,
+    lastSnapshotSequence: 0
   },
   seatedOnThrone: false,
   cameraMode: "free",
+  cameraMenuSuspended: false,
+  cameraLockPending: false,
   cameraYaw: Math.PI * 0.25,
   cameraPitch: 0.6,
   cameraDistance: 62,
@@ -428,6 +672,7 @@ const world = {
     working: false,
     enteringBase: false,
     downAt: 0,
+    buttons: 0,
     lastMiddleClickAt: -999,
     suppressClickAction: false,
     attackHand: null,
@@ -439,14 +684,23 @@ const world = {
 };
 
 const ui = {
+  deathScreen: document.querySelector("#death-screen"),
+  respawnForm: document.querySelector("#respawn-form"),
+  respawnName: document.querySelector("#respawn-name"),
+  respawnButton: document.querySelector("#respawn-button"),
+  respawnLocation: document.querySelector("#respawn-location"),
   factionSelect: document.querySelector("#faction-select"),
   factionCards: document.querySelector("#faction-cards"),
   houseNameInput: document.querySelector("#house-name"),
   houseNameStatus: document.querySelector("#house-name-status"),
   hudFactionButton: document.querySelector("#hud-faction-button"),
   hudFaction: document.querySelector("#hud-faction"),
+  hudFactionGold: document.querySelector("#hud-faction-gold"),
+  hudHouseButton: document.querySelector("#hud-house-button"),
+  hudHouse: document.querySelector("#hud-house"),
   hudPlayerButton: document.querySelector("#hud-player-button"),
   hudPlayer: document.querySelector("#hud-player"),
+  hudPlayerHp: document.querySelector("#hud-player-hp"),
   hudLoreButton: document.querySelector("#hud-lore-button"),
   hudRenown: document.querySelector("#hud-renown"),
   hudStatusButton: document.querySelector("#hud-status-button"),
@@ -476,18 +730,12 @@ const ui = {
   locationPrompt: document.querySelector("#location-prompt"),
   locationPromptTitle: document.querySelector("#location-prompt-title"),
   locationPromptProgress: document.querySelector("#location-prompt-progress"),
-  interiorHint: document.querySelector("#interior-hint"),
-  interiorTitle: document.querySelector("#interior-title"),
-  leaveInterior: document.querySelector("#leave-interior"),
   npcTradePanel: document.querySelector("#npc-trade-panel"),
   npcTradeTitle: document.querySelector("#npc-trade-title"),
   npcTradeResource: document.querySelector("#npc-trade-resource"),
   npcTradeClose: document.querySelector("#npc-trade-close"),
   npcTradeAmount: document.querySelector("#npc-trade-amount"),
-  npcBuyPrice: document.querySelector("#npc-buy-price"),
-  npcSellPrice: document.querySelector("#npc-sell-price"),
-  npcBuyResource: document.querySelector("#npc-buy-resource"),
-  npcSellResource: document.querySelector("#npc-sell-resource"),
+  npcTradeResourceList: document.querySelector("#npc-trade-resource-list"),
   stewardPanel: document.querySelector("#steward-panel"),
   stewardTitle: document.querySelector("#steward-title"),
   stewardStatus: document.querySelector("#steward-status"),
@@ -508,51 +756,28 @@ const ui = {
   rulerMembers: document.querySelector("#ruler-members"),
   rulerResources: document.querySelector("#ruler-resources"),
   rulerPolitics: document.querySelector("#ruler-politics"),
+  housePanel: document.querySelector("#house-panel"),
+  houseClose: document.querySelector("#house-close"),
+  houseTitle: document.querySelector("#house-title"),
+  houseStatus: document.querySelector("#house-status"),
+  houseBody: document.querySelector("#house-body"),
   loreScroll: document.querySelector("#lore-scroll"),
   loreClose: document.querySelector("#lore-close"),
   loreMeta: document.querySelector("#lore-meta"),
   loreBody: document.querySelector("#lore-body"),
-  toastLog: document.querySelector("#toast-log")
+  toastLog: document.querySelector("#toast-log"),
+  combatHitMarker: document.querySelector("#combat-hit-marker")
 };
 
 function initializeNetworkIdentity() {
-  const storageKey = "kok3d.playerId";
-  const nameKey = "kok3d.playerName";
-  const houseKey = "kok3d.houseName";
-  let playerId = "";
-
-  try {
-    playerId = sessionStorage.getItem(storageKey) ?? "";
-
-    if (!playerId) {
-      playerId = createId("player");
-      sessionStorage.setItem(storageKey, playerId);
-    }
-  } catch {
-    playerId = createId("player");
-  }
-
-  const fallbackName = `Player ${playerId.slice(-4).toUpperCase()}`;
-  let playerName = fallbackName;
-
-  try {
-    playerName = localStorage.getItem(nameKey) || fallbackName;
-    localStorage.setItem(nameKey, playerName);
-  } catch {
-    playerName = fallbackName;
-  }
-
-  state.player.id = playerId;
-  state.player.name = playerName;
-  try {
-    state.player.houseName = sanitizeHouseName(localStorage.getItem(houseKey));
-  } catch {
-    state.player.houseName = "";
-  }
+  state.player.id = account.playerId;
+  state.player.houseName = "";
+  state.player.firstName = "";
+  state.player.name = "Traveller";
   state.player.hp = MULTIPLAYER_MAX_HEALTH;
   state.player.maxHp = MULTIPLAYER_MAX_HEALTH;
   state.player.dead = false;
-  document.body.dataset.playerId = playerId;
+  document.body.dataset.playerId = account.playerId;
 }
 
 async function loadPersistentState() {
@@ -564,13 +789,13 @@ async function loadPersistentState() {
 
   try {
     const data = await fetchPersistentJson(`/api/world/state?playerId=${encodeURIComponent(state.player.id)}`);
-    applyPersistentPayload(data, { includePlayer: true });
+    applyPersistentPayload(data, { includePlayer: true, includePlayerPosition: true });
     world.persistence.online = true;
     world.persistence.storage = data.storage ?? "database";
   } catch (error) {
     world.persistence.online = false;
     world.persistence.storage = "none";
-    console.warn("World persistence unavailable.", error);
+    throw error;
   } finally {
     world.persistence.loadInFlight = false;
   }
@@ -596,7 +821,7 @@ async function pollPersistentState() {
 }
 
 async function savePersistentState(options = {}) {
-  if (!world.persistence.enabled || world.persistence.saveInFlight) {
+  if (!state.player.firstName || !world.persistence.enabled || world.persistence.saveInFlight) {
     return;
   }
 
@@ -612,14 +837,16 @@ async function savePersistentState(options = {}) {
     if (includeWorld) {
       world.persistence.dirty = false;
     }
-    applyPersistentPayload(data, { includePlayer: true });
+    applyPersistentPayload(data, { includePlayer: false });
     world.persistence.online = true;
     world.persistence.storage = data.storage ?? world.persistence.storage;
+    showSaveStatus(account.authenticated ? "Family progress saved" : "Guest progress saved in this browser");
+    return true;
   } catch {
     world.persistence.online = false;
-    if (includeWorld) {
-      world.persistence.dirty = true;
-    }
+    showSaveStatus("Save failed — reconnect before leaving");
+    if (includeWorld) world.persistence.dirty = true;
+    return false;
   } finally {
     world.persistence.saveInFlight = false;
   }
@@ -627,7 +854,8 @@ async function savePersistentState(options = {}) {
 
 async function fetchPersistentJson(url, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  const requestStartedAt = Date.now();
 
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
@@ -636,7 +864,9 @@ async function fetchPersistentJson(url, options = {}) {
       throw new Error(`Persistence request failed: ${response.status}`);
     }
 
-    return await response.json();
+    const data = await response.json();
+    observeServerClock(world.serverClock, data?.serverTime, requestStartedAt, Date.now());
+    return data;
   } finally {
     clearTimeout(timeout);
   }
@@ -659,9 +889,13 @@ function updatePersistence(deltaSeconds) {
   if (!world.persistence.enabled) {
     return;
   }
+  if (!state.player.firstName) return;
 
   world.persistence.saveTimer -= deltaSeconds;
-  world.persistence.pollTimer -= deltaSeconds;
+  const pollInterval = ui.rulerPanel.classList.contains("is-hidden") ? PERSISTENCE_POLL_INTERVAL : 1;
+  world.persistence.pollTimer = Math.min(world.persistence.pollTimer, pollInterval) - deltaSeconds;
+  // Keep due work pending while a request is running; never consume a poll without sending it.
+  if (world.persistence.loadInFlight || world.persistence.saveInFlight) return;
 
   if (world.persistence.dirty && world.persistence.saveTimer <= 0 && !world.persistence.saveInFlight) {
     world.persistence.saveTimer = PERSISTENCE_SAVE_INTERVAL;
@@ -676,7 +910,7 @@ function updatePersistence(deltaSeconds) {
   }
 
   if (!world.persistence.dirty && world.persistence.pollTimer <= 0) {
-    world.persistence.pollTimer = PERSISTENCE_POLL_INTERVAL;
+    world.persistence.pollTimer = pollInterval;
     void pollPersistentState();
   }
 }
@@ -684,6 +918,7 @@ function updatePersistence(deltaSeconds) {
 function buildPersistentPayload(includeWorld = true) {
   const payload = {
     playerId: state.player.id,
+    cheatRevision: state.cheatRevision || 0,
     player: {
       selectedFactionId: state.selectedFactionId,
       player: {
@@ -692,32 +927,48 @@ function buildPersistentPayload(includeWorld = true) {
         houseName: state.player.houseName,
         firstName: state.player.firstName,
         lifeNumber: state.player.lifeNumber,
+        hp: state.player.hp,
+        dead: state.player.dead,
         gold: state.player.gold,
+        resourceReceipts: state.player.resourceReceipts,
+        lootReceiptCount: state.player.lootReceiptCount,
+        lootReceipts: state.player.lootReceipts,
+        lootDeathReceiptCount: state.player.lootDeathReceiptCount,
+        resourceDeathVersion: state.player.resourceDeathVersion,
+        resourceDeathReceipts: state.player.resourceDeathReceipts,
         renown: state.player.renown,
+        prowess: state.player.prowess || 0,
         historyRenownClaimed: state.player.historyRenownClaimed,
         historyRenownVersion: state.player.historyRenownVersion,
-        position: state.player.position,
+        position: world.sceneMode === "outdoor" ? state.player.position : world.outdoorReturnPosition,
         velocity: state.player.velocity,
         selectedGearItemId: state.player.selectedGearItemId,
         equipment: state.player.equipment,
         hotbar: state.player.hotbar,
         resources: state.player.resources,
-        inventory: state.player.inventory
+        inventory: state.player.inventory,
+        campChestRefills: state.player.campChestRefills
       }
     }
   };
 
   if (includeWorld) {
     payload.world = {
+      cheatRevision: state.cheatRevision || 0,
       elapsed: state.elapsed,
       market: state.market,
+      poiIncomeTotals: state.poiIncomeTotals,
+      resourceTransferTotals: state.resourceTransferTotals,
+      factions: state.factions,
       factionMembers: state.factionMembers,
       factionGovernance: state.factionGovernance,
+      houseRelations: state.houseRelations,
       factionResources: state.factionResources,
       pois: state.pois,
       structures: state.structures,
       couriers: state.couriers,
       activeEvent: state.activeEvent,
+      history: { events: (state.history?.events || []).slice(-120) },
       lore: state.lore
     };
   }
@@ -730,13 +981,52 @@ function applyPersistentPayload(data, options = {}) {
     return;
   }
 
+  const snapshotSequence = Math.max(0, Math.floor(Number(data.snapshotSequence) || 0));
+  if (snapshotSequence > 0 && snapshotSequence <= world.persistence.lastSnapshotSequence) {
+    return;
+  }
+  if (snapshotSequence > 0) {
+    world.persistence.lastSnapshotSequence = snapshotSequence;
+  }
+
+  // Rebuild local mobs, chests, interiors and transient combat state after a full reset.
+  // Keep the old revision until navigation, so unload saves are rejected by the server.
+  if (state.cheatRevision !== undefined && (data.world?.resetAllRevision || 0) > state.cheatRevision) {
+    world.persistence.enabled = false;
+    window.location.reload();
+    return;
+  }
+  if (data.world && (data.world.cheatRevision || 0) !== (state.cheatRevision || 0)) {
+    options = { ...options, includePlayer: true };
+    state.selectedFactionId = data.player?.selectedFactionId ?? null;
+    state.houseRelations = {};
+    if (data.player?.player) {
+      state.player.dead = Boolean(data.player.player.dead);
+      world.multiplayer.localDefeated = state.player.dead;
+      if (!state.player.dead) {
+        ui.deathScreen.classList.add("is-hidden");
+        ui.deathScreen.setAttribute("aria-hidden", "true");
+      }
+      state.player.selectedGearItemId = data.player.player.selectedGearItemId ?? null;
+    }
+  }
   if (data.world) {
+    state.cheatRevision = data.world.cheatRevision || 0;
     applyWorldSnapshot(data.world);
   }
 
-  if (options.includePlayer && data.player) {
-    applyPlayerSnapshot(data.player);
+  if (!options.includePlayer && data.player) {
+    syncResourceReceipts(state.player, data.player.player);
+    if (world.uiReady) refreshUi();
   }
+
+  if (options.includePlayer && data.player) {
+    applyPlayerSnapshot(data.player, {
+      includePosition: Boolean(options.includePlayerPosition)
+    });
+  }
+
+  if (data.world && world.uiReady && !ui.rulerPanel.classList.contains("is-hidden")) renderRulerPanel();
 
   if (claimLoreRenownAwards(state) > 0) {
     markPlayerPersistenceDue();
@@ -747,10 +1037,19 @@ function applyPersistentPayload(data, options = {}) {
 }
 
 function applyWorldSnapshot(snapshot) {
+  world.persistence.incomeSupported = snapshot.poiIncomeTotals != null;
+  state.poiIncomeTotals = snapshot.poiIncomeTotals;
+  state.resourceTransferTotals = snapshot.resourceTransferTotals;
+  state.deathDrops = snapshot.deathDrops ?? [];
+  if (world.uiReady) syncDeathDropMeshes();
+  state.factions = normalizeFactions(snapshot.factions);
+  if (state.selectedFactionId && !state.factions[state.selectedFactionId]) state.selectedFactionId = null;
   state.elapsed = Math.max(state.elapsed, Number(snapshot.elapsed) || 0);
   state.market = mergeMarketSnapshot(snapshot.market, state.market);
   state.factionMembers = mergeFactionMap(snapshot.factionMembers, state.factionMembers);
   state.factionGovernance = mergeFactionMap(snapshot.factionGovernance, state.factionGovernance);
+  for (const castle of CASTLES) if (!state.factions[castle.id]) state.factionGovernance[castle.id].rulerPlayerId = null;
+  state.houseRelations = mergeHouseRelations(snapshot.houseRelations, state.houseRelations);
   state.factionResources = mergeFactionResources(snapshot.factionResources, state.factionResources);
 
   if (Array.isArray(snapshot.pois)) {
@@ -759,7 +1058,8 @@ function applyWorldSnapshot(snapshot) {
       return persisted
         ? {
             ...poi,
-            ownerFactionId: persisted.ownerFactionId ?? null,
+            ownerFactionId: poi.type === "Library" ? null : persisted.ownerFactionId ?? null,
+            incomeProgress: persisted.incomeProgress ?? 0,
             pulse: persisted.pulse ?? 0,
             workerRespawnAt: persisted.workerRespawnAt ?? poi.workerRespawnAt ?? 0
           }
@@ -776,11 +1076,12 @@ function applyWorldSnapshot(snapshot) {
   }
 
   state.activeEvent = snapshot.activeEvent ?? null;
+  state.history = mergeHistory(snapshot.history ?? state.history, state.history);
   state.lore = normalizeLoreState(snapshot.lore ?? state.lore);
 }
 
-function applyPlayerSnapshot(snapshot) {
-  if (snapshot.selectedFactionId && FACTION_LOOKUP[snapshot.selectedFactionId]) {
+function applyPlayerSnapshot(snapshot, options = {}) {
+  if (snapshot.selectedFactionId && state.factions[snapshot.selectedFactionId]) {
     state.selectedFactionId = snapshot.selectedFactionId;
   }
 
@@ -791,6 +1092,7 @@ function applyPlayerSnapshot(snapshot) {
   }
 
   state.player.gold = Number.isFinite(Number(persisted.gold)) ? Number(persisted.gold) : state.player.gold;
+  state.player.prowess = Number(persisted.prowess ?? persisted.renown) || 0;
   state.player.renown = Number.isFinite(Number(persisted.renown)) ? Number(persisted.renown) : state.player.renown;
   state.player.historyRenownClaimed = Number.isFinite(Number(persisted.historyRenownClaimed))
     ? Number(persisted.historyRenownClaimed)
@@ -798,19 +1100,26 @@ function applyPlayerSnapshot(snapshot) {
   state.player.historyRenownVersion = Number.isFinite(Number(persisted.historyRenownVersion))
     ? Number(persisted.historyRenownVersion)
     : 0;
-  state.player.houseName = sanitizeHouseName(persisted.houseName) || state.player.houseName;
+  state.player.houseName = account.authenticated ? sanitizeHouseName(persisted.houseName) : "";
   state.player.firstName = typeof persisted.firstName === "string" ? persisted.firstName.slice(0, 24) : state.player.firstName;
   state.player.lifeNumber = Number.isFinite(Number(persisted.lifeNumber))
     ? Math.max(0, Math.floor(Number(persisted.lifeNumber)))
     : state.player.lifeNumber;
   state.player.resources = mergeResourceBag(persisted.resources, state.player.resources);
+  state.player.resourceReceipts = { ...persisted.resourceReceipts };
+  state.player.campChestRefills = { ...persisted.campChestRefills };
+  state.player.lootReceiptCount = persisted.lootReceiptCount || 0;
+  state.player.lootReceipts = persisted.lootReceipts || [];
+  state.player.lootDeathReceiptCount = persisted.lootDeathReceiptCount || 0;
+  state.player.resourceDeathVersion = persisted.resourceDeathVersion || 0;
+  state.player.resourceDeathReceipts = { ...persisted.resourceDeathReceipts };
 
-  if (persisted.position) {
+  if (options.includePosition && persisted.position) {
     state.player.position.x = Number.isFinite(Number(persisted.position.x)) ? Number(persisted.position.x) : state.player.position.x;
     state.player.position.z = Number.isFinite(Number(persisted.position.z)) ? Number(persisted.position.z) : state.player.position.z;
   }
 
-  if (persisted.velocity) {
+  if (options.includePosition && persisted.velocity) {
     state.player.velocity.x = Number.isFinite(Number(persisted.velocity.x)) ? Number(persisted.velocity.x) : 0;
     state.player.velocity.z = Number.isFinite(Number(persisted.velocity.z)) ? Number(persisted.velocity.z) : 0;
   }
@@ -823,7 +1132,7 @@ function applyPlayerSnapshot(snapshot) {
     state.player.hotbar = persisted.hotbar.slice(0, state.player.hotbar.length);
   }
 
-  if (Array.isArray(persisted.inventory) && persisted.inventory.length) {
+  if (Array.isArray(persisted.inventory)) {
     state.player.inventory = persisted.inventory;
   }
 
@@ -832,12 +1141,19 @@ function applyPlayerSnapshot(snapshot) {
   }
 
   state.player.selectedGearItemId = persisted.selectedGearItemId ?? state.player.selectedGearItemId;
-  if (state.player.houseName) {
+  if (state.player.firstName || state.player.houseName) {
     if (!state.player.firstName) {
       beginNewPlayerLife(state);
     } else {
       setPlayerHouseName(state, state.player.houseName);
     }
+  }
+  if (Number.isFinite(persisted.hp)) state.player.hp = persisted.hp;
+  if (persisted.dead) {
+    state.player.dead = true;
+    state.player.hp = 0;
+    world.multiplayer.localDefeated = true;
+    world.multiplayer.respawnAt = Date.now() + PLAYER_RESPAWN_DELAY_MS;
   }
   syncFactionMemberRecord(state);
   removeLegacyStarterWeapons();
@@ -866,7 +1182,7 @@ function refreshPersistedWeaponRanges() {
 function removeLegacyStarterWeapons() {
   const removedIds = new Set(
     state.player.inventory
-      .filter((item) => item?.category === "Weapon" && STARTER_WEAPON_NAMES.has(item.name))
+      .filter((item) => item?.category === "Weapon" && !item.cheatSpawned && STARTER_WEAPON_NAMES.has(item.name))
       .map((item) => item.id)
   );
 
@@ -913,11 +1229,18 @@ function mergeFactionResources(source, fallback) {
         {
           gold: Number.isFinite(Number(store?.gold)) ? Number(store.gold) : fallback[faction.id].gold,
           items: Array.isArray(store?.items) ? store.items : fallback[faction.id].items ?? [],
+          blacksmith: normalizeBlacksmithProgress(store?.blacksmith, fallback[faction.id].blacksmith),
           resources: mergeResourceBag(store?.resources, fallback[faction.id].resources)
         }
       ];
     })
   );
+}
+
+function normalizeBlacksmithProgress(source, fallback = { xp: 0, level: 1 }) {
+  const xp = Math.max(0, Number.isFinite(Number(source?.xp)) ? Number(source.xp) : Number(fallback?.xp) || 0);
+  const level = getBlacksmithLevelFromXp(xp);
+  return { xp, level };
 }
 
 function mergeResourceBag(source, fallback) {
@@ -939,6 +1262,30 @@ function mergeFactionMap(source, fallback) {
   );
 }
 
+function mergeHouseRelations(source, fallback = {}) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return fallback;
+  }
+
+  const merged = {};
+  for (const [sourceHouse, targets] of Object.entries(source)) {
+    const sourceHouseId = sanitizeHouseName(sourceHouse);
+    if (!sourceHouseId || !targets || typeof targets !== "object" || Array.isArray(targets)) {
+      continue;
+    }
+
+    merged[sourceHouseId] = {};
+    for (const [targetHouse, status] of Object.entries(targets)) {
+      const targetHouseId = sanitizeHouseName(targetHouse);
+      if (targetHouseId && targetHouseId !== sourceHouseId && ["Ally", "Neutral", "Enemy"].includes(status)) {
+        merged[sourceHouseId][targetHouseId] = status;
+      }
+    }
+  }
+
+  return merged;
+}
+
 function readBooleanFlag(name, fallback) {
   const value = new URLSearchParams(window.location.search).get(name);
 
@@ -949,21 +1296,126 @@ function readBooleanFlag(name, fallback) {
   return !["0", "false", "off", "no"].includes(value.trim().toLowerCase());
 }
 
+const diagnostics = createPerformanceDiagnostics(readPerformanceCounters);
 setupRenderer();
-await loadPersistentState();
+for (;;) {
+  try { await loadPersistentState(); break; }
+  catch { await retryAccount("Could not load your saved game."); }
+}
 setupScene();
 setupUi();
 setupDebugTools();
+finishAccountLoading(account, async () => {
+  while (world.persistence.saveInFlight) await new Promise(resolve => setTimeout(resolve, 50));
+  return !state.player.firstName || await savePersistentState({ includeWorld: world.persistence.dirty });
+});
+window.addEventListener("pagehide", () => {
+  if (!state.player.firstName || world.persistence.loadInFlight || world.persistence.saveInFlight) return;
+  const body = JSON.stringify(buildPersistentPayload(world.persistence.dirty));
+  if (new Blob([body]).size < 60000) void fetch("/api/world/snapshot", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true });
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) void savePersistentState();
+});
+const minimap = createMinimap({
+  root: world.outdoorRoot,
+  gameFocusTarget: canvas,
+  onExpand: () => { world.keys.clear(); world.pointer.buttons = 0; stopSpaceLocationAction(); releaseLockedCameraForMenu(); },
+  onCollapse: () => { resumeLockedCameraAfterMenu(); },
+  getPlayer: () => state.player.position,
+  getPlayerHeading: () => world.playerMesh?.rotation.y ?? 0,
+  getDestinations: () => [
+    ...state.pois.map(poi => ({ ...poi, arrival: poi.id === LIBRARY_ID ? 48 : 32 })),
+    ...FACTIONS.map(castle => ({ id: castle.id, name: castle.name, position: castleEntrance(castle), castle: true, arrival: 5 }))
+  ],
+  getHeight: getTerrainHeightAt,
+  isWalkable: position => {
+    if (getInlandLakeDistance(position.x, position.z) < 1.08) return false;
+    const resolved = resolveOutdoorSceneryCollision(position, 2);
+    return Math.hypot(resolved.x - position.x, resolved.z - position.z) < 0.1;
+  },
+  isOutdoor: () => world.sceneMode === "outdoor",
+  isPlaying: () => ui.factionSelect.classList.contains("is-hidden"),
+  roads: WORLD_ROUTES
+});
+installPerformanceProbes();
 animate();
 
+function installPerformanceProbes() {
+  const p = diagnostics.profiler;
+  stepSimulation = p.wrap('Simulation', stepSimulation);
+  updateWorld = p.wrap('World updates', updateWorld);
+  updateFrameVisuals = p.wrap('Frame visuals', updateFrameVisuals);
+  updateCamera = p.wrap('Camera', updateCamera);
+  updateLockedThirdPersonAim = p.wrap('Camera aiming', updateLockedThirdPersonAim);
+  updateLocationPrompt = p.wrap('Interaction prompts', updateLocationPrompt);
+  updatePoiFlags = p.wrap('POI flags', updatePoiFlags);
+  updateCouriers = p.wrap('Courier visuals', updateCouriers);
+  updateMovement = p.wrap('Player movement', updateMovement);
+  updatePersistence = p.wrap('Persistence', updatePersistence);
+  updateMultiplayer = p.wrap('Network sync', updateMultiplayer);
+  updateRemotePlayers = p.wrap('Remote players', updateRemotePlayers);
+  updatePlayerAnimation = p.wrap('Player animation', updatePlayerAnimation);
+  updateHeldItemVisuals = p.wrap('Held equipment', updateHeldItemVisuals);
+  updatePlayerArmorVisuals = p.wrap('Player armour', updatePlayerArmorVisuals);
+  updateAttackAnimations = p.wrap('Player combat', updateAttackAnimations);
+  updatePveEnemies = p.wrap('Dungeon mobs', updatePveEnemies);
+  updateOutdoorDungeonMonsters = p.wrap('Outdoor mobs', updateOutdoorDungeonMonsters);
+  resolvePveMobCollisions = p.wrap('Mob collisions', resolvePveMobCollisions);
+  resolvePveMobPlayerCollisions = p.wrap('Mob/player collisions', resolvePveMobPlayerCollisions);
+  updatePveMobAnimation = p.wrap('Mob animation', updatePveMobAnimation);
+  updatePveEnemyAttack = p.wrap('Mob attacks', updatePveEnemyAttack);
+  updateProjectiles = p.wrap('Projectiles', updateProjectiles);
+  updateBloodSplats = p.wrap('Blood effects', updateBloodSplats);
+  updateWaterSplashEffects = p.wrap('Water effects', updateWaterSplashEffects);
+  updateDroppedItems = p.wrap('Dropped loot', updateDroppedItems);
+  updateStructures = p.wrap('Structures', updateStructures);
+  updateStreetLampLightingSystem = p.wrap('Street lighting', updateStreetLampLightingSystem);
+  updateDayNightLighting = p.wrap('Daylight / shadows', updateDayNightLighting);
+  updateDungeonLifecycle = p.wrap('Dungeon lifecycle', updateDungeonLifecycle);
+  updateOutpostDefenses = p.wrap('Outpost defenses', updateOutpostDefenses);
+  updateEntityStatusVisibility = p.wrap('Health-bar picking', updateEntityStatusVisibility);
+  updateWorldRenderDistance = p.wrap('Distance culling', updateWorldRenderDistance);
+  updateRenderStats = p.wrap('Render stats / readback', updateRenderStats);
+  refreshUi = p.wrap('HUD refresh', refreshUi);
+  minimap.update = p.wrap('Minimap', minimap.update);
+  world.worldLabels.update = p.wrap('World-label picking', world.worldLabels.update);
+  world.cameraOcclusion.update = p.wrap('Camera occlusion', world.cameraOcclusion.update);
+  world.renderer.render = p.wrap('Render submission', world.renderer.render);
+}
+
+function readPerformanceCounters() {
+  const outdoor = world.outdoorMonsters.filter(mob => !mob.dead && !mob.removed);
+  const dungeon = world.pveEnemies.filter(mob => !mob.dead && !mob.removed);
+  const effects = world.bloodEffects?.effects ?? [];
+  const memory = performance.memory;
+  const info = world.renderer.info;
+  const treeChunks = world.renderChunks.filter(mesh => mesh.visible && mesh.userData.instanceDetail);
+  return {
+    'Scene': world.sceneMode,
+    'Visible tree batches (full / distant)': world.sceneMode === 'outdoor'
+      ? `${treeChunks.filter(mesh => mesh.geometry === mesh.userData.instanceDetail.detailed).length} / ${treeChunks.filter(mesh => mesh.geometry === mesh.userData.instanceDetail.coarse).length}` : 'n/a',
+    'Mobs alive (outdoor / dungeon)': `${outdoor.length} / ${dungeon.length}`,
+    'Outdoor mobs within 100 units': world.sceneMode === 'outdoor'
+      ? outdoor.filter(mob => !mob.raidInteriorId && distance2D(mob.mesh.position, state.player.position) < 100).length : 'n/a',
+    'Remote players / route jobs': `${world.remotePlayers.size} / ${world.raidRoutePlanner?.size ?? 0}`,
+    'Projectiles / loot': `${world.projectiles.length} / ${world.droppedItems.length}`,
+    'Blood bursts active / pooled': `${effects.filter(effect => effect.active).length} / ${effects.length}`,
+    'Trail quads / water splashes': `${world.weaponTrails?.quads.length ?? 0} / ${world.waterSplashes.length}`,
+    'GPU resources (geometries / textures / programs)': `${info.memory.geometries} / ${info.memory.textures} / ${info.programs?.length ?? 0}`,
+    'Render size / pixel ratio': `${world.renderer.domElement.width} × ${world.renderer.domElement.height} / ${world.renderer.getPixelRatio().toFixed(2)}`,
+    'JS heap used / allocated': memory ? `${(memory.usedJSHeapSize / 1048576).toFixed(1)} / ${(memory.totalJSHeapSize / 1048576).toFixed(1)} MB` : 'unavailable in this browser',
+    'Network requests in flight': `publish ${world.multiplayer.publishInFlight}, poll ${world.multiplayer.pollInFlight}, save ${world.persistence.saveInFlight}`,
+    'Legacy GPU readback enabled': new URLSearchParams(location.search).has('renderDiagnostics') ? 'yes (can stall frames)' : 'no'
+  };
+}
+
 function setupRenderer() {
-  world.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  world.renderer.setSize(window.innerWidth, window.innerHeight);
   world.renderer.shadowMap.enabled = true;
   world.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   world.scene.background = new THREE.Color("#111814");
-  world.scene.fog = new THREE.Fog("#111814", 180, 620);
+  world.scene.fog = new THREE.Fog("#111814", 280, 1050);
 
   window.addEventListener("resize", resize);
   resize();
@@ -979,37 +1431,112 @@ function setupScene() {
   document.body.dataset.pveEnabled = String(GAME_FLAGS.pve);
 
   const ambient = new THREE.HemisphereLight("#f4e7c9", "#253026", 1.1);
+  ambient.name = "day-night-ambient";
   world.scene.add(ambient);
+  world.lighting.ambient = ambient;
 
   const sun = new THREE.DirectionalLight("#fff1c9", 2.1);
-  sun.position.set(-70, 95, -35);
-  sun.castShadow = true;
-  sun.shadow.camera.left = -280;
-  sun.shadow.camera.right = 280;
-  sun.shadow.camera.top = 280;
-  sun.shadow.camera.bottom = -280;
-  sun.shadow.mapSize.set(2048, 2048);
-  world.scene.add(sun);
+  sun.name = "day-night-sun";
+  world.lighting.shadows = createLocalShadows(sun);
+  world.scene.add(sun, sun.target);
+  world.lighting.sun = sun;
+  updateDayNightLighting(0);
 
-  const ground = new THREE.Mesh(createTerrainGeometry(), createTerrainMaterial());
+  const ground = createChunkedTerrain();
   ground.name = "terrain";
   ground.receiveShadow = true;
   addOutdoor(ground);
   world.meshes.terrain = ground;
 
-  createRoads();
+  createCoastalSea();
+  createInlandLake();
   createFactionHubs();
   createPoiMeshes();
   createOutdoorScenery();
+  createDesignedLandmarks();
   createLongGrassPatches();
   createCastleInterior();
   createPoiInteriors();
+  world.cameraOcclusion.register(world.outdoorRoot);
+  world.cameraOcclusion.register(world.interiorRoot);
+  world.cameraOcclusion.register(world.poiInteriorRoot);
   createPlayerMesh();
   createTowerBowView();
+  world.renderChunks = [];
+  world.outdoorRoot.traverse(object => { if (object.userData.renderBounds) world.renderChunks.push(object); });
+}
+
+function updateDayNightLighting(deltaSeconds) {
+  const nightAmount = getNightAmount(state.elapsed);
+  const sunLight = world.lighting.sun;
+  const ambientLight = world.lighting.ambient;
+  const isNight = nightAmount > 0.62;
+
+  world.lighting.nightAmount = nightAmount;
+  world.lighting.isNight = isNight;
+
+  if (sunLight) {
+    const anchor = state.player.position;
+    const groundY = world.sceneMode === "outdoor" ? getTerrainHeightAt(anchor.x, anchor.z) : 0;
+    world.lighting.shadows.update(deltaSeconds, state.elapsed, new THREE.Vector3(anchor.x, groundY, anchor.z), world.sceneMode);
+  }
+
+  if (ambientLight) {
+    ambientLight.color.lerpColors(new THREE.Color("#f4e7c9"), new THREE.Color("#7f96c7"), nightAmount);
+    ambientLight.groundColor.lerpColors(new THREE.Color("#253026"), new THREE.Color("#090b12"), nightAmount);
+    ambientLight.intensity = THREE.MathUtils.lerp(1.1, 0.44, nightAmount);
+  }
+
+  if (world.sceneMode === "outdoor") {
+    world.scene.background = new THREE.Color().lerpColors(new THREE.Color("#9fb9d8"), new THREE.Color("#080b13"), nightAmount);
+    world.scene.fog.color.lerpColors(new THREE.Color("#9ea990"), new THREE.Color("#0e121a"), nightAmount);
+    world.scene.fog.near = THREE.MathUtils.lerp(420, 170, nightAmount);
+    world.scene.fog.far = THREE.MathUtils.lerp(1100, 850, nightAmount);
+  } else {
+    // All interiors have a black void, independent of the outdoor time of day.
+    world.scene.background = new THREE.Color("#000000");
+    world.scene.fog.color.set("#000000");
+    world.scene.fog.near = 170;
+    world.scene.fog.far = 850;
+  }
+
+  const terrainUniforms = world.meshes.terrain?.material?.uniforms;
+  if (terrainUniforms?.nightAmount) {
+    terrainUniforms.nightAmount.value = nightAmount;
+    terrainUniforms.sunDirection.value.subVectors(sunLight.position, sunLight.target.position).normalize();
+    terrainUniforms.sunColor.value.copy(sunLight.color);
+    terrainUniforms.sunStrength.value = sunLight.intensity / 2.1;
+    terrainUniforms.shadowAnchor.value.set(sunLight.target.position.x, sunLight.target.position.z);
+  }
+
+  document.body.dataset.timeOfDay = isNight ? "night" : "day";
+}
+
+function getNightAmount(elapsedSeconds) {
+  const phase = ((elapsedSeconds % DAY_NIGHT_CYCLE_SECONDS) + DAY_NIGHT_CYCLE_SECONDS) % DAY_NIGHT_CYCLE_SECONDS;
+
+  if (phase < DAY_DURATION_SECONDS) {
+    return phase < DAY_DURATION_SECONDS - DAWN_DUSK_BLEND_SECONDS
+      ? 0
+      : smoothstep(DAY_DURATION_SECONDS - DAWN_DUSK_BLEND_SECONDS, DAY_DURATION_SECONDS, phase);
+  }
+
+  const nightPhase = phase - DAY_DURATION_SECONDS;
+  return nightPhase < NIGHT_DURATION_SECONDS - DAWN_DUSK_BLEND_SECONDS
+    ? 1
+    : 1 - smoothstep(NIGHT_DURATION_SECONDS - DAWN_DUSK_BLEND_SECONDS, NIGHT_DURATION_SECONDS, nightPhase);
 }
 
 function addOutdoor(mesh) {
   world.outdoorRoot.add(mesh);
+}
+
+function addDistantLandmark(mesh) {
+  const sphere = new THREE.Box3().setFromObject(mesh).getBoundingSphere(new THREE.Sphere());
+  if (Number.isFinite(sphere.radius)) mesh.userData.renderBounds = {
+    x:sphere.center.x, z:sphere.center.z, radius:sphere.radius, distance:WORLD_RENDER_DISTANCE
+  };
+  addOutdoor(mesh);
 }
 
 function removeFromParent(mesh) {
@@ -1018,160 +1545,193 @@ function removeFromParent(mesh) {
   }
 }
 
-function createRoads() {
-  const material = new THREE.MeshStandardMaterial({
-    color: "#594936",
-    roughness: 0.98
-  });
-  const roads = [
-    { x: 0, z: 0, sx: 610, sz: 5, rotation: Math.PI * 0.25 },
-    { x: 0, z: 0, sx: 610, sz: 5, rotation: -Math.PI * 0.25 },
-    { x: 0, z: 0, sx: 420, sz: 5, rotation: 0 },
-    { x: 0, z: 0, sx: 5, sz: 420, rotation: 0 }
-  ];
-
-  for (const road of roads) {
-    createRoadSegments(road, material);
-  }
+function tagInteriorCameraWall(mesh) {
+  mesh.userData.interiorCameraWall = true;
+  world.interiorCameraWalls.push(mesh);
+  return mesh;
 }
 
-function createRoadSegments(road, material) {
-  const length = Math.max(road.sx, road.sz);
-  const width = Math.min(road.sx, road.sz);
-  const segments = Math.ceil(length / 18);
-  const segmentLength = length / segments;
+function createCoastalSea() {
+  const ocean = new THREE.Mesh(createCoastalWaterGeometry(), new THREE.MeshStandardMaterial({ color: "#447c88", roughness: 0.36, metalness: 0.16 }));
+  ocean.position.y = -3.5;
+  ocean.name = "open-sea";
+  ocean.userData.cameraOcclusionExcluded = true;
+  addOutdoor(ocean);
+}
 
-  for (let index = 0; index < segments; index += 1) {
-    const offset = -length * 0.5 + segmentLength * (index + 0.5);
-    const localX = road.sx >= road.sz ? offset : 0;
-    const localZ = road.sx >= road.sz ? 0 : offset;
-    const sin = Math.sin(road.rotation);
-    const cos = Math.cos(road.rotation);
-    const x = road.x + localX * cos - localZ * sin;
-    const z = road.z + localX * sin + localZ * cos;
-    const height = getTerrainHeightAt(x, z);
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(road.sx >= road.sz ? segmentLength : width, 0.08, road.sx >= road.sz ? width : segmentLength), material);
-    mesh.position.set(x, height + 0.08, z);
-    mesh.rotation.y = road.rotation;
-    mesh.receiveShadow = true;
-    addOutdoor(mesh);
+
+
+
+
+function createInlandLake() {
+  for (const basin of INLAND_LAKES) createLakeBasin(basin);
+}
+
+function createLakeBasin(basin) {
+  const lake = new THREE.Group();
+  lake.name = "inland-lake";
+
+  // Sand is shaded directly on the terrain; a second conforming mesh
+  // intersects the terrain triangles and flickers as the viewpoint changes.
+  const water = new THREE.Mesh(
+    createInlandLakeSurfaceGeometry(basin, 120),
+    new THREE.MeshStandardMaterial({
+      color: "#ffffff",
+      map: createLakeWaterTexture(),
+      emissive: "#07394a",
+      emissiveIntensity: 0.14,
+      roughness: 0.24,
+      metalness: 0.02,
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    })
+  );
+  water.name = "inland-lake-water";
+  water.position.y = basin.waterHeight;
+  water.receiveShadow = true;
+  lake.add(water);
+
+  addOutdoor(lake);
+}
+
+function createInlandLakeSurfaceGeometry(lake, segments = 120) {
+  const geometry = new THREE.BufferGeometry();
+  const vertices = [lake.x, 0, lake.z];
+  const uvs = [0.5, 0.5];
+  const indices = [];
+  const cosRotation = Math.cos(lake.rotation);
+  const sinRotation = Math.sin(lake.rotation);
+
+  for (let segment = 0; segment <= segments; segment += 1) {
+    const angle = (segment / segments) * Math.PI * 2;
+    // Bury the polygon edge inside the bank. The terrain depth test, rather
+    // than a hovering polygon rim, determines where water meets land.
+    const edgeScale = lake.bankScale * getInlandLakeShoreScale(angle);
+    const localX = Math.cos(angle) * lake.radiusX * edgeScale;
+    const localZ = Math.sin(angle) * lake.radiusZ * edgeScale;
+    vertices.push(
+      lake.x + localX * cosRotation - localZ * sinRotation,
+      0,
+      lake.z + localX * sinRotation + localZ * cosRotation
+    );
+    uvs.push(0.5 + Math.cos(angle) * 0.5, 0.5 + Math.sin(angle) * 0.5);
+
+    if (segment > 0) {
+      indices.push(0, segment + 1, segment);
+    }
   }
+
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createTerrainConformingQuadGeometry(centerX, centerZ, width, depth, rotation, yOffset = 0.08) {
+  const geometry = new THREE.BufferGeometry();
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const localCorners = [
+    [-width * 0.5, -depth * 0.5],
+    [width * 0.5, -depth * 0.5],
+    [width * 0.5, depth * 0.5],
+    [-width * 0.5, depth * 0.5]
+  ];
+  const vertices = [];
+
+  for (const [localX, localZ] of localCorners) {
+    const x = centerX + localX * cos - localZ * sin;
+    const z = centerZ + localX * sin + localZ * cos;
+    vertices.push(x, getTerrainHeightAt(x, z) + yOffset, z);
+  }
+
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+  geometry.setIndex([0, 2, 1, 0, 3, 2]);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function createFactionHubs() {
+  world.castleExteriorColliders = [];
   for (const faction of FACTIONS) {
     const group = new THREE.Group();
     group.position.set(faction.position.x, getTerrainHeightAt(faction.position.x, faction.position.z), faction.position.z);
 
-    const zone = new THREE.Mesh(
-      new THREE.CircleGeometry(faction.bufferRadius, 80),
-      new THREE.MeshBasicMaterial({
-        color: faction.color,
-        transparent: true,
-        opacity: 0.11,
-        side: THREE.DoubleSide
-      })
-    );
-    zone.rotation.x = -Math.PI / 2;
-    zone.position.y = 0.08;
-    group.add(zone);
-
     const keep = createKeep(faction);
     keep.name = "factionKeep";
+    for (const collider of keep.userData.colliders) world.castleExteriorColliders.push({ ...collider, x: faction.position.x + collider.x, z: faction.position.z + collider.z });
     keep.traverse((child) => {
       child.userData.factionId = faction.id;
     });
     group.add(keep);
 
     const label = createTextSprite(faction.name, faction.accent, 50);
-    label.position.set(0, 27, 0);
+    label.name = "castleLabel";
+    label.position.set(0, 59, 0);
     group.add(label);
 
-    addOutdoor(group);
+    addDistantLandmark(group);
     world.meshes.factions.set(faction.id, group);
     world.hoverBases.push(keep);
   }
 }
 
 function createKeep(faction) {
-  const group = new THREE.Group();
-  const stone = createStoneBrickMaterial();
-  const banner = new THREE.MeshStandardMaterial({
-    color: faction.color,
-    roughness: 0.7
-  });
-  const roof = new THREE.MeshStandardMaterial({
-    color: "#3b2d28",
-    roughness: 0.8
-  });
-
-  const body = new THREE.Mesh(new THREE.BoxGeometry(18, 12, 18), stone);
-  body.position.y = 6;
-  body.castShadow = true;
-  body.receiveShadow = true;
-  group.add(body);
-
-  const roofMesh = new THREE.Mesh(new THREE.ConeGeometry(14, 8, 4), roof);
-  roofMesh.position.y = 16;
-  roofMesh.rotation.y = Math.PI / 4;
-  roofMesh.castShadow = true;
-  group.add(roofMesh);
-
-  const towers = [
-    [-13, -13],
-    [13, -13],
-    [-13, 13],
-    [13, 13]
-  ];
-
-  for (const [x, z] of towers) {
-    const tower = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4, 16, 8), stone);
-    tower.position.set(x, 8, z);
-    tower.castShadow = true;
-    tower.receiveShadow = true;
-    group.add(tower);
-
-    const towerRoof = new THREE.Mesh(new THREE.ConeGeometry(4.7, 6, 8), roof);
-    towerRoof.position.set(x, 18, z);
-    towerRoof.castShadow = true;
-    group.add(towerRoof);
-  }
-
-  const flagPole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.22, 0.22, 13, 8),
-    new THREE.MeshStandardMaterial({ color: "#2b241b" })
-  );
-  flagPole.position.set(0, 22, 0);
-  group.add(flagPole);
-
-  const flag = new THREE.Mesh(new THREE.BoxGeometry(5.5, 3.2, 0.25), banner);
-  flag.position.set(2.7, 24, 0);
-  group.add(flag);
-
-  return group;
+  return createCastleExterior(faction, Boolean(state.factions[faction.id]));
 }
 
 function createPoiMeshes() {
+  world.poiExteriorColliders = [];
+
   for (const poi of POIS) {
+    const layout = getPoiExteriorLayout(poi);
     const group = new THREE.Group();
     group.position.set(poi.position.x, getTerrainHeightAt(poi.position.x, poi.position.z), poi.position.z);
 
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(poi.radius, 0.18, 8, 96),
-      new THREE.MeshBasicMaterial({ color: "#d6a542", transparent: true, opacity: 0.45 })
+      new THREE.TorusGeometry(2.2, 0.07, 8, 48),
+      new THREE.MeshBasicMaterial({ color: "#d6a542", transparent: true, opacity: 0.65, depthWrite: false })
     );
+    ring.name = "poiDoorInteractionRing";
     ring.rotation.x = Math.PI / 2;
-    ring.position.y = 0.25;
+    ring.position.set(layout.entry.x, Math.max(0.4, getTerrainHeightAt(poi.position.x + layout.entry.x, poi.position.z + layout.entry.z) - group.position.y + 0.12), layout.entry.z);
+    ring.visible = false;
     group.add(ring);
 
     group.add(createPoiModel(poi));
+
+    const station = getPoiWorkstation(poi);
+    if (station) {
+      const workbench = createPoiWorkstationModel(poi);
+      const stationHeight = getTerrainHeightAt(station.x, station.z);
+      workbench.position.set(station.x - poi.position.x, stationHeight - group.position.y, station.z - poi.position.z);
+      const stationLabel = createTextSprite(station.name, station.color, 24);
+      stationLabel.position.set(0, 10.6, -0.5);
+      workbench.add(stationLabel);
+      group.add(workbench);
+      world.poiExteriorColliders.push({ poiId: poi.id, x: station.x, z: station.z, halfWidth: station.halfWidth, halfDepth: station.halfDepth });
+    }
+
+    for (const block of layout.blocks) {
+      world.poiExteriorColliders.push({
+        poiId: poi.id,
+        x: poi.position.x + block.x,
+        z: poi.position.z + block.z,
+        halfWidth: block.width / 2,
+        halfDepth: block.depth / 2
+      });
+    }
 
     const flagPole = new THREE.Mesh(
       new THREE.CylinderGeometry(0.18, 0.18, 7, 8),
       new THREE.MeshStandardMaterial({ color: "#2b241b" })
     );
     flagPole.name = "flagPole";
-    flagPole.position.set(5.5, 3.5, 0);
+    flagPole.position.set(layout.blocks[0].width * 0.32, 3.5, layout.entry.z + 1.5);
     group.add(flagPole);
 
     const flag = new THREE.Mesh(
@@ -1179,155 +1739,305 @@ function createPoiMeshes() {
       new THREE.MeshStandardMaterial({ color: "#6f6a5f" })
     );
     flag.name = "flag";
-    flag.position.set(7.2, 5.8, 0);
+    flag.position.set(layout.blocks[0].width * 0.32 + 1.7, 5.8, layout.entry.z + 1.5);
     group.add(flag);
 
     const label = createTextSprite(poi.name, "#f4e7c9", 38);
-    label.position.set(0, 11, 0);
+    label.position.set(0, poi.id === LIBRARY_ID ? 54 : poi.type === "Dungeon" ? 25 : 18, -4);
+    if (poi.type === "Dungeon") { flag.visible = false; flagPole.visible = false; }
+    if (poi.id === LIBRARY_ID) { flag.visible = false; flagPole.visible = false; ring.visible = false; }
     group.add(label);
 
-    addOutdoor(group);
+    addDistantLandmark(group);
     world.meshes.pois.set(poi.id, group);
   }
 }
 
+function createPoiExteriorLayout(wallColor, roofColor, blocks) {
+  const main = blocks[0];
+  return {
+    wallColor,
+    roofColor,
+    blocks,
+    entry: {
+      x: main.x,
+      z: main.z + main.depth / 2 + 2.8
+    }
+  };
+}
+
+function getPoiExteriorLayout(poi) {
+  if (poi.id === LIBRARY_ID) return createPoiExteriorLayout("#b8af96", "#34545b", [
+    { x: 0, z: -8, width: 52, depth: 40, height: 24 },
+    { x: -36, z: -13, width: 18, depth: 26, height: 32 },
+    { x: 36, z: -13, width: 18, depth: 26, height: 32 }
+  ]);
+  return POI_EXTERIOR_LAYOUTS[poi.id] ?? POI_EXTERIOR_LAYOUTS[({ Dungeon: "ebon-hollow", Quarry: "north-quarry", "Lumber Camp": "kingswood", "Wheat Field": "millfield", "Iron Mine": "blackridge", "Trade Post": "river-market" })[poi.type]] ?? createPoiExteriorLayout("#756a59", "#40332c", [
+    { x: 0, z: -4, width: 46, depth: 32, height: 11 }
+  ]);
+}
+
+function getPoiEntrancePosition(poi) {
+  const entry = getPoiExteriorLayout(poi).entry;
+  return {
+    x: poi.position.x + entry.x,
+    z: poi.position.z + entry.z
+  };
+}
+
 function createPoiModel(poi) {
+  if (poi.id === LIBRARY_ID) return createLibraryExterior();
   const group = new THREE.Group();
+  const layout = getPoiExteriorLayout(poi);
   const resource = RESOURCE_LOOKUP[poi.resourceId];
-  const material = new THREE.MeshStandardMaterial({
-    color: resource?.color ?? "#d6a542",
-    roughness: 0.82
-  });
+  const compound = new THREE.Group();
+
+  compound.add(createPoiArchitecture(poi, layout));
+
+  if (poi.type !== "Trade Post" && poi.type !== "Iron Mine") {
+    addPoiExteriorDetails(compound, poi, layout, resource?.color ?? "#d6a542");
+  }
 
   if (poi.type === "Dungeon") {
-    const stone = new THREE.MeshStandardMaterial({ color: "#2e3035", roughness: 0.95 });
-    const rune = new THREE.MeshStandardMaterial({ color: "#8457bd", emissive: "#3a1a68", emissiveIntensity: 0.9 });
-
-    const stair = new THREE.Mesh(new THREE.BoxGeometry(14, 0.6, 8), stone);
-    stair.position.set(0, 0.3, 0.5);
-    stair.castShadow = true;
-    stair.receiveShadow = true;
-    group.add(stair);
-
-    for (const x of [-3.8, 3.8]) {
-      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.1, 6.5, 8), stone);
-      pillar.position.set(x, 3.25, -3.2);
-      pillar.castShadow = true;
-      group.add(pillar);
-    }
-
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(9, 1.2, 1.6), stone);
-    lintel.position.set(0, 6.4, -3.2);
-    lintel.castShadow = true;
-    group.add(lintel);
-
-    const door = new THREE.Mesh(new THREE.BoxGeometry(5.4, 5.4, 0.45), new THREE.MeshStandardMaterial({ color: "#050505", roughness: 1 }));
-    door.position.set(0, 2.8, -3.55);
-    group.add(door);
-
-    for (const x of [-4.2, 4.2]) {
-      const obelisk = new THREE.Mesh(new THREE.ConeGeometry(0.8, 5.4, 4), rune);
-      obelisk.position.set(x * 1.7, 2.7, -1.2);
-      obelisk.castShadow = true;
-      group.add(obelisk);
-    }
-  } else if (poi.resourceId === "stone") {
-    for (let index = 0; index < 8; index += 1) {
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1.8 + Math.random() * 1.2), material);
-      rock.position.set(Math.random() * 10 - 5, 1.2, Math.random() * 10 - 5);
-      rock.rotation.set(Math.random(), Math.random(), Math.random());
-      rock.castShadow = true;
-      group.add(rock);
-    }
-  } else if (poi.resourceId === "wood") {
-    const trunkMaterial = new THREE.MeshStandardMaterial({ color: "#6f4222", roughness: 0.9 });
-    const leafMaterial = new THREE.MeshStandardMaterial({ color: "#315f32", roughness: 0.75 });
-
-    for (let index = 0; index < 7; index += 1) {
-      const tree = new THREE.Group();
-      tree.position.set(Math.random() * 13 - 6.5, 0, Math.random() * 13 - 6.5);
-
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.62, 5, 7), trunkMaterial);
-      trunk.position.y = 2.5;
-      trunk.castShadow = true;
-      tree.add(trunk);
-
-      const leaves = new THREE.Mesh(new THREE.ConeGeometry(2.4, 6, 9), leafMaterial);
-      leaves.position.y = 7;
-      leaves.castShadow = true;
-      tree.add(leaves);
-
-      group.add(tree);
-    }
-  } else if (poi.resourceId === "wheat") {
-    for (let index = 0; index < 34; index += 1) {
-      const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 2.1, 5), material);
-      stalk.position.set(Math.random() * 15 - 7.5, 1, Math.random() * 13 - 6.5);
-      stalk.rotation.z = Math.random() * 0.2 - 0.1;
-      group.add(stalk);
-    }
-  } else if (poi.resourceId === "iron") {
-    const cliff = new THREE.Mesh(
-      new THREE.BoxGeometry(14, 7, 6),
-      new THREE.MeshStandardMaterial({ color: "#3d4249", roughness: 0.95 })
-    );
-    cliff.position.set(0, 3.5, 2);
-    cliff.castShadow = true;
-    cliff.receiveShadow = true;
-    group.add(cliff);
-
-    const mouth = new THREE.Mesh(
-      new THREE.BoxGeometry(5, 4.5, 0.4),
-      new THREE.MeshStandardMaterial({ color: "#111111", roughness: 1 })
-    );
-    mouth.position.set(0, 2.25, -1.2);
-    group.add(mouth);
+    compound.name = "dungeonEntranceOpen";
+    group.add(compound);
+    group.add(createCollapsedDungeonExterior(layout));
   } else {
-    const stallMaterial = new THREE.MeshStandardMaterial({ color: "#8b5132", roughness: 0.78 });
-    const clothMaterial = new THREE.MeshStandardMaterial({ color: "#c7a04a", roughness: 0.6 });
-    const stall = new THREE.Mesh(new THREE.BoxGeometry(12, 3, 8), stallMaterial);
-    stall.position.y = 1.5;
-    stall.castShadow = true;
-    group.add(stall);
-
-    const canopy = new THREE.Mesh(new THREE.BoxGeometry(13.5, 1, 9.5), clothMaterial);
-    canopy.position.y = 4.1;
-    canopy.castShadow = true;
-    group.add(canopy);
+    group.add(compound);
   }
 
   return group;
 }
 
-function createOutdoorScenery() {
-  const group = new THREE.Group();
-  world.sceneryColliders = [];
+function addPoiExteriorDetails(group, poi, layout, resourceColor) {
+  const accent = new THREE.MeshStandardMaterial({ color: resourceColor, roughness: 0.82 });
+  const wood = new THREE.MeshStandardMaterial({ color: "#5b371f", roughness: 0.9 });
+  const frontZ = layout.entry.z + 0.4;
 
-  for (const scenery of OUTDOOR_SCENERY) {
-    const mesh = scenery.type === "tree"
-      ? createOutdoorTree(scenery.scale)
-      : createOutdoorRock(scenery.scale);
+  if (poi.resourceId === "stone") {
+    for (const [x, z, scale] of [[-18, frontZ, 1.5], [-24, frontZ - 4, 1.15], [18, frontZ + 1, 1.2]]) {
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(scale), accent);
+      rock.position.set(x, scale * 0.7, z);
+      rock.castShadow = true;
+      group.add(rock);
+    }
+  } else if (poi.resourceId === "wood") {
+    for (const zOffset of [-2.2, 0, 2.2]) {
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 12, 10), wood);
+      log.position.set(16, 0.85, frontZ + zOffset);
+      log.rotation.z = Math.PI / 2;
+      log.castShadow = true;
+      group.add(log);
+    }
+  } else if (poi.resourceId === "wheat") {
+    for (const [x, z] of [[-18, frontZ], [-14, frontZ + 3], [18, frontZ + 1]]) {
+      const bale = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 2.3, 14), accent);
+      bale.position.set(x, 1.7, z);
+      bale.rotation.z = Math.PI / 2;
+      bale.castShadow = true;
+      group.add(bale);
+    }
+  } else if (poi.resourceId === "iron") {
+    const annex = layout.blocks[1];
+    const chimney = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.35, 11, 10), accent);
+    chimney.position.set(annex.x, annex.height + 4.5, annex.z);
+    chimney.castShadow = true;
+    group.add(chimney);
+  } else if (poi.type === "Trade Post") {
+    for (const x of [-17, 17]) {
+      const stall = new THREE.Mesh(new THREE.BoxGeometry(10, 3.2, 5.5), wood);
+      stall.position.set(x, 1.6, frontZ + 1);
+      stall.castShadow = true;
+      group.add(stall);
+      const canopy = new THREE.Mesh(new THREE.BoxGeometry(11, 0.75, 6.5), accent);
+      canopy.position.set(x, 4.25, frontZ + 1);
+      canopy.castShadow = true;
+      group.add(canopy);
+    }
+  }
+}
 
-    mesh.position.set(scenery.x, getTerrainHeightAt(scenery.x, scenery.z), scenery.z);
-    mesh.rotation.y = ((Math.abs(scenery.x * 13 + scenery.z * 7) % 100) / 100) * Math.PI * 2;
-    group.add(mesh);
+function createCollapsedDungeonExterior(layout) {
+  const collapsed = new THREE.Group();
+  collapsed.name = "dungeonEntranceCollapsed";
+  collapsed.visible = false;
+  const rubble = new THREE.MeshStandardMaterial({ color: "#4f504d", roughness: 0.98 });
 
-    world.sceneryColliders.push({
-      type: scenery.type,
-      x: scenery.x,
-      z: scenery.z,
-      radius: (scenery.type === "tree" ? 1.35 : 1.7) * scenery.scale,
-      height: (scenery.type === "tree" ? 9.8 : 3.4) * scenery.scale,
-      groundY: mesh.position.y,
-      platformHeight: scenery.type === "rock" ? ROCK_PLATFORM_HEIGHT * scenery.scale : 0,
-      platformRadius: scenery.type === "rock" ? 1.7 * scenery.scale * ROCK_PLATFORM_RADIUS_SCALE : 0
-    });
+  for (let index = 0; index < 30; index += 1) {
+    const radius = 1.1 + (index % 5) * 0.38;
+    const angle = index * 2.399963;
+    const distance = 4 + (index % 9) * 2.25;
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(radius), rubble);
+    rock.position.set(Math.cos(angle) * distance, radius * 0.58, -3 + Math.sin(angle) * distance * 0.68);
+    rock.rotation.set(angle * 0.21, angle * 0.37, angle * 0.13);
+    rock.castShadow = true;
+    rock.receiveShadow = true;
+    collapsed.add(rock);
   }
 
+  const blockedDoor = new THREE.Mesh(new THREE.BoxGeometry(9, 7, 3), rubble);
+  blockedDoor.position.set(layout.entry.x, 3.2, layout.entry.z - 3);
+  blockedDoor.rotation.set(0.12, 0.18, -0.08);
+  blockedDoor.castShadow = true;
+  collapsed.add(blockedDoor);
+  return collapsed;
+}
+
+function createOutdoorScenery() {
+  const scenery = createBiomeSceneryLayout();
+  const group = createInstancedLandscape(scenery, getTerrainHeightAt);
+  world.sceneryColliders = scenery.map((entry) => ({
+    type: entry.type === "conifer" ? "tree" : entry.type,
+    x: entry.x, z: entry.z,
+    radius: (entry.type === "rock" ? 1.7 : 0.8) * entry.scale,
+    height: (entry.type === "rock" ? 3.4 : 14) * entry.scale,
+    groundY: getTerrainHeightAt(entry.x, entry.z),
+    ...(entry.type === "rock" ? rockColliderProfile(entry) : {})
+  }));
+  world.sceneryGrid = new SpatialGrid(world.sceneryColliders);
   world.meshes.scenery = group;
   addOutdoor(group);
-  document.body.dataset.sceneryColliders = String(world.sceneryColliders.length);
+  document.body.dataset.biomeScenery = String(scenery.length);
 }
+
+function createDesignedLandmarks() {
+  for (const poi of POIS) {
+    const heightAt = (x,z) => getTerrainHeightAt(poi.position.x+x, poi.position.z+z);
+    const setting = createPoiSetting(poi, heightAt);
+    setting.position.set(poi.position.x, heightAt(0,0), poi.position.z);
+    addDistantLandmark(setting);
+  }
+  world.outdoorRoot.add(world.campLights);
+  for (const [index, camp] of MOB_CAMPS.entries()) {
+    const mesh = createCampModel(index);
+    mesh.userData.campId = camp.id;
+    world.campModels.push(mesh);
+    mesh.userData.chests.forEach((chest, chestIndex) => {
+      chest.userData.lootId = `${camp.id}:${chestIndex}`;
+      const label = createTextSprite("Loot chest", "#dfb68a", 10);
+      label.position.y = 4;
+      chest.add(label);
+      chest.userData.label = label;
+      world.campChests.push(chest);
+      updateCampChest(chest, state.player);
+    });
+    mesh.position.set(camp.position.x, getTerrainHeightAt(camp.position.x, camp.position.z), camp.position.z);
+    const label = createTextSprite(camp.name, "#dfb68a", 30);
+    label.position.y = 13; mesh.add(label); addDistantLandmark(mesh);
+  }
+  const stone = new THREE.MeshStandardMaterial({ color: "#b2aa92", roughness: 0.95 });
+  const court = new THREE.Mesh(new THREE.CylinderGeometry(66,66,0.3,64), stone);
+  court.receiveShadow = true;
+  court.position.set(0, getTerrainHeightAt(0,0)+0.1, 0); addDistantLandmark(court);
+  // A clear processional approach framed by four obelisks.
+  for (const x of [-24,24]) for (const z of [36,60]) {
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.6,1.8,9,4), stone);
+    pillar.castShadow = pillar.receiveShadow = true;
+    pillar.position.set(x,getTerrainHeightAt(x,z)+4.5,z); addDistantLandmark(pillar);
+  }
+}
+
+function addOutdoorSceneryEntry(group, scenery, includeCollider) {
+  const mesh = createOutdoorSceneryMesh(scenery);
+  mesh.position.set(scenery.x, getTerrainHeightAt(scenery.x, scenery.z), scenery.z);
+  mesh.rotation.y = scenery.rotation ?? ((Math.abs(scenery.x * 13 + scenery.z * 7) % 100) / 100) * Math.PI * 2;
+  group.add(mesh);
+
+  if (!includeCollider) {
+    return;
+  }
+
+  const colliderProfile = getOutdoorSceneryColliderProfile(scenery);
+  world.sceneryColliders.push({
+    type: scenery.type,
+    x: scenery.x,
+    z: scenery.z,
+    radius: colliderProfile.radius,
+    height: colliderProfile.height,
+    groundY: mesh.position.y,
+    ...(scenery.type === "rock" ? rockColliderProfile({ ...scenery, rotation: mesh.rotation.y }) : {})
+  });
+}
+
+function createOutdoorSceneryMesh(scenery) {
+  if (scenery.type === "palm") {
+    return createOutdoorPalmTree(scenery.scale);
+  }
+
+  return scenery.type === "tree"
+    ? createOutdoorTree(scenery.scale)
+    : createOutdoorRock(scenery.scale, rockVariant(scenery));
+}
+
+function getOutdoorSceneryColliderProfile(scenery) {
+  if (scenery.type === "palm") {
+    return { radius: 1.05 * scenery.scale, height: 16.8 * scenery.scale };
+  }
+
+  if (scenery.type === "tree") {
+    return { radius: 1.35 * scenery.scale, height: 9.8 * scenery.scale };
+  }
+
+  return { radius: 1.7 * scenery.scale, height: 3.4 * scenery.scale };
+}
+
+function createBiomeSceneryLayout() {
+  const scenery = [];
+  for (const [regionIndex,region] of REGIONS.entries()) {
+    for (let index = 0; index < region.count * 3; index++) {
+      const angle = index * 2.399963;
+      const radius = Math.sqrt(hash2d(index,regionIndex+341));
+      const x = region.x + Math.cos(angle)*region.radiusX*radius;
+      const z = region.z + Math.sin(angle)*region.radiusZ*radius;
+      if (!canPlaceBiomeSceneryAt(x,z,region.scenery,scenery)) continue;
+      if (getInlandLakeDistance(x,z) < 1.3) continue;
+      const type = region.id === "alpine" && (getTerrainHeightAt(x,z) > 125 || index % 4 === 0) ? "rock" : region.scenery;
+      scenery.push({ type, x,z,scale: (type === "rock" ? 0.5 : 0.75) + Math.pow(hash2d(index,regionIndex+991), type === "rock" ? 1.7 : 1.45) * (type === "rock" ? 5.75 : region.id === "forest" ? 4.5 : type === "palm" ? 2.3 : 3.3), variant: index % 3, rotation: angle });
+    }
+  }
+  // Resource sites sit in their landscape instead of isolated on bare grass.
+  for (const [poiIndex,poi] of POIS.entries()) {
+    if (poi.type === "Library" || poi.type === "Wheat Field" || poi.type === "Trade Post") continue;
+    const type = poi.type === "Lumber Camp" ? "tree" : "rock";
+    for (let index = 0; index < 38; index++) {
+      const angle = index * 2.399963;
+      const radius = 75+hash2d(index,poiIndex+700)*95;
+      const x = poi.position.x+Math.cos(angle)*radius, z = poi.position.z+Math.sin(angle)*radius;
+      if (canPlaceBiomeSceneryAt(x,z,type,scenery)) scenery.push({type,x,z,scale: type === "rock" ? 0.85+Math.pow(hash2d(index,53),1.35)*4.55 : 1.3+hash2d(index,61)*3.4,variant:index%3,rotation:angle});
+    }
+  }
+  return scenery;
+}
+
+function canPlaceBiomeSceneryAt(x, z, type, existingScenery) {
+  if (MOB_CAMPS.some(camp => distance2D({x,z},camp.position) < 55)) return false;
+  if (Math.hypot(x,z) < 125) return false;
+  if (getInlandLakeDistance(x,z) < 1.3) return false;
+  if (POIS.some(poi => poi.type === "Wheat Field" && distance2D({x,z},poi.position) < 110)) return false;
+  if (distanceToCoast(x, z) < 70) {
+    return false;
+  }
+
+  if (distanceToOutdoorRoad(x, z) < (type === "rock" ? 16 : 12)) {
+    return false;
+  }
+
+  for (const poi of POIS) {
+    if (Math.hypot(x - poi.position.x, z - poi.position.z) < poi.radius + 24) {
+      return false;
+    }
+  }
+
+  for (const faction of FACTIONS) {
+    if (Math.hypot(x - faction.position.x, z - faction.position.z) < Math.max(faction.bufferRadius + 16, CASTLE_FOUNDATION_RADIUS + 12)) {
+      return false;
+    }
+  }
+
+  const minimumSpacing = type === "rock" ? 13 : type === "palm" ? 12 : 10;
+  return existingScenery.every((entry) => Math.hypot(x - entry.x, z - entry.z) >= minimumSpacing);
+}
+
 
 function createOutdoorTree(scale = 1) {
   const group = new THREE.Group();
@@ -1362,28 +2072,112 @@ function createOutdoorTree(scale = 1) {
   return group;
 }
 
-function createOutdoorRock(scale = 1) {
+function createOutdoorPalmTree(scale = 1) {
   const group = new THREE.Group();
-  const rockMaterial = new THREE.MeshStandardMaterial({ color: "#8d8d84", roughness: 0.96 });
-  const darkRock = new THREE.MeshStandardMaterial({ color: "#68685f", roughness: 0.98 });
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: "#8a5930", roughness: 0.94 });
+  const trunkAccent = new THREE.MeshStandardMaterial({ color: "#5b351c", roughness: 0.98 });
+  const leafMaterial = new THREE.MeshStandardMaterial({ color: "#2f783c", roughness: 0.88, side: THREE.DoubleSide });
+  const leafAccent = new THREE.MeshStandardMaterial({ color: "#58a34f", roughness: 0.86, side: THREE.DoubleSide });
+  const leafSunlit = new THREE.MeshStandardMaterial({ color: "#73b85b", roughness: 0.84, side: THREE.DoubleSide });
+  const coconutMaterial = new THREE.MeshStandardMaterial({ color: "#594022", roughness: 0.9 });
 
-  const main = new THREE.Mesh(new THREE.DodecahedronGeometry(1.65 * scale), rockMaterial);
-  main.position.set(0, 1.05 * scale, 0);
-  main.scale.set(1.25, 0.78, 1.0);
-  main.rotation.set(0.24, 0.45, -0.12);
-  main.castShadow = true;
-  main.receiveShadow = true;
-  group.add(main);
+  const trunkHeight = 12.8 * scale;
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.27 * scale, 0.62 * scale, trunkHeight, 11),
+    trunkMaterial
+  );
+  trunk.position.set(0.28 * scale, trunkHeight * 0.5, 0);
+  trunk.rotation.z = -0.045;
+  trunk.castShadow = true;
+  trunk.receiveShadow = true;
+  group.add(trunk);
 
-  const side = new THREE.Mesh(new THREE.DodecahedronGeometry(1.0 * scale), darkRock);
-  side.position.set(1.05 * scale, 0.75 * scale, -0.35 * scale);
-  side.scale.set(1.0, 0.7, 0.82);
-  side.rotation.set(-0.1, -0.4, 0.2);
-  side.castShadow = true;
-  side.receiveShadow = true;
-  group.add(side);
+  for (let ringIndex = 1; ringIndex < 10; ringIndex += 1) {
+    const t = ringIndex / 10;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(THREE.MathUtils.lerp(0.55, 0.29, t) * scale, 0.045 * scale, 5, 11),
+      trunkAccent
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.rotation.y = -0.045;
+    ring.position.set((t - 0.5) * 0.58 * scale, t * trunkHeight, 0);
+    ring.castShadow = true;
+    group.add(ring);
+  }
+
+  const crownY = trunkHeight + 0.05 * scale;
+  const crownX = -0.02 * scale;
+  const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(0.82 * scale, 1), leafAccent);
+  crown.position.set(crownX, crownY, 0);
+  crown.scale.set(1.35, 0.8, 1.35);
+  crown.castShadow = true;
+  group.add(crown);
+
+  for (let index = 0; index < 11; index += 1) {
+    const angle = (index / 11) * Math.PI * 2;
+    const length = (5.6 + hash2d(index, 283) * 1.55) * scale;
+    const frond = new THREE.Mesh(
+      createPalmFrondGeometry(length, (1.05 + hash2d(index, 281) * 0.32) * scale, (1.45 + hash2d(index, 293) * 0.7) * scale),
+      index % 3 === 0 ? leafSunlit : index % 2 === 0 ? leafAccent : leafMaterial
+    );
+    frond.position.set(crownX, crownY + (index % 3) * 0.11 * scale, 0);
+    frond.rotation.y = angle;
+    frond.rotation.z = (hash2d(index, 307) - 0.5) * 0.08;
+    frond.castShadow = true;
+    frond.receiveShadow = true;
+    group.add(frond);
+  }
+
+  for (let index = 0; index < 4; index += 1) {
+    const angle = (index / 4) * Math.PI * 2 + 0.35;
+    const coconut = new THREE.Mesh(new THREE.SphereGeometry(0.34 * scale, 8, 6), coconutMaterial);
+    coconut.position.set(
+      crownX + Math.cos(angle) * 0.72 * scale,
+      crownY - 0.72 * scale,
+      Math.sin(angle) * 0.78 * scale
+    );
+    coconut.castShadow = true;
+    group.add(coconut);
+  }
 
   return group;
+}
+
+function createPalmFrondGeometry(length, width, drop) {
+  const geometry = new THREE.BufferGeometry();
+  const vertices = [];
+  const uvs = [];
+  const indices = [];
+  const segments = 7;
+
+  for (let index = 0; index <= segments; index += 1) {
+    const t = index / segments;
+    const x = t * length;
+    const y = Math.sin(t * Math.PI) * length * 0.08 - Math.pow(t, 1.7) * drop;
+    const halfWidth = Math.sin(t * Math.PI) * width * 0.5 + width * 0.08 * (1 - t);
+    vertices.push(x, y, -halfWidth, x, y, halfWidth);
+    uvs.push(t, 0, t, 1);
+
+    if (index < segments) {
+      const a = index * 2;
+      indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+    }
+  }
+
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createOutdoorRock(scale = 1, variant = 0) {
+  const { geometry, material } = createRockPart(variant);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.scale.setScalar(scale);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
 }
 
 function createLongGrassPatches() {
@@ -1412,19 +2206,28 @@ function createLongGrassPatches() {
   let lightIndex = 0;
   let darkIndex = 0;
   let patches = 0;
+  const flowers = [], hedges = [];
 
-  for (let attempt = 0; attempt < 420 && patches < LONG_GRASS_PATCH_COUNT; attempt += 1) {
-    const radius = 24 + Math.sqrt(hash2d(attempt + 13, 41)) * (TERRAIN_HALF - 42);
+  for (let attempt = 0; attempt < LONG_GRASS_PATCH_COUNT * 5 && patches < LONG_GRASS_PATCH_COUNT; attempt += 1) {
+    const radius = 24 + Math.sqrt(hash2d(attempt + 13, 41)) * (PLAYABLE_HALF - 42);
     const angle = attempt * 2.399963 + hash2d(attempt + 5, 103) * 0.85;
-    const centerX = Math.cos(angle) * radius + (hash2d(attempt, 71) - 0.5) * 18;
-    const centerZ = Math.sin(angle) * radius + (hash2d(attempt, 97) - 0.5) * 18;
+    let centerX = Math.cos(angle) * radius + (hash2d(attempt, 71) - 0.5) * 18;
+    let centerZ = Math.sin(angle) * radius + (hash2d(attempt, 97) - 0.5) * 18;
 
+    // Mix meadow islands with roadside verges, so detail is visible while travelling.
+    if (attempt % 2 === 0) {
+      const route = WORLD_ROUTES[Math.floor(attempt/2) % WORLD_ROUTES.length];
+      const i = Math.min(route.length-2, Math.floor(hash2d(attempt,419)*(route.length-1)));
+      const a=route[i], b=route[i+1], dx=b.x-a.x, dz=b.z-a.z, length=Math.hypot(dx,dz)||1;
+      const offset=(12+hash2d(attempt,421)*24)*(attempt%4===0?1:-1);
+      centerX=a.x-dz/length*offset; centerZ=a.z+dx/length*offset;
+    }
     if (!canPlaceLongGrassAt(centerX, centerZ, 8.5)) {
       continue;
     }
 
     patches += 1;
-    const patchRadius = 2.2 + hash2d(attempt, 151) * 4.4;
+    const patchRadius = 3.5 + hash2d(attempt, 151) * 6.5;
     const bladeCount = Math.floor(LONG_GRASS_BLADES_PER_PATCH * (0.72 + hash2d(attempt, 173) * 0.58));
 
     for (let blade = 0; blade < bladeCount; blade += 1) {
@@ -1438,6 +2241,9 @@ function createLongGrassPatches() {
         continue;
       }
 
+      if (blade % 7 === 0 && attempt % 3 !== 0) {
+        flowers.push({x,z,scale:0.85+hash2d(bladeSeed,431)*0.75,rotation:bladeAngle,color:attempt%4});
+      }
       const bladeHeight = 0.62 + hash2d(bladeSeed, 37) * 1.15;
       const bladeWidth = 0.16 + hash2d(bladeSeed, 43) * 0.16;
       const yaw = hash2d(bladeSeed, 59) * Math.PI * 2;
@@ -1463,12 +2269,27 @@ function createLongGrassPatches() {
   darkBlades.count = darkIndex;
   lightBlades.instanceMatrix.needsUpdate = true;
   darkBlades.instanceMatrix.needsUpdate = true;
-  lightBlades.castShadow = true;
-  darkBlades.castShadow = true;
+  lightBlades.castShadow = false;
+  darkBlades.castShadow = false;
   lightBlades.receiveShadow = true;
   darkBlades.receiveShadow = true;
-  group.add(lightBlades, darkBlades);
+  group.add(partitionInstances(lightBlades, 120, 220), partitionInstances(darkBlades, 120, 220));
 
+  // Broken, gently curving hedgerows follow the terrain per shrub.
+  for (const [routeIndex,route] of WORLD_ROUTES.entries()) {
+    for (let i=4;i<route.length-4;i+=9) {
+      const a=route[i], b=route[i+1], dx=b.x-a.x, dz=b.z-a.z, length=Math.hypot(dx,dz)||1;
+      const side=(i+routeIndex)%2?1:-1;
+      for(let shrub=0;shrub<7;shrub++) {
+        const along=(shrub-3)*3.1, across=side*(19+Math.sin(shrub*0.6)*1.8);
+        const x=a.x+dx/length*along-dz/length*across, z=a.z+dz/length*along+dx/length*across;
+        if (!canPlaceLongGrassAt(x,z,5)) continue;
+        hedges.push({x,z,rotation:-Math.atan2(dz,dx),scale:0.85+hash2d(i+shrub,routeIndex+443)*0.35,variant:(shrub+routeIndex)%3});
+      }
+    }
+  }
+  group.add(createGroundCoverInstances(hedges,flowers,getTerrainHeightAt));
+  group.userData.coverCounts = { patches, blades:lightIndex+darkIndex, flowers:flowers.length, hedges:hedges.length };
   world.meshes.grassPatches = group;
   addOutdoor(group);
 }
@@ -1501,7 +2322,11 @@ function createLongGrassBladeGeometry() {
 }
 
 function canPlaceLongGrassAt(x, z, rockPadding) {
-  if (Math.max(Math.abs(x), Math.abs(z)) > TERRAIN_HALF - 14) {
+  if (Math.hypot(x,z)<76 || MOB_CAMPS.some(c=>Math.hypot(x-c.position.x,z-c.position.z)<38)) return false;
+  if (POIS.some(p=>Math.hypot(x-p.position.x,z-p.position.z)<Math.max(p.radius+18,p.type==='Wheat Field'?105:0))) return false;
+  if (FACTIONS.some(f=>Math.hypot(x-f.position.x,z-f.position.z)<Math.max(f.bufferRadius+16,CASTLE_FOUNDATION_RADIUS+12))) return false;
+  if (distanceToOutdoorRoad(x,z,FOOTPATHS)<3.4) return false;
+  if (distanceToCoast(x, z) < 70) {
     return false;
   }
 
@@ -1513,8 +2338,8 @@ function canPlaceLongGrassAt(x, z, rockPadding) {
     return false;
   }
 
-  for (const scenery of OUTDOOR_SCENERY) {
-    const clearance = scenery.type === "rock" ? rockPadding + scenery.scale * 3.2 : 2.4 + scenery.scale * 1.8;
+  for (const scenery of world.sceneryGrid.query(x-12,z-12,x+12,z+12)) {
+    const clearance = scenery.radius + (scenery.type === "rock" ? rockPadding : 2);
     if (Math.hypot(x - scenery.x, z - scenery.z) < clearance) {
       return false;
     }
@@ -1523,56 +2348,62 @@ function canPlaceLongGrassAt(x, z, rockPadding) {
   return true;
 }
 
-function distanceToOutdoorRoad(x, z) {
-  return Math.min(
-    Math.abs(x),
-    Math.abs(z),
-    Math.abs(x - z) * Math.SQRT1_2,
-    Math.abs(x + z) * Math.SQRT1_2
-  );
+// Placement only needs clearance within 24 units; index the route segments.
+function distanceToOutdoorRoad(x, z, routes = WORLD_ROUTES) {
+  let nearest = Infinity;
+  for (const {a,b} of GROUND_ROUTE_GRIDS.get(routes).query(x-24,z-24,x+24,z+24)) {
+    const dx=b.x-a.x,dz=b.z-a.z;
+    const t=clamp(((x-a.x)*dx+(z-a.z)*dz)/(dx*dx+dz*dz || 1),0,1);
+    nearest=Math.min(nearest,Math.hypot(x-a.x-dx*t,z-a.z-dz*t));
+  }
+  return nearest;
 }
 
 function createCastleInterior() {
   const root = world.interiorRoot;
-  const stone = new THREE.MeshStandardMaterial({ color: "#6f6a5e", roughness: 0.88 });
-  const darkStone = new THREE.MeshStandardMaterial({ color: "#34332e", roughness: 0.94 });
-  const wood = new THREE.MeshStandardMaterial({ color: "#5a3520", roughness: 0.82 });
+  const stone = surface("stone", "#b3a58c");
+  const darkStone = surface("stone", "#847c6b");
+  const wood = surface("wood", "#795337");
   const runner = new THREE.MeshStandardMaterial({ color: "#743328", roughness: 0.74 });
   const gold = new THREE.MeshStandardMaterial({ color: "#caa44b", roughness: 0.42, metalness: 0.18 });
 
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(70, 0.5, 54), darkStone);
-  floor.position.y = -0.25;
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(93, 0.5, 74), darkStone);
+  floor.position.set(-11.5, -0.25, 10);
   floor.receiveShadow = true;
   root.add(floor);
 
-  const carpet = new THREE.Mesh(new THREE.BoxGeometry(12, 0.08, 45), runner);
-  carpet.position.set(0, 0.05, 1);
-  carpet.receiveShadow = true;
-  root.add(carpet);
-
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(70, 18, 1), stone);
-  backWall.position.set(0, 9, -27);
+  const backWall = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(93, 18, 1), stone));
+  backWall.position.set(-11.5, 9, -27);
   backWall.castShadow = true;
   root.add(backWall);
 
-  const frontWallLeft = new THREE.Mesh(new THREE.BoxGeometry(26, 16, 1), stone);
-  frontWallLeft.position.set(-22, 8, 27);
+  const frontWallLeft = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(49, 16, 1), stone));
+  frontWallLeft.position.set(-33.5, 8, 47);
   root.add(frontWallLeft);
 
-  const frontWallRight = new THREE.Mesh(new THREE.BoxGeometry(26, 16, 1), stone);
-  frontWallRight.position.set(22, 8, 27);
+  const frontWallRight = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(26, 16, 1), stone));
+  frontWallRight.position.set(22, 8, 47);
   root.add(frontWallRight);
 
-  const leftWall = new THREE.Mesh(new THREE.BoxGeometry(1, 16, 54), stone);
-  leftWall.position.set(-35, 8, 0);
+  const leftWall = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(1, 16, 74), stone));
+  leftWall.position.set(-58, 8, 10);
   root.add(leftWall);
 
-  const rightWall = new THREE.Mesh(new THREE.BoxGeometry(1, 16, 54), stone);
-  rightWall.position.set(35, 8, 0);
-  root.add(rightWall);
+  const rightWallBack = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(1, 16, 15), stone));
+  rightWallBack.position.set(35, 8, -19.5);
+  root.add(rightWallBack);
 
-  const archTop = new THREE.Mesh(new THREE.BoxGeometry(18, 5, 1.2), stone);
-  archTop.position.set(0, 13.5, 27);
+  const rightWallFront = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(1, 16, 51), stone));
+  rightWallFront.position.set(35, 8, 21.5);
+  root.add(rightWallFront);
+
+  const blacksmithDoorLintel = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(1.2, 4.4, 8), stone));
+  blacksmithDoorLintel.position.set(35, 13.8, -8);
+  blacksmithDoorLintel.castShadow = true;
+  root.add(blacksmithDoorLintel);
+
+  const archTop = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(18, 5, 1.2), stone));
+  archTop.position.set(0, 13.5, 47);
   root.add(archTop);
 
   const throneBase = new THREE.Mesh(new THREE.BoxGeometry(12, 1.2, 7), stone);
@@ -1594,18 +2425,6 @@ function createCastleInterior() {
   throneBack.castShadow = true;
   root.add(throneBack);
 
-  const table = new THREE.Mesh(new THREE.BoxGeometry(18, 1, 5), wood);
-  table.position.set(0, 2.2, 2);
-  table.castShadow = true;
-  root.add(table);
-
-  for (const side of [-1, 1]) {
-    const bench = new THREE.Mesh(new THREE.BoxGeometry(17, 0.7, 1.5), wood);
-    bench.position.set(0, 1.3, side * 5.1);
-    bench.castShadow = true;
-    root.add(bench);
-  }
-
   for (const [x, z] of [[-14, -18], [14, -18], [-14, 15], [14, 15]]) {
     const pillar = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.45, 15, 10), stone);
     pillar.position.set(x, 7.5, z);
@@ -1613,7 +2432,7 @@ function createCastleInterior() {
     root.add(pillar);
   }
 
-  for (const [x, z] of [[-24, -26], [24, -26], [-34, 0], [34, 0], [-14, 26], [14, 26]]) {
+  for (const [x, z] of [[-24, -26], [24, -26], [-57, 0], [34, 0], [-14, 46], [14, 46]]) {
     const sconce = new THREE.Group();
     sconce.position.set(x, 7, z);
     const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.2, 6), gold);
@@ -1631,9 +2450,128 @@ function createCastleInterior() {
     root.add(sconce);
   }
 
+  createBlacksmithRoom(root, { stone, darkStone, wood, gold });
+
+  root.add(createCastleInteriorDetails());
+  root.traverse(mesh => { if (mesh.isMesh && [stone,darkStone,wood].includes(mesh.material)) interiorUv(mesh.geometry); });
+
   const steward = createStewardNpc();
   root.add(steward);
   world.stewardNpcs.push(steward);
+}
+
+function createBlacksmithRoom(root, materials) {
+  const { stone, darkStone, wood, gold } = materials;
+  const iron = new THREE.MeshStandardMaterial({ color: "#777b7f", roughness: 0.46, metalness: 0.45 });
+  const coal = new THREE.MeshStandardMaterial({ color: "#11100f", roughness: 0.92 });
+  const forgeGlow = new THREE.MeshStandardMaterial({
+    color: "#f06a24",
+    emissive: "#d84d18",
+    emissiveIntensity: 1.45,
+    roughness: 0.36
+  });
+
+  const roomFloor = new THREE.Mesh(new THREE.BoxGeometry(50, 0.5, 40), darkStone);
+  roomFloor.position.set(60, -0.25, -8);
+  roomFloor.receiveShadow = true;
+  root.add(roomFloor);
+
+  const outerWall = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(1, 14, 40), stone));
+  outerWall.position.set(85, 7, -8);
+  outerWall.castShadow = true;
+  root.add(outerWall);
+
+  const backWall = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(51, 14, 1), stone));
+  backWall.position.set(60, 7, -28);
+  backWall.castShadow = true;
+  root.add(backWall);
+
+  const frontWall = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(51, 14, 1), stone));
+  frontWall.position.set(60, 7, 12);
+  frontWall.castShadow = true;
+  root.add(frontWall);
+
+  const threshold = new THREE.Mesh(new THREE.BoxGeometry(7.8, 0.1, 3.4), gold);
+  threshold.position.set(35.6, 0.12, -8);
+  threshold.receiveShadow = true;
+  root.add(threshold);
+
+  for (const z of [-11.8, -4.2]) {
+    const jamb = tagInteriorCameraWall(new THREE.Mesh(new THREE.BoxGeometry(1.35, 7.8, 0.55), stone));
+    jamb.position.set(35, 3.9, z);
+    jamb.castShadow = true;
+    root.add(jamb);
+  }
+
+  const forgeBase = new THREE.Mesh(new THREE.BoxGeometry(5.4, 2.1, 3.2), darkStone);
+  forgeBase.position.set(61, 1.05, -16);
+  forgeBase.castShadow = true;
+  root.add(forgeBase);
+
+  const forgeBed = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.32, 2.2), coal);
+  forgeBed.position.set(61, 2.26, -16);
+  forgeBed.castShadow = true;
+  root.add(forgeBed);
+
+  const forgeFire = new THREE.Mesh(new THREE.ConeGeometry(1.05, 1.85, 9), forgeGlow);
+  forgeFire.position.set(61, 3.22, -16);
+  forgeFire.castShadow = true;
+  root.add(forgeFire);
+
+  const forgeLight = new THREE.PointLight("#f07a2d", 2.25, 26);
+  forgeLight.position.set(60, 4.4, -14.7);
+  root.add(forgeLight);
+
+  const anvilBase = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.85, 1.1, 8), wood);
+  anvilBase.position.set(50, 0.55, -8.5);
+  anvilBase.castShadow = true;
+  root.add(anvilBase);
+
+  const anvil = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.7, 1.15), iron);
+  anvil.position.set(50, 1.42, -8.5);
+  anvil.castShadow = true;
+  root.add(anvil);
+
+  const horn = new THREE.Mesh(new THREE.ConeGeometry(0.38, 1.05, 10), iron);
+  horn.position.set(51.62, 1.42, -8.5);
+  horn.rotation.z = -Math.PI * 0.5;
+  horn.castShadow = true;
+  root.add(horn);
+
+  const workbench = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.65, 1.8), wood);
+  workbench.position.set(55, 1.45, -3);
+  workbench.castShadow = true;
+  root.add(workbench);
+
+  for (const offset of [-1.8, 0, 1.8]) {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.7, 0.18), iron);
+    blade.position.set(55 + offset, 2.95, -3.05);
+    blade.rotation.z = offset * 0.1;
+    blade.castShadow = true;
+    root.add(blade);
+
+    const hilt = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.16, 0.22), gold);
+    hilt.position.set(55 + offset, 1.82, -3.05);
+    hilt.castShadow = true;
+    root.add(hilt);
+  }
+
+  const rack = new THREE.Mesh(new THREE.BoxGeometry(0.35, 4.8, 4.6), wood);
+  rack.position.set(63.8, 2.4, -5.5);
+  rack.castShadow = true;
+  root.add(rack);
+
+  for (const z of [-7, -5.5, -4]) {
+    const spear = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 4.8, 8), iron);
+    spear.position.set(63.52, 2.75, z);
+    spear.rotation.z = 0.18;
+    spear.castShadow = true;
+    root.add(spear);
+  }
+
+  const blacksmith = createBlacksmithNpc();
+  root.add(blacksmith);
+  world.blacksmithNpcs.push(blacksmith);
 }
 
 function createPoiInteriors() {
@@ -1650,16 +2588,21 @@ function createPoiInteriorScene(poi) {
   group.name = `${poi.id}Interior`;
   const resource = RESOURCE_LOOKUP[poi.resourceId];
   const resourceColor = resource?.color ?? "#d6a542";
+  if (poi.id === LIBRARY_ID) return createLibraryInterior();
   const isDungeon = poi.type === "Dungeon";
-  const width = isDungeon ? 116 : 66;
-  const depth = isDungeon ? 88 : 48;
+  if (isDungeon) {
+    withDungeon(poi.id, () => addDungeonInterior(group));
+    return group;
+  }
+  const width = POI_HALL.width;
+  const depth = POI_HALL.depth;
   const halfWidth = width / 2;
   const halfDepth = depth / 2;
-  const floorMaterial = new THREE.MeshStandardMaterial({ color: "#2f342c", roughness: 0.92 });
-  const wallMaterial = new THREE.MeshStandardMaterial({ color: "#5e574c", roughness: 0.9 });
+  const floorMaterial = surface(poi.type === "Lumber Camp" ? "wood" : "stone", "#8b8270");
+  const wallMaterial = surface("stone", "#b2a58c");
   const trimMaterial = new THREE.MeshStandardMaterial({ color: resourceColor, roughness: 0.72 });
 
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(width, 0.45, depth), floorMaterial);
+  const floor = new THREE.Mesh(interiorUv(new THREE.BoxGeometry(width, 0.45, depth)), floorMaterial);
   floor.position.y = -0.24;
   floor.receiveShadow = true;
   group.add(floor);
@@ -1669,19 +2612,19 @@ function createPoiInteriorScene(poi) {
   exit.receiveShadow = true;
   group.add(exit);
 
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(width, 10, 1), wallMaterial);
-  backWall.position.set(0, 5, -halfDepth);
+  const backWall = tagInteriorCameraWall(new THREE.Mesh(interiorUv(new THREE.BoxGeometry(width, 14, 1)), wallMaterial));
+  backWall.position.set(0, 7, -halfDepth);
   backWall.castShadow = true;
   group.add(backWall);
 
   for (const side of [-1, 1]) {
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(1, 8, depth), wallMaterial);
-    wall.position.set(side * halfWidth, 4, 0);
+    const wall = tagInteriorCameraWall(new THREE.Mesh(interiorUv(new THREE.BoxGeometry(1, 14, depth)), wallMaterial));
+    wall.position.set(side * halfWidth, 7, 0);
     wall.castShadow = true;
     group.add(wall);
 
-    const frontNib = new THREE.Mesh(new THREE.BoxGeometry(isDungeon ? 42 : 20, 7, 1), wallMaterial);
-    frontNib.position.set(side * (halfWidth - (isDungeon ? 21 : 10)), 3.5, halfDepth);
+    const frontNib = tagInteriorCameraWall(new THREE.Mesh(interiorUv(new THREE.BoxGeometry(halfWidth - 6, 14, 1)), wallMaterial));
+    frontNib.position.set(side * (halfWidth + 6) / 2, 7, halfDepth);
     frontNib.castShadow = true;
     group.add(frontNib);
   }
@@ -1697,19 +2640,8 @@ function createPoiInteriorScene(poi) {
     world.meshes.poiInteriorFlags.set(poi.id, flagpole);
   }
 
-  if (poi.id === "kingswood") {
-    addKingswoodInterior(group);
-  } else if (poi.id === "north-quarry") {
-    addQuarryInterior(group);
-  } else if (poi.id === "river-market") {
-    addRiverMarketInterior(group);
-  } else if (poi.id === "millfield") {
-    addMillfieldInterior(group);
-  } else if (poi.id === "blackridge") {
-    addBlackridgeInterior(group);
-  } else if (poi.id === "ebon-hollow") {
-    addDungeonInterior(group);
-  }
+  group.add(createPoiInteriorArt(poi.type));
+  if (poi.type === "Trade Post") addRiverMarketInterior(group);
 
   group.traverse((child) => {
     if (child.isMesh) {
@@ -1764,85 +2696,8 @@ function createInteriorPoiFlagpole(poi) {
   return group;
 }
 
-function addKingswoodInterior(group) {
-  const trunk = new THREE.MeshStandardMaterial({ color: "#6b3f22", roughness: 0.88 });
-  const leaves = new THREE.MeshStandardMaterial({ color: "#2f6a38", roughness: 0.8 });
-  const canvasMat = new THREE.MeshStandardMaterial({ color: "#b58b52", roughness: 0.76 });
-
-  for (const [x, z] of [[-22, -13], [-12, -17], [16, -15], [25, -8]]) {
-    const tree = new THREE.Group();
-    tree.position.set(x, 0, z);
-    const trunkMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.75, 6, 8), trunk);
-    trunkMesh.position.y = 3;
-    tree.add(trunkMesh);
-    const crown = new THREE.Mesh(new THREE.ConeGeometry(3.2, 6, 10), leaves);
-    crown.position.y = 7.1;
-    tree.add(crown);
-    group.add(tree);
-  }
-
-  for (const z of [-4, 0.5, 5]) {
-    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.65, 12, 12), trunk);
-    log.position.set(-7, 0.8, z);
-    log.rotation.z = Math.PI / 2;
-    group.add(log);
-  }
-
-  const tent = new THREE.Mesh(new THREE.ConeGeometry(5.4, 5.2, 4), canvasMat);
-  tent.position.set(18, 2.6, 7);
-  tent.rotation.y = Math.PI * 0.25;
-  group.add(tent);
-}
-
-function addQuarryInterior(group) {
-  const rockMat = new THREE.MeshStandardMaterial({ color: "#8a8a84", roughness: 0.94 });
-  const cartMat = new THREE.MeshStandardMaterial({ color: "#5c3824", roughness: 0.84 });
-  const railMat = new THREE.MeshStandardMaterial({ color: "#2c2b27", roughness: 0.72 });
-
-  for (let index = 0; index < 18; index += 1) {
-    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.9 + Math.random() * 1.6), rockMat);
-    rock.position.set(-26 + Math.random() * 52, 0.8 + Math.random() * 1.4, -18 + Math.random() * 24);
-    rock.rotation.set(Math.random(), Math.random(), Math.random());
-    group.add(rock);
-  }
-
-  for (const x of [-4, 4]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(1, 0.14, 28), railMat);
-    rail.position.set(x, 0.16, 1);
-    group.add(rail);
-  }
-
-  const cart = new THREE.Mesh(new THREE.BoxGeometry(6, 2, 4), cartMat);
-  cart.position.set(0, 1.15, -5);
-  group.add(cart);
-}
-
 function addRiverMarketInterior(group) {
-  const waterMat = new THREE.MeshStandardMaterial({ color: "#2f6570", roughness: 0.45, metalness: 0.04 });
-  const woodMat = new THREE.MeshStandardMaterial({ color: "#6a4227", roughness: 0.82 });
-  const clothMats = ["#c9a34e", "#7f4a3e", "#4f7c59"].map(
-    (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.72 })
-  );
-
-  const water = new THREE.Mesh(new THREE.BoxGeometry(66, 0.12, 10), waterMat);
-  water.position.set(0, 0.03, -18);
-  group.add(water);
-
-  const dock = new THREE.Mesh(new THREE.BoxGeometry(38, 0.55, 6), woodMat);
-  dock.position.set(0, 0.35, -12);
-  group.add(dock);
-
-  for (const [index, x] of [-18, 0, 18].entries()) {
-    const stall = new THREE.Group();
-    stall.position.set(x, 0, 4);
-    const counter = new THREE.Mesh(new THREE.BoxGeometry(9, 2, 4), woodMat);
-    counter.position.y = 1;
-    stall.add(counter);
-    const canopy = new THREE.Mesh(new THREE.BoxGeometry(10.5, 0.8, 5.6), clothMats[index]);
-    canopy.position.y = 3.4;
-    stall.add(canopy);
-    group.add(stall);
-  }
+  group.add(createMarketFurnishings());
 
   for (const npc of TRADE_NPCS) {
     const npcMesh = createTradeNpc(npc);
@@ -1851,111 +2706,487 @@ function addRiverMarketInterior(group) {
   }
 }
 
-function addMillfieldInterior(group) {
-  const wheatMat = new THREE.MeshStandardMaterial({ color: "#d8b955", roughness: 0.78 });
-  const soilMat = new THREE.MeshStandardMaterial({ color: "#4b3322", roughness: 0.95 });
-  const barnMat = new THREE.MeshStandardMaterial({ color: "#8f3f2d", roughness: 0.8 });
-
-  for (const x of [-20, -12, -4, 4, 12, 20]) {
-    const row = new THREE.Mesh(new THREE.BoxGeometry(3, 0.12, 30), soilMat);
-    row.position.set(x, 0.07, 0);
-    group.add(row);
-
-    for (const z of [-12, -6, 0, 6, 12]) {
-      const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.1, 5), wheatMat);
-      stalk.position.set(x, 1.05, z);
-      group.add(stalk);
-    }
-  }
-
-  const barn = new THREE.Mesh(new THREE.BoxGeometry(13, 6, 9), barnMat);
-  barn.position.set(0, 3, -16);
-  group.add(barn);
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(9, 5, 4), new THREE.MeshStandardMaterial({ color: "#4a2620", roughness: 0.8 }));
-  roof.position.set(0, 8.1, -16);
-  roof.rotation.y = Math.PI * 0.25;
-  group.add(roof);
+function withDungeon(id, action) {
+  const previous = world.dungeonContextId;
+  world.dungeonContextId = id;
+  try { return action(); } finally { world.dungeonContextId = previous; }
 }
 
-function addBlackridgeInterior(group) {
-  const oreMat = new THREE.MeshStandardMaterial({ color: "#5d6674", roughness: 0.68, metalness: 0.28 });
-  const stoneMat = new THREE.MeshStandardMaterial({ color: "#36373a", roughness: 0.92 });
-  const fireMat = new THREE.MeshStandardMaterial({ color: "#f18446", emissive: "#9f2e19", emissiveIntensity: 1.2 });
-  const woodMat = new THREE.MeshStandardMaterial({ color: "#5a3520", roughness: 0.82 });
-
-  const mineMouth = new THREE.Mesh(new THREE.BoxGeometry(15, 9, 2), stoneMat);
-  mineMouth.position.set(0, 4.5, -21);
-  group.add(mineMouth);
-
-  for (const x of [-20, -12, 13, 22]) {
-    const ore = new THREE.Mesh(new THREE.DodecahedronGeometry(1.2 + Math.random()), oreMat);
-    ore.position.set(x, 1.2, -8 + Math.random() * 18);
-    ore.rotation.set(Math.random(), Math.random(), Math.random());
-    group.add(ore);
-  }
-
-  const forge = new THREE.Mesh(new THREE.BoxGeometry(8, 3, 5), stoneMat);
-  forge.position.set(-12, 1.5, 7);
-  group.add(forge);
-  const fire = new THREE.Mesh(new THREE.ConeGeometry(1.6, 3.4, 10), fireMat);
-  fire.position.set(-12, 4.2, 7);
-  group.add(fire);
-  const anvil = new THREE.Mesh(new THREE.BoxGeometry(5, 1.2, 2.4), oreMat);
-  anvil.position.set(12, 1.2, 7);
-  group.add(anvil);
-
-  for (const x of [-6, 6]) {
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(1, 8, 1), woodMat);
-    beam.position.set(x, 4, -20);
-    group.add(beam);
-  }
+function isDungeonEntranceSafe(position = state.player.position, padding = 0) {
+  const room = world.dungeon.layout?.entranceRoom;
+  if (world.dungeon.gate?.open) return false;
+  return !!room && Math.abs(position.x - room.x) <= room.width / 2 + padding
+    && Math.abs(position.z - room.z) <= room.depth / 2 + padding;
 }
 
 function addDungeonInterior(group) {
-  const stoneMat = new THREE.MeshStandardMaterial({ color: "#24262b", roughness: 0.96 });
+  rebuildProceduralDungeon(group);
+}
+
+function rebuildProceduralDungeon(group) {
+  removeDungeonContent();
+  world.pveEnemies = [];
+  world.dungeon.layout = generateDungeonLayout();
+  world.dungeon.treasure = null;
+  world.dungeon.chests = [];
+  world.dungeon.contentRoot = createProceduralDungeonContent(world.dungeon.layout);
+  world.cameraOcclusion.register(world.dungeon.contentRoot);
+  group.add(world.dungeon.contentRoot);
+  document.body.dataset.dungeonStatus = world.dungeon.status;
+  document.body.dataset.dungeonGeneration = String(world.dungeon.generation);
+}
+
+function removeDungeonContent() {
+  world.dungeon.gate = null;
+  for (const enemy of world.pveEnemies) enemy.spells?.clear();
+  if (world.dungeon.contentRoot) {
+    removeFromParent(world.dungeon.contentRoot);
+  }
+
+  world.dungeon.contentRoot = null;
+  world.dungeon.treasure = null;
+  world.dungeon.chests = [];
+  world.interiorCameraWalls = world.interiorCameraWalls.filter((wall) => wall.userData?.dungeonId !== world.dungeon.id);
+}
+
+function generateDungeonLayout() {
+  const rooms = [];
+  const corridors = [];
+  const occupied = new Set();
+  const path = [{ gx: 0, gy: 0 }];
+  occupied.add("0,0");
+
+  for (let index = 1; index < 24; index += 1) {
+    const previous = path[path.length - 1];
+    const options = [
+      { gx: previous.gx, gy: previous.gy + 1 },
+      { gx: previous.gx - 1, gy: previous.gy },
+      { gx: previous.gx + 1, gy: previous.gy }
+    ].filter((cell) => Math.abs(cell.gx) <= 3 && cell.gy <= 24 && cell.gy > 0 && !occupied.has(`${cell.gx},${cell.gy}`));
+    const next = options.length ? randomItem(options) : { gx: previous.gx, gy: previous.gy + 1 };
+    path.push(next);
+    occupied.add(`${next.gx},${next.gy}`);
+  }
+
+  const branchSeeds = path.slice(1, -1).sort(() => Math.random() - 0.5).slice(0, 10);
+  for (const seed of branchSeeds) {
+    const side = Math.random() > 0.5 ? 1 : -1;
+    const branch = { gx: seed.gx + side, gy: seed.gy };
+    const key = `${branch.gx},${branch.gy}`;
+    if (Math.abs(branch.gx) <= 3 && !occupied.has(key)) {
+      path.push({ ...branch, branchOf: `${seed.gx},${seed.gy}` });
+      occupied.add(key);
+    }
+  }
+
+  for (const [index, cell] of path.entries()) {
+    const isStart = index === 0;
+    const isEnd = index === 23;
+    const width = isStart ? 96 : isEnd ? 60 : randomBetween(43, 55);
+    const depth = isStart ? 64 : isEnd ? 52 : randomBetween(40, 50);
+    rooms.push({
+      id: `room-${index}`,
+      gx: cell.gx,
+      gy: cell.gy,
+      x: cell.gx * DUNGEON_ROOM_CELL_SIZE,
+      z: 20 - cell.gy * DUNGEON_ROOM_ROW_SPACING,
+      width,
+      depth,
+      kind: isStart ? "entrance" : isEnd ? "end" : cell.branchOf ? "side" : "main",
+      branchOf: cell.branchOf ?? null,
+      connections: new Set()
+    });
+  }
+
+  const roomByCell = new Map(rooms.map((room) => [`${room.gx},${room.gy}`, room]));
+
+  for (let index = 1; index < 24; index += 1) {
+    connectDungeonRooms(roomByCell.get(`${path[index - 1].gx},${path[index - 1].gy}`), roomByCell.get(`${path[index].gx},${path[index].gy}`), corridors);
+  }
+
+  for (const room of rooms.filter((entry) => entry.kind === "side")) {
+    const [gx, gy] = room.branchOf.split(",").map(Number);
+    connectDungeonRooms(roomByCell.get(`${gx},${gy}`), room, corridors);
+  }
+
+  const walkRects = [
+    ...rooms.map((room) => rectFromCenter(room.x, room.z, room.width, room.depth)),
+    ...corridors.map((corridor) => rectFromCenter(corridor.x, corridor.z, corridor.width, corridor.depth))
+  ];
+  const bounds = getBoundsFromRects(walkRects, 3);
+
+  return {
+    rooms,
+    corridors,
+    walkRects,
+    bounds,
+    entranceRoom: rooms[0],
+    endRoom: rooms.find((room) => room.kind === "end")
+  };
+}
+
+function connectDungeonRooms(first, second, corridors) {
+  if (!first || !second) {
+    return;
+  }
+
+  first.connections.add(second.id);
+  second.connections.add(first.id);
+
+  const dx = second.x - first.x;
+  const dz = second.z - first.z;
+  const horizontal = Math.abs(dx) >= Math.abs(dz);
+
+  corridors.push({
+    x: (first.x + second.x) / 2,
+    z: (first.z + second.z) / 2,
+    width: horizontal ? Math.abs(dx) + DUNGEON_CORRIDOR_WIDTH : DUNGEON_CORRIDOR_WIDTH,
+    depth: horizontal ? DUNGEON_CORRIDOR_WIDTH : Math.abs(dz) + DUNGEON_CORRIDOR_WIDTH
+  });
+}
+
+function rectFromCenter(x, z, width, depth) {
+  return {
+    minX: x - width / 2,
+    maxX: x + width / 2,
+    minZ: z - depth / 2,
+    maxZ: z + depth / 2
+  };
+}
+
+function getBoundsFromRects(rects, padding = 0) {
+  return rects.reduce(
+    (bounds, rect) => ({
+      minX: Math.min(bounds.minX, rect.minX - padding),
+      maxX: Math.max(bounds.maxX, rect.maxX + padding),
+      minZ: Math.min(bounds.minZ, rect.minZ - padding),
+      maxZ: Math.max(bounds.maxZ, rect.maxZ + padding)
+    }),
+    { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity }
+  );
+}
+
+function createProceduralDungeonContent(layout) {
+  const root = new THREE.Group();
+  root.name = "proceduralDungeon";
+  const stoneMat = surface("stone", "#686875");
+  const floorMat = surface("stone", "#5a5d62");
+  const corridorMat = surface("stone", "#64636a");
   const runeMat = new THREE.MeshStandardMaterial({ color: "#7d54b8", emissive: "#30145d", emissiveIntensity: 1.15 });
   const goldMat = new THREE.MeshStandardMaterial({ color: "#caa44b", roughness: 0.42, metalness: 0.18 });
   const boneMat = new THREE.MeshStandardMaterial({ color: "#b8aa8d", roughness: 0.9 });
+  const woodMat = new THREE.MeshStandardMaterial({ color: "#5a3826", roughness: 0.84 });
 
-  for (const [x, z] of [[-42, -28], [42, -28], [-42, 20], [42, 20], [-20, -40], [20, -40], [-20, 32], [20, 32]]) {
-    const column = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2, 10, 8), stoneMat);
-    column.position.set(x, 5, z);
-    group.add(column);
+  for (const corridor of layout.corridors) {
+    const floor = new THREE.Mesh(interiorUv(new THREE.BoxGeometry(corridor.width, 0.32, corridor.depth)), corridorMat);
+    floor.position.set(corridor.x, 0.03, corridor.z);
+    floor.receiveShadow = true;
+    root.add(floor);
   }
 
-  const dais = new THREE.Mesh(new THREE.CylinderGeometry(9, 10, 1.2, 16), stoneMat);
-  dais.position.set(0, 0.6, -18);
-  group.add(dais);
-
-  const relic = new THREE.Mesh(new THREE.OctahedronGeometry(2.2), runeMat);
-  relic.position.set(0, 4.2, -18);
-  group.add(relic);
-
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(12, 0.16, 8, 72),
-    new THREE.MeshBasicMaterial({ color: "#9b6be5", transparent: true, opacity: 0.65 })
-  );
-  ring.position.set(0, 1.35, -18);
-  ring.rotation.x = Math.PI / 2;
-  group.add(ring);
-
-  for (const [x, z] of [[-34, 4], [34, 4], [-14, 28], [14, 28]]) {
-    const chest = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 2.6), goldMat);
-    chest.position.set(x, 1, z);
-    group.add(chest);
-  }
-
-  for (const [x, z] of [[-32, -6], [30, -8], [-8, 12], [12, 34], [-44, 28]]) {
-    const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 4, 6), boneMat);
-    bone.position.set(x, 0.35, z);
-    bone.rotation.set(Math.PI * 0.5, 0, Math.random() * Math.PI);
-    group.add(bone);
+  for (const room of layout.rooms) {
+    addDungeonRoom(root, room, layout, { stoneMat, floorMat, runeMat, goldMat, boneMat, woodMat });
   }
 
   if (GAME_FLAGS.pve) {
-    for (const spawn of DUNGEON_ENEMY_SPAWNS.slice(0, getPveMobCap())) {
-      group.add(createPveEnemy(spawn));
+    for (const spawn of createDungeonEnemySpawns(layout)) {
+      root.add(createPveEnemy(spawn));
     }
+  }
+
+  return root;
+}
+
+function addDungeonRoom(root, room, layout, materials) {
+  const floor = new THREE.Mesh(interiorUv(new THREE.BoxGeometry(room.width, 0.4, room.depth)), materials.floorMat);
+  floor.position.set(room.x, -0.02, room.z);
+  floor.receiveShadow = true;
+  root.add(floor);
+
+  root.add(createDungeonInteriorDetails(room));
+  addDungeonRoomWalls(root, room, layout, materials.stoneMat);
+  if (room.kind === "entrance") {
+    world.dungeon.gate = createDungeonGate(room, DUNGEON_CORRIDOR_WIDTH, surface);
+    root.add(world.dungeon.gate.root);
+    world.dungeon.gate.root.traverse(child => {
+      if (child.isMesh) { child.userData.dungeonId = world.dungeon.id; tagInteriorCameraWall(child); }
+    });
+  }
+
+  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.95, 6.8, 8), materials.stoneMat);
+    column.position.set(room.x + dx * (room.width / 2 - 1.4), 3.4, room.z + dz * (room.depth / 2 - 1.4));
+    column.castShadow = true;
+    root.add(column);
+  }
+
+  const torchCount = room.kind === "entrance" ? 2 : room.kind === "end" ? 4 : 1 + Math.floor(Math.random() * 2);
+  for (let index = 0; index < torchCount; index += 1) {
+    addDungeonTorch(root, room, index, materials);
+  }
+
+  if (room.kind === "end") {
+    // The elemental sorcerer is the end-room objective.
+  } else if (room.kind !== "entrance") {
+    const chest = new THREE.Group();
+    chest.userData.opened = false;
+    const base = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.7, 2.1), materials.woodMat);
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.4, 2.3), materials.goldMat);
+    lid.position.y = 1.05;
+    chest.add(base, lid);
+    chest.userData.lid = lid;
+    chest.userData.roomId = room.id;
+    chest.userData.gold = Math.round(randomBetween(25, 65));
+    const label = createTextSprite("Loot Chest", "#f4d77a", 24);
+    label.position.y = 4;
+    chest.add(label);
+    chest.userData.label = label;
+    world.dungeon.chests.push(chest);
+    chest.position.set(room.x + randomBetween(-room.width * 0.25, room.width * 0.25), 0.92, room.z + randomBetween(-room.depth * 0.22, room.depth * 0.22));
+    chest.rotation.y = randomBetween(-0.3, 0.3);
+    chest.castShadow = true;
+    root.add(chest);
+  }
+
+  for (let index = 0; index < (room.kind === "entrance" ? 1 : 3); index += 1) {
+    const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, randomBetween(2.4, 4.2), 6), materials.boneMat);
+    bone.position.set(room.x + randomBetween(-room.width * 0.34, room.width * 0.34), 0.34, room.z + randomBetween(-room.depth * 0.32, room.depth * 0.32));
+    bone.rotation.set(Math.PI * 0.5, 0, Math.random() * Math.PI);
+    root.add(bone);
+  }
+}
+
+function addDungeonRoomWalls(root, room, layout, material) {
+  const wallHeight = 7.4;
+  const wallThickness = 0.9;
+  const sides = [
+    { side: "north", x: room.x, z: room.z - room.depth / 2, width: room.width, depth: wallThickness },
+    { side: "south", x: room.x, z: room.z + room.depth / 2, width: room.width, depth: wallThickness },
+    { side: "west", x: room.x - room.width / 2, z: room.z, width: wallThickness, depth: room.depth },
+    { side: "east", x: room.x + room.width / 2, z: room.z, width: wallThickness, depth: room.depth }
+  ];
+
+  for (const side of sides) {
+    if (hasDungeonConnectionOnSide(room, side.side, layout)) {
+      continue;
+    }
+
+    const wall = tagInteriorCameraWall(new THREE.Mesh(interiorUv(new THREE.BoxGeometry(side.width, wallHeight, side.depth)), material));
+    wall.userData.dungeonWall = true;
+    wall.userData.dungeonId = world.dungeon.id;
+    wall.userData.dungeonRoomId = room.id;
+    wall.position.set(side.x, wallHeight / 2, side.z);
+    wall.castShadow = true;
+    root.add(wall);
+  }
+}
+
+function hasDungeonConnectionOnSide(room, side, layout) {
+  for (const roomId of room.connections) {
+    const other = layout.rooms.find((entry) => entry.id === roomId);
+    if (!other) {
+      continue;
+    }
+
+    if (side === "north" && other.z < room.z) return true;
+    if (side === "south" && other.z > room.z) return true;
+    if (side === "west" && other.x < room.x) return true;
+    if (side === "east" && other.x > room.x) return true;
+  }
+
+  return false;
+}
+
+function addDungeonTorch(root, room, index, materials) {
+  const x = room.x + (index % 2 === 0 ? -1 : 1) * (room.width / 2 - 1.2);
+  const z = room.z + (index < 2 ? -1 : 1) * room.depth * 0.24;
+  const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.1, 8), materials.woodMat);
+  bracket.position.set(x, 2.8, z);
+  bracket.rotation.z = Math.PI / 2;
+  bracket.castShadow = true;
+  root.add(bracket);
+
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.95, 9), materials.runeMat);
+  flame.position.set(x, 3.45, z);
+  root.add(flame);
+
+  const light = new THREE.PointLight("#a779ff", room.kind === "end" ? 1.75 : 1.05, room.kind === "end" ? 32 : 22, 1.7);
+  light.position.set(x, 4.2, z);
+  root.add(light);
+}
+
+function createDungeonEnemySpawns(layout) {
+  const rooms = layout.rooms.filter((room) => room.kind !== "entrance" && room.kind !== "end");
+  const targetCount = Math.min(rooms.length * 2, Math.max(rooms.length + 1, getOnlinePlayerCount() * 5));
+  const spawns = [];
+
+  for (let index = 0; index < targetCount; index += 1) {
+    const room = rooms[index % rooms.length];
+    const depthBonus = Math.max(0, room.gy) * 5;
+    const archetype = index % 5 === 4 ? "raider" : "creature";
+    const template = getPveMobTemplate(archetype, index);
+    spawns.push({
+      archetype,
+      name: template.name,
+      position: {
+        x: room.x + randomBetween(-room.width * 0.26, room.width * 0.26),
+        z: room.z + randomBetween(-room.depth * 0.22, room.depth * 0.22)
+      },
+      hp: Math.round(template.hp + depthBonus),
+      color: template.color,
+      skinColor: template.skinColor,
+      speed: template.speed,
+      radius: template.radius
+    });
+  }
+
+  const element = randomItem(Object.keys(SORCERERS));
+  const boss = SORCERERS[element];
+  spawns.push({ archetype: "raider", bossElement: element, name: boss.name,
+    position: { x: layout.endRoom.x, z: layout.endRoom.z }, hp: boss.hp,
+    color: boss.color, speed: 4, radius: 2.1 });
+  return spawns;
+}
+
+function beginDungeonCollapse() {
+  if (world.dungeon.status !== "active") return;
+  world.dungeon.status = "collapsing";
+  world.dungeon.collapseTimer = DUNGEON_COLLAPSE_WARNING_SECONDS;
+  world.dungeon.warningTimer = 15;
+  document.body.dataset.dungeonStatus = world.dungeon.status;
+  document.body.dataset.dungeonCollapseTimer = String(Math.ceil(world.dungeon.collapseTimer));
+}
+
+function updateDungeonLifecycle(deltaSeconds) {
+  for (const poi of state.pois.filter(poi => poi.type === "Dungeon")) {
+    withDungeon(poi.id, () => updateSingleDungeonLifecycle(deltaSeconds));
+  }
+  let warning = document.getElementById("dungeon-collapse-warning");
+  const active = world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon" && world.dungeon.status === "collapsing";
+  if (active && !warning) {
+    warning = document.createElement("div"); warning.id = "dungeon-collapse-warning";
+    document.body.append(warning);
+  }
+  if (warning) {
+    warning.hidden = !active;
+    if (active) {
+      const seconds = Math.ceil(world.dungeon.collapseTimer);
+      warning.textContent = "DUNGEON COLLAPSING — Escape! " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+    }
+  }
+}
+
+function updateSingleDungeonLifecycle(deltaSeconds) {
+  if (world.dungeon.status === "collapsing") {
+    world.dungeon.collapseTimer = Math.max(0, world.dungeon.collapseTimer - deltaSeconds);
+    world.dungeon.warningTimer = Math.max(0, world.dungeon.warningTimer - deltaSeconds);
+    document.body.dataset.dungeonStatus = "collapsing";
+    document.body.dataset.dungeonCollapseTimer = String(Math.ceil(world.dungeon.collapseTimer));
+    pulseCollapsingDungeon(deltaSeconds);
+
+    if (world.sceneMode === "poiInterior" && world.activePoiInteriorId === world.dungeon.id && world.dungeon.warningTimer <= 0) {
+      world.dungeon.warningTimer = 15;
+      flash(`${Math.ceil(world.dungeon.collapseTimer)} seconds until the dungeon collapses.`);
+    }
+
+    if (world.dungeon.collapseTimer <= 0) {
+      collapseDungeon();
+    }
+    return;
+  }
+
+  if (world.dungeon.status === "collapsed") {
+    world.dungeon.respawnTimer = Math.max(0, world.dungeon.respawnTimer - deltaSeconds);
+    document.body.dataset.dungeonStatus = "collapsed";
+    document.body.dataset.dungeonRespawnTimer = String(Math.ceil(world.dungeon.respawnTimer));
+
+    if (world.dungeon.respawnTimer <= 0) {
+      regenerateDungeon();
+    }
+    return;
+  }
+
+  document.body.dataset.dungeonStatus = "active";
+  delete document.body.dataset.dungeonCollapseTimer;
+  delete document.body.dataset.dungeonRespawnTimer;
+}
+
+function pulseCollapsingDungeon(deltaSeconds) {
+  const root = world.dungeon.contentRoot;
+
+  if (!root) {
+    return;
+  }
+
+  const visible = world.sceneMode === "poiInterior" && world.activePoiInteriorId === world.dungeon.id;
+  const urgency = 1 - world.dungeon.collapseTimer / DUNGEON_COLLAPSE_WARNING_SECONDS;
+  if (visible) {
+    updateCollapseDebris(root, state.player.position, deltaSeconds, urgency);
+    world.combatFeedback.cameraImpulse = Math.max(world.combatFeedback.cameraImpulse ?? 0, 0.002 + urgency * 0.008);
+  }
+  const pulse = 0.55 + Math.sin(state.elapsed * 12) * 0.45;
+  root.position.x = Math.sin(state.elapsed * 17) * 0.09;
+  root.position.z = Math.cos(state.elapsed * 13) * 0.09;
+
+  for (const light of root.children.filter((child) => child.isPointLight)) {
+    light.intensity = Math.max(0.35, light.intensity + (pulse - 0.5) * deltaSeconds * 3);
+  }
+}
+
+function collapseDungeon() {
+  world.dungeon.status = "collapsed";
+  world.dungeon.collapseTimer = 0;
+  world.dungeon.respawnTimer = DUNGEON_RESPAWN_SECONDS;
+  world.dungeon.warningTimer = 0;
+  updateDungeonExteriorMesh();
+  clearDungeonEnemies();
+  removeDungeonContent();
+
+  if (world.sceneMode === "poiInterior" && world.activePoiInteriorId === world.dungeon.id) {
+    damageLocalPlayerTarget({ mesh: world.playerMesh }, 100000, "collapse", { sourceName: "the collapsing dungeon", unavoidable: true });
+    leavePoiInterior();
+    flash("You were caught in the collapse. The dungeon will reopen in 5 minutes.");
+  } else {
+    flash(`${state.pois.find(poi => poi.id === world.dungeon.id)?.name} collapsed. It will reopen in 5 minutes.`);
+  }
+}
+
+function regenerateDungeon() {
+  const dungeonGroup = world.meshes.poiInteriors.get(world.dungeon.id);
+  world.dungeon.status = "active";
+  world.dungeon.generation += 1;
+  world.dungeon.collapseTimer = 0;
+  world.dungeon.respawnTimer = 0;
+  world.dungeon.warningTimer = 0;
+  updateDungeonExteriorMesh();
+
+  if (dungeonGroup) {
+    rebuildProceduralDungeon(dungeonGroup);
+  }
+
+  flash(`${state.pois.find(poi => poi.id === world.dungeon.id)?.name} has reopened.`);
+}
+
+function clearDungeonEnemies() {
+  for (const enemy of world.pveEnemies) {
+    removeFromParent(enemy.mesh);
+  }
+
+  world.pveEnemies = [];
+}
+
+function updateDungeonExteriorMesh() {
+  const mesh = world.meshes.pois.get(world.dungeon.id);
+  const openEntrance = mesh?.getObjectByName("dungeonEntranceOpen");
+  const collapsedEntrance = mesh?.getObjectByName("dungeonEntranceCollapsed");
+  const collapsed = world.dungeon.status === "collapsed";
+
+  if (openEntrance) {
+    openEntrance.visible = !collapsed;
+  }
+
+  if (collapsedEntrance) {
+    collapsedEntrance.visible = collapsed;
   }
 }
 
@@ -1973,15 +3204,15 @@ function getOnlineRenownTotal() {
     0
   );
 
-  return Math.max(0, state.player.renown + remoteRenown);
+  return Math.max(0, (state.player.prowess || 0) + state.player.renown + remoteRenown);
 }
 
 function getPveMobCap() {
-  return Math.max(1, getOnlinePlayerCount() * 4);
+  return world.sceneMode === "outdoor" ? Math.max(MOB_CAMPS.length * (getNightAmount(state.elapsed) > 0.62 ? NIGHT_CAMP_CAP : 3), getOnlinePlayerCount() * 4) : Math.max(1, getOnlinePlayerCount() * 4);
 }
 
 function getAlivePveMobCount() {
-  if (world.sceneMode === "poiInterior" && world.activePoiInteriorId === "ebon-hollow") {
+  if (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon") {
     return world.pveEnemies.filter((enemy) => !enemy.dead).length;
   }
 
@@ -1992,16 +3223,18 @@ function getAlivePveMobCount() {
   return [...world.pveEnemies, ...world.outdoorMonsters].filter((enemy) => !enemy.dead).length;
 }
 
-function createRandomPveWeapon() {
+function createRandomPveWeapon(powerScale = 1) {
   const definition = randomItem(PVE_WEAPON_DEFINITIONS);
   const baseStats = WEAPON_STATS[definition.type];
   const renownCap = Math.max(1, Math.floor(getOnlineRenownTotal()));
-  const quality = randomBetween(0.45, 1);
+  const materialCap = clamp(Math.floor(renownCap / 45) + 1, 1, METAL_TIERS.length);
+  const material = METAL_TIERS[Math.floor(Math.random() * materialCap)];
+  const quality = material.power;
   const maxDurability = Math.round(clamp(definition.maxDurability * randomBetween(0.72, 1.18), 25, renownCap + 80));
   const weapon = {
     range: roundStat(clamp(baseStats.range * randomBetween(0.75, 1.2), 0.8, renownCap)),
-    damage: Math.round(clamp(baseStats.damage * quality * randomBetween(0.72, 1.25), 1, renownCap)),
-    penetration: Math.round(clamp(baseStats.penetration * quality * randomBetween(0.65, 1.25), 0, renownCap)),
+    damage: Math.round(clamp(baseStats.damage * quality * randomBetween(0.72, 1.25) * powerScale, 1, renownCap * 1.35)),
+    penetration: Math.round(clamp(baseStats.penetration * quality * randomBetween(0.65, 1.25) * powerScale, 0, renownCap * 1.2)),
     frequency: roundStat(clamp(baseStats.frequency * randomBetween(0.75, 1.2), 0.35, Math.min(2.4, renownCap))),
     speed: roundStat(clamp(baseStats.speed * randomBetween(0.75, 1.2), 0.45, Math.min(2.4, renownCap))),
     knockback: roundStat(clamp(baseStats.knockback * quality * randomBetween(0.65, 1.35), 0, renownCap))
@@ -2009,10 +3242,11 @@ function createRandomPveWeapon() {
 
   return {
     id: createId("mob-weapon"),
-    name: `${randomItem(PVE_WEAPON_PREFIXES)} ${definition.type}`,
+    name: `${material.name} ${definition.type}`,
+    material: material.name,
     type: definition.type,
     category: "Weapon",
-    rarity: getPveWeaponRarity(renownCap, weapon),
+    rarity: material.quality,
     weapon,
     durability: maxDurability,
     maxDurability
@@ -2047,7 +3281,8 @@ function createRandomPveArmor(slot = null) {
 
   return {
     id: createId("mob-armor"),
-    name: `${material.name} ${armorType.type}`,
+    name: `${material.name} ${armorType.type === "Feet" ? "Boots" : armorType.type}`,
+    material: material.name,
     type: armorType.type,
     category: "Armor",
     rarity: getPveArmorRarity(material, armor),
@@ -2063,6 +3298,49 @@ function createRandomPveArmorSet() {
     .filter(() => Math.random() < 0.58)
     .map((entry) => createRandomPveArmor(entry.slot))
     .filter(Boolean);
+}
+
+function getPveMobTemplate(archetype, sequence = 0) {
+  const templates = archetype === "raider" ? PVE_RAIDER_TEMPLATES : PVE_CREATURE_TEMPLATES;
+  return templates[sequence % templates.length];
+}
+
+function choosePveMobArchetype(forceRaider = false) {
+  return forceRaider || Math.random() < PVE_RAIDER_SPAWN_CHANCE ? "raider" : "creature";
+}
+
+function createPveMobLoadout(archetype) {
+  if (archetype === "raider") {
+    const weapon = createRandomPveWeapon(1.28);
+    weapon.weapon.damage = Math.max(13, weapon.weapon.damage);
+    weapon.weapon.penetration = Math.max(2, weapon.weapon.penetration);
+    return {
+      weapon,
+      armor: createRandomPveArmorSet(),
+      naturalAttack: null,
+      goldMin: 4,
+      goldMax: 9
+    };
+  }
+
+  return {
+    weapon: null,
+    armor: [],
+    naturalAttack: {
+      range: randomBetween(2.05, 2.45),
+      damage: Math.round(randomBetween(6, 10)),
+      penetration: 0,
+      frequency: randomBetween(0.72, 0.94),
+      speed: 1,
+      knockback: randomBetween(1.2, 2.6)
+    },
+    goldMin: 1,
+    goldMax: 4
+  };
+}
+
+function getPveEnemyAttackStats(enemy) {
+  return enemy?.weapon?.weapon ?? enemy?.naturalAttack ?? WEAPON_STATS["Empty Hand"];
 }
 
 function getRandomPveArmorMaterial() {
@@ -2113,7 +3391,7 @@ function cloneDroppedWeapon(item) {
     ...item,
     id: createId("item"),
     weapon: { ...item.weapon },
-    durability: item.maxDurability
+    durability: rollMobLootDurability(item)
   };
 }
 
@@ -2122,14 +3400,30 @@ function cloneDroppedArmor(item) {
     ...item,
     id: createId("item"),
     armor: { ...item.armor },
-    durability: item.maxDurability
+    durability: rollMobLootDurability(item)
   };
 }
 
+function rollMobLootDurability(item) {
+  const minimum = Math.max(1, Math.ceil(item.maxDurability * 0.15));
+  const maximum = Math.max(minimum, Math.floor(item.maxDurability * 0.65));
+  return Math.floor(randomBetween(minimum, maximum + 1));
+}
+
 function getDroppedLootItems(enemy) {
+  if (enemy.bossElement) return [createElementalGem(enemy.bossElement, createId("gem"))];
   const droppedWeapon = enemy.weapon ? cloneDroppedWeapon(enemy.weapon) : null;
   const droppedArmor = (enemy.armor ?? []).map(cloneDroppedArmor);
-  return [droppedWeapon, ...droppedArmor].filter(Boolean);
+  const goldAmount = Math.max(1, Math.round(randomBetween(enemy.goldMin ?? 1, enemy.goldMax ?? 3)));
+  const gold = {
+    id: createId("mob-gold"),
+    name: `${goldAmount} Gold`,
+    type: "Gold",
+    category: "Currency",
+    rarity: "Common",
+    goldAmount
+  };
+  return [gold, droppedWeapon, ...droppedArmor].filter(Boolean);
 }
 
 function spawnDroppedLootItems(items, position, sourceName = "mob") {
@@ -2166,10 +3460,53 @@ function spawnDroppedLootItems(items, position, sourceName = "mob") {
   document.body.dataset.droppedItems = String(world.droppedItems.length);
 }
 
+function syncDeathDropMeshes() {
+  const drops = state.deathDrops ?? [];
+  const ids = new Set(drops.map(drop => drop.id));
+  for (const existing of [...world.droppedItems]) if (existing.shared && !ids.has(existing.id)) removeDroppedItem(existing.id);
+  for (const drop of drops) {
+    if (world.droppedItems.some(existing => existing.id === drop.id)) continue;
+    const mesh = createDroppedItemMesh(drop.item, drop.id);
+    const floor = drop.sceneMode === "outdoor" ? Math.max(getTerrainHeightAt(drop.position.x, drop.position.z), drop.elevation || 0) : 0;
+    const baseY = floor + 0.22;
+    mesh.position.set(drop.position.x, baseY, drop.position.z);
+    mesh.visible = sameLootScene(world, drop);
+    world.scene.add(mesh);
+    world.droppedItems.push({ ...drop, shared: true, mesh, baseY, phase: Math.random() * Math.PI * 2 });
+  }
+  document.body.dataset.droppedItems = String(world.droppedItems.length);
+}
+
+async function pickupSharedDeathDrop(drop) {
+  if (drop.pending) return;
+  if (!world.multiplayer.enabled) {
+    state.player.inventory.push(drop.item);
+    state.player.selectedGearItemId = drop.item.id;
+    state.deathDrops = state.deathDrops.filter(entry => entry.id !== drop.id);
+    removeDroppedItem(drop.id);
+    refreshUi();
+    flash(`Picked up ${drop.item.name}.`);
+    return;
+  }
+  drop.pending = true;
+  try {
+    const data = await fetchPersistentJson("/api/world/pickup-drop", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playerId: state.player.id, dropId: drop.id })
+    });
+    applyPersistentPayload(data);
+    flash(data.message);
+  } catch {
+    flash("Could not confirm pickup. Reconnect to check your inventory.");
+  } finally {
+    drop.pending = false;
+  }
+}
+
 function createDroppedItemMesh(item, dropId) {
   const group = new THREE.Group();
   const ringMaterial = new THREE.MeshBasicMaterial({
-    color: item.weapon ? "#f2c45d" : "#8fc4ff",
+    color: item.goldAmount ? "#ffd65a" : item.weapon ? "#f2c45d" : "#8fc4ff",
     transparent: true,
     opacity: 0.68,
     depthWrite: false
@@ -2186,7 +3523,11 @@ function createDroppedItemMesh(item, dropId) {
   hitbox.position.y = 0.6;
   group.add(hitbox);
 
-  const visual = item.weapon ? createDroppedWeaponVisual(item) : createDroppedArmorVisual(item);
+  const visual = item.goldAmount
+    ? createDroppedGoldVisual(item)
+    : item.weapon
+      ? createDroppedWeaponVisual(item)
+      : createDroppedArmorVisual(item);
   visual.position.y = 0.42;
   group.add(visual);
 
@@ -2207,6 +3548,22 @@ function createDroppedWeaponVisual(item) {
   visual.scale.setScalar(0.52);
   visual.rotation.set(0.04, 0.35, -0.75);
   return visual;
+}
+
+function createDroppedGoldVisual(item) {
+  const group = new THREE.Group();
+  const gold = new THREE.MeshStandardMaterial({ color: "#e7b83d", roughness: 0.3, metalness: 0.58 });
+  const coinCount = Math.min(5, Math.max(2, Math.ceil((item.goldAmount ?? 1) / 2)));
+
+  for (let index = 0; index < coinCount; index += 1) {
+    const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.08, 16), gold);
+    coin.position.set((index % 2) * 0.28 - 0.14, index * 0.08, (index % 3) * 0.08 - 0.08);
+    coin.rotation.z = Math.PI * 0.5;
+    coin.castShadow = true;
+    group.add(coin);
+  }
+
+  return group;
 }
 
 function createDroppedArmorVisual(item) {
@@ -2271,14 +3628,18 @@ function getPveAttackCooldown(weaponItem, fallback = 1.4) {
   return frequency ? Math.max(0.55, 1 / frequency) : fallback;
 }
 
-function createPveEnemyWeaponMesh(weaponItem) {
+function createPveEnemyWeaponMesh(weaponItem, handAnchor = null) {
   const mount = new THREE.Group();
   const mesh = createHeldItemMesh(weaponItem, "right");
   mount.name = "pveWeaponVisual";
   mount.add(mesh);
-  mount.position.set(1.05, 2.65, 0.25);
-  mount.rotation.set(0.08, -0.08, -0.55);
+  const basePosition = handAnchor ? [0, 0, 0.03] : [1.05, 2.65, 0.25];
+  const baseRotation = handAnchor ? [0, 0, 0] : [0.08, -0.08, -0.55];
+  mount.position.set(...basePosition);
+  mount.rotation.set(...baseRotation);
   mount.scale.setScalar(0.82);
+  mount.userData.basePosition = basePosition;
+  mount.userData.baseRotation = baseRotation;
   return mount;
 }
 
@@ -2294,78 +3655,34 @@ function resetPveEnemyWeaponPose(enemy) {
     return;
   }
 
-  weapon.position.set(1.05, 2.65, 0.25);
-  weapon.rotation.set(0.08, -0.08, -0.55);
+  weapon.position.set(...(weapon.userData.basePosition ?? [1.05, 2.65, 0.25]));
+  weapon.rotation.set(...(weapon.userData.baseRotation ?? [0.08, -0.08, -0.55]));
   weapon.scale.setScalar(0.82);
-}
-
-function createPveEnemyArmorMesh(armorItems = []) {
-  const group = new THREE.Group();
-  group.name = "pveArmorVisual";
-
-  for (const item of armorItems) {
-    if (!item?.armor) {
-      continue;
-    }
-
-    const profile = getArmorMaterialProfile(item);
-    const material = new THREE.MeshStandardMaterial({
-      color: profile.color,
-      roughness: profile.metalness > 0.25 ? 0.36 : 0.76,
-      metalness: profile.metalness
-    });
-
-    if (item.armor.slot === "head") {
-      const helm = new THREE.Mesh(new THREE.SphereGeometry(0.58, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.58), material);
-      helm.position.y = 4.48;
-      helm.scale.set(1.06, 0.72, 1.02);
-      group.add(helm);
-    } else if (item.armor.slot === "chest") {
-      const chest = new THREE.Mesh(new THREE.BoxGeometry(1.42, 1.55, 0.28), material);
-      chest.position.set(0, 3.02, 0.72);
-      group.add(chest);
-
-      const back = new THREE.Mesh(new THREE.BoxGeometry(1.34, 1.42, 0.2), material);
-      back.position.set(0, 3.02, -0.72);
-      group.add(back);
-    } else if (item.armor.slot === "gloves") {
-      for (const side of [-1, 1]) {
-        const glove = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), material);
-        glove.position.set(side * 0.86, 2.45, 0.2);
-        glove.scale.set(1.25, 0.82, 1);
-        group.add(glove);
-      }
-    } else if (item.armor.slot === "feet") {
-      for (const side of [-1, 1]) {
-        const boot = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.26, 0.72), material);
-        boot.position.set(side * 0.34, 1.06, 0.16);
-        group.add(boot);
-      }
-    }
-  }
-
-  group.traverse((child) => {
-    if (child.isMesh) {
-      child.castShadow = true;
-      child.receiveShadow = true;
-    }
-  });
-
-  return group;
 }
 
 function setPveEnemyWeapon(enemy, weaponItem) {
   const current = enemy.mesh.getObjectByName("pveWeaponVisual");
 
   if (current) {
-    enemy.mesh.remove(current);
+    current.parent?.remove(current);
   }
 
   enemy.weapon = weaponItem;
-  enemy.attackRange = getPveAttackRange(weaponItem, enemy.attackRange ?? 2.4);
-  enemy.attackCooldown = getPveAttackCooldown(weaponItem, enemy.attackCooldown ?? 1.4);
+  const attackStats = getPveEnemyAttackStats(enemy);
+  enemy.attackRange = weaponItem
+    ? getPveAttackRange(weaponItem, enemy.attackRange ?? 2.4)
+    : attackStats.range ?? 2.2;
+  enemy.attackCooldown = weaponItem
+    ? getPveAttackCooldown(weaponItem, enemy.attackCooldown ?? 1.4)
+    : Math.max(0.55, 1 / Math.max(0.1, attackStats.frequency ?? 0.8));
   resetPveEnemyAttackState(enemy);
-  const visual = createPveEnemyWeaponMesh(weaponItem);
+
+  if (!weaponItem) {
+    return;
+  }
+
+  const handAnchor = enemy.rig?.rightArm?.userData?.hand ?? null;
+  const visual = createPveEnemyWeaponMesh(weaponItem, handAnchor);
   visual.traverse((child) => {
     child.userData.pveEnemyId = enemy.id;
     child.userData.statusEntityKey = getPveStatusKey(enemy.id);
@@ -2373,47 +3690,185 @@ function setPveEnemyWeapon(enemy, weaponItem) {
       child.castShadow = true;
     }
   });
-  enemy.mesh.add(visual);
+  (handAnchor ?? enemy.mesh).add(visual);
 }
 
 function setPveEnemyArmor(enemy, armorItems = []) {
-  const current = enemy.mesh.getObjectByName("pveArmorVisual");
+  enemy.armor = armorItems;
+  enemy.rig.armorVisuals ??= createArmorVisualState();
+  for (const slotId of ARMOR_VISUAL_SLOT_IDS) {
+    syncArmorSlotVisual(enemy.rig.armorVisuals, enemy.rig, slotId,
+      armorItems.find(item => item.armor?.slot === slotId && item.durability > 0) ?? null,
+      getPveStatusKey(enemy.id));
+  }
+}
 
-  if (current) {
-    enemy.mesh.remove(current);
+function createPveHumanoidRig(color, skinColor, weapon) {
+  const visualRoot = new THREE.Group();
+  visualRoot.name = "pveHumanoidRig";
+  const cloth = new THREE.MeshStandardMaterial({ color, roughness: 0.74 });
+  const skin = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.86 });
+  const leather = new THREE.MeshStandardMaterial({ color: "#3c291d", roughness: 0.88 });
+  const dark = new THREE.MeshStandardMaterial({ color: "#171411", roughness: 0.68 });
+
+  const body = createPlayerTorso(cloth, leather);
+  body.position.y = 3.15;
+  visualRoot.add(body);
+
+  const belt = new THREE.Mesh(createRoundedBoxGeometry(1.72, 0.2, 1.02, 0.07, 3), leather);
+  belt.position.y = 2.54;
+  belt.castShadow = true;
+  visualRoot.add(belt);
+
+  const leftLeg = createPlayerLeg(HAND_CONFIG.left.side, leather, dark);
+  const rightLeg = createPlayerLeg(HAND_CONFIG.right.side, leather, dark);
+  visualRoot.add(leftLeg, rightLeg);
+
+  const headGroup = new THREE.Group();
+  headGroup.position.set(0, 5.15, 0.16);
+  visualRoot.add(headGroup);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.56, 14, 10), skin);
+  head.castShadow = true;
+  headGroup.add(head);
+
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 6), dark);
+    eye.position.set(side * 0.21, 0.08, 0.51);
+    headGroup.add(eye);
   }
 
-  enemy.armor = armorItems;
-  const visual = createPveEnemyArmorMesh(armorItems);
-  visual.traverse((child) => {
-    child.userData.pveEnemyId = enemy.id;
-    child.userData.statusEntityKey = getPveStatusKey(enemy.id);
+  const leftArm = createPlayerArm(HAND_CONFIG.left.side, skin, cloth);
+  const rightArm = createPlayerArm(HAND_CONFIG.right.side, skin, cloth);
+  visualRoot.add(leftArm, rightArm);
+
+  if (weapon) {
+    rightArm.userData.hand.add(createPveEnemyWeaponMesh(weapon, rightArm.userData.hand));
+  }
+
+  return {
+    kind: "humanoid",
+    visualRoot,
+    body,
+    headGroup,
+    leftArm,
+    rightArm,
+    leftLeg,
+    rightLeg,
+    animationTime: Math.random() * Math.PI * 2,
+    moveAmount: 0
+  };
+}
+
+function createPveCreatureRig(color, skinColor) {
+  const visualRoot = new THREE.Group();
+  visualRoot.name = "pveCreatureRig";
+  const hide = new THREE.MeshStandardMaterial({ color, roughness: 0.9 });
+  const skin = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.82 });
+  const claw = new THREE.MeshStandardMaterial({ color: "#d7cfb0", roughness: 0.55 });
+  const eyeMaterial = new THREE.MeshStandardMaterial({
+    color: "#ffb348",
+    emissive: "#d55720",
+    emissiveIntensity: 0.75,
+    roughness: 0.3
   });
-  enemy.mesh.add(visual);
+
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.78, 1.55, 5, 12), hide);
+  body.position.set(0, 3.18, -0.12);
+  body.rotation.x = Math.PI * 0.42;
+  body.scale.set(1.05, 1, 0.9);
+  visualRoot.add(body);
+
+  const shoulders = new THREE.Mesh(new THREE.SphereGeometry(0.88, 12, 8), hide);
+  shoulders.position.set(0, 3.62, 0.18);
+  shoulders.scale.set(1.35, 0.78, 0.9);
+  visualRoot.add(shoulders);
+
+  const headGroup = new THREE.Group();
+  headGroup.position.set(0, 3.72, 1.08);
+  headGroup.rotation.x = -0.2;
+  visualRoot.add(headGroup);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.58, 12, 9), skin);
+  head.scale.set(1.02, 0.82, 1.18);
+  headGroup.add(head);
+  const muzzle = new THREE.Mesh(new THREE.ConeGeometry(0.33, 0.72, 8), skin);
+  muzzle.position.set(0, -0.12, 0.67);
+  muzzle.rotation.x = Math.PI * 0.5;
+  headGroup.add(muzzle);
+
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), eyeMaterial);
+    eye.position.set(side * 0.23, 0.12, 0.52);
+    headGroup.add(eye);
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 7), skin);
+    ear.position.set(side * 0.42, 0.38, 0.02);
+    ear.rotation.z = side * -0.48;
+    headGroup.add(ear);
+  }
+
+  const leftArm = createPlayerArm(HAND_CONFIG.left.side, skin, hide);
+  const rightArm = createPlayerArm(HAND_CONFIG.right.side, skin, hide);
+  for (const arm of [leftArm, rightArm]) {
+    arm.position.set(Math.sign(arm.position.x) * 0.9, 3.72, 0.35);
+    arm.scale.set(1.08, 1.2, 1.08);
+    const hand = arm.userData.hand;
+    for (const side of [-1, 0, 1]) {
+      const talon = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.34, 6), claw);
+      talon.position.set(side * 0.11, -0.18, 0.18);
+      talon.rotation.x = Math.PI * 0.5;
+      hand.add(talon);
+    }
+  }
+  visualRoot.add(leftArm, rightArm);
+
+  const leftLeg = createPlayerLeg(HAND_CONFIG.left.side, hide, claw);
+  const rightLeg = createPlayerLeg(HAND_CONFIG.right.side, hide, claw);
+  for (const leg of [leftLeg, rightLeg]) {
+    leg.position.set(Math.sign(leg.position.x) * 0.46, 1.80, -0.2);
+    leg.scale.set(1.08, 0.86, 1.12);
+  }
+  visualRoot.add(leftLeg, rightLeg);
+
+  for (let index = 0; index < 4; index += 1) {
+    const spine = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.48, 7), claw);
+    spine.position.set(0, 3.86 - index * 0.22, -0.52 - index * 0.24);
+    spine.rotation.x = -0.55;
+    visualRoot.add(spine);
+  }
+
+  return {
+    kind: "creature",
+    visualRoot,
+    body,
+    headGroup,
+    leftArm,
+    rightArm,
+    leftLeg,
+    rightLeg,
+    animationTime: Math.random() * Math.PI * 2,
+    moveAmount: 0
+  };
+}
+
+function createPveMobRig(archetype, color, skinColor, weapon) {
+  const rig = archetype === "raider"
+    ? createPveHumanoidRig(color, "#66834b", weapon)
+    : createPveCreatureRig(color, skinColor);
+  attachMobModel(rig, archetype === "raider" ? "orc" : "gremlin");
+  return rig;
 }
 
 function createPveEnemy(spawn) {
   const group = new THREE.Group();
+  group.userData.cameraOcclusionExcluded = true;
   const id = `pve-${world.pveEnemySeq}`;
   world.pveEnemySeq += 1;
   group.name = id;
   group.position.set(spawn.position.x, 0, spawn.position.z);
+  const archetype = spawn.archetype ?? choosePveMobArchetype();
+  const loadout = createPveMobLoadout(archetype);
+  const rig = createPveMobRig(archetype, spawn.color, spawn.skinColor ?? "#9d8b74", loadout.weapon);
+  group.add(rig.visualRoot);
 
-  const cloth = new THREE.MeshStandardMaterial({ color: spawn.color, roughness: 0.74 });
-  const skin = new THREE.MeshStandardMaterial({ color: "#9d8b74", roughness: 0.86 });
-  const mobWeapon = createRandomPveWeapon();
-  const mobArmor = createRandomPveArmorSet();
-
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.85, 2.2, 5, 12), cloth);
-  body.position.y = 2.75;
-  group.add(body);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.52, 14, 10), skin);
-  head.position.y = 4.35;
-  group.add(head);
-
-  group.add(createPveEnemyWeaponMesh(mobWeapon));
-  group.add(createPveEnemyArmorMesh(mobArmor));
 
   const healthBar = createHealthBarSprite(spawn.name);
   healthBar.name = "healthBar";
@@ -2430,81 +3885,170 @@ function createPveEnemy(spawn) {
   });
   tagEntityStatusTarget(group, getPveStatusKey(id));
 
-  world.pveEnemies.push({
+  const enemy = {
     id,
     name: spawn.name,
+    mobClass: archetype,
     mesh: group,
+    rig,
     healthBar,
     hp: spawn.hp,
     maxHp: spawn.hp,
     spawn: { ...spawn.position },
-    weapon: mobWeapon,
-    armor: mobArmor,
-    radius: 1.15,
-    speed: spawn.hp >= 80 ? 5.4 : 6.7,
+    weapon: loadout.weapon,
+    armor: loadout.armor,
+    naturalAttack: loadout.naturalAttack,
+    goldMin: loadout.goldMin,
+    goldMax: loadout.goldMax,
+    radius: spawn.radius ?? (archetype === "raider" ? 1.22 : 1.08),
+    speed: spawn.speed ?? (archetype === "raider" ? 5.7 : 7.5),
     knockbackVelocity: new THREE.Vector3(0, 0, 0),
-    attackRange: getPveAttackRange(mobWeapon, 2.4),
-    attackCooldown: getPveAttackCooldown(mobWeapon, 1.4),
+    attackRange: loadout.weapon
+      ? getPveAttackRange(loadout.weapon, 2.4)
+      : loadout.naturalAttack.range,
+    attackCooldown: loadout.weapon
+      ? getPveAttackCooldown(loadout.weapon, 1.4)
+      : 1 / loadout.naturalAttack.frequency,
     attackTimer: Math.random() * 0.8,
     attackAnimation: null,
     dead: false,
     deathTimer: 0
-  });
+  };
+  if (spawn.bossElement) {
+    enemy.bossElement = spawn.bossElement;
+    enemy.dungeonId = world.dungeon.id;
+    enemy.weapon = null; enemy.armor = [];
+    rig.visualRoot.visible = false;
+    const visual = createSorcererVisual(spawn.bossElement);
+    visual.traverse(child => { child.userData.pveEnemyId = id; });
+    group.add(visual);
+    enemy.sorcererVisual = visual;
+    enemy.spells = new SorcererSpells(world.dungeon.contentRoot ?? group.parent ?? world.scene, spawn.bossElement);
+    enemy.castTurn = 0;
+    enemy.attackTimer = 1.5;
+    healthBar.position.y = 10;
+  } else if (archetype === "raider") setPveEnemyArmor(enemy, loadout.armor);
+  applyGremlinSize(enemy);
+  world.pveEnemies.push(enemy);
 
   return group;
 }
 
-function spawnOutdoorDungeonMonster() {
+function getEbonHollowDungeon() {
+  return state.pois.find((poi) => poi.id === "ebon-hollow") ?? null;
+}
+
+function getOutdoorDungeonMonsterRingRadius(dungeon = getEbonHollowDungeon()) {
+  return (dungeon?.radius ?? 16) + OUTDOOR_DUNGEON_MONSTER_RING_PADDING;
+}
+
+function isOutsideOutdoorDungeonMonsterRing(position, dungeon = getEbonHollowDungeon()) {
+  if (!dungeon || !position) {
+    return true;
+  }
+
+  return distance2D(position, dungeon.position) >= getOutdoorDungeonMonsterRingRadius(dungeon);
+}
+
+function pushPositionOutsideOutdoorDungeonMonsterRing(position, dungeon = getEbonHollowDungeon(), radius = 0) {
+  if (!dungeon || !position) {
+    return position;
+  }
+
+  const minimumDistance = getOutdoorDungeonMonsterRingRadius(dungeon) + radius;
+  const dx = position.x - dungeon.position.x;
+  const dz = position.z - dungeon.position.z;
+  const distance = Math.hypot(dx, dz);
+
+  if (distance >= minimumDistance) {
+    return position;
+  }
+
+  const angle = distance > 0.001
+    ? Math.atan2(dz, dx)
+    : (world.outdoorMonsterSeq * 2.399963) % (Math.PI * 2);
+
+  return {
+    x: dungeon.position.x + Math.cos(angle) * minimumDistance,
+    z: dungeon.position.z + Math.sin(angle) * minimumDistance
+  };
+}
+
+function spawnOutdoorDungeonMonster(camp = null, cheat = null) {
   if (!GAME_FLAGS.pve) {
     return;
   }
 
-  if (getAlivePveMobCount() >= getPveMobCap()) {
+  const night = getNightAmount(state.elapsed) > 0.62;
+  const sources = raidSpawnSources(MOB_CAMPS, CASTLES, state.factions, night);
+  if (camp && !sources.some(source => source.id === camp.id)) return;
+  if (!cheat && world.outdoorMonsters.filter(mob => !mob.dead).length >= sources.length * (night ? NIGHT_CAMP_CAP : 3)) {
     return;
   }
 
-  const dungeon = state.pois.find((poi) => poi.id === "ebon-hollow");
+  const dungeon = cheat ? { id: 'cheat', position: state.player.position } : camp ?? selectCampForSpawn(sources, world.outdoorMonsters, state.player.position, getNightAmount(state.elapsed) > 0.62 ? NIGHT_CAMP_CAP : 3);
 
-  if (!dungeon) {
+  if (!dungeon || (!cheat && world.outdoorMonsters.filter(mob => !mob.dead && mob.campId === dungeon.id).length >= (night ? NIGHT_CAMP_CAP : 3))) {
     return;
   }
 
-  const template = OUTDOOR_DUNGEON_MONSTERS[world.outdoorMonsterSeq % OUTDOOR_DUNGEON_MONSTERS.length];
+  const archetype = cheat?.archetype ?? choosePveMobArchetype();
+  const template = cheat?.template ?? getPveMobTemplate(archetype, world.outdoorMonsterSeq);
   const angle = (world.outdoorMonsterSeq * 2.399963 + state.elapsed * 0.37) % (Math.PI * 2);
-  const spawnDistance = 9 + (world.outdoorMonsterSeq % 4) * 1.7;
-  const spawn = {
+  const spawnDistance = cheat ? 8 :
+    getOutdoorDungeonMonsterRingRadius(dungeon) +
+    OUTDOOR_DUNGEON_MONSTER_SPAWN_BUFFER +
+    (world.outdoorMonsterSeq % 4) * 1.7;
+  const campModel = !cheat && world.campModels.find(model => model.userData.campId === dungeon.id);
+  const tentExit = campModel ? chooseCampTentSpawn(campModel, world.outdoorMonsters, dungeon.id, world.outdoorMonsterSeq) : null;
+  if (campModel && !tentExit) return;
+  const spawn = tentExit ? { ...tentExit.inside } : {
     x: dungeon.position.x + Math.cos(angle) * spawnDistance,
     z: dungeon.position.z + Math.sin(angle) * spawnDistance
   };
   const id = `outdoor-monster-${world.outdoorMonsterSeq}`;
   world.outdoorMonsterSeq += 1;
-  const mobWeapon = createRandomPveWeapon();
-  const mobArmor = createRandomPveArmorSet();
+  const loadout = createPveMobLoadout(archetype);
 
   const mesh = createMonsterMesh({
     id,
     name: template.name,
+    archetype,
     color: template.color,
+    skinColor: template.skinColor,
     position: spawn,
-    weapon: mobWeapon,
-    armor: mobArmor
+    weapon: loadout.weapon,
+    armor: loadout.armor
   });
+  const rig = mesh.userData.pveRig;
 
   const monster = {
+    tentExit,
+    campId: dungeon.id,
+    sourceCastleId: dungeon.sourceCastleId ?? null,
     id,
     name: template.name,
+    mobClass: archetype,
     mesh,
+    rig,
     healthBar: mesh.getObjectByName("healthBar"),
     hp: template.hp,
     maxHp: template.hp,
-    weapon: mobWeapon,
-    armor: mobArmor,
+    weapon: loadout.weapon,
+    armor: loadout.armor,
+    naturalAttack: loadout.naturalAttack,
+    goldMin: loadout.goldMin,
+    goldMax: loadout.goldMax,
     spawn,
     radius: template.radius,
     speed: template.speed,
     knockbackVelocity: new THREE.Vector3(0, 0, 0),
-    attackRange: getPveAttackRange(mobWeapon, 2.55),
-    attackCooldown: getPveAttackCooldown(mobWeapon, 1.25),
+    attackRange: loadout.weapon
+      ? getPveAttackRange(loadout.weapon, 2.55)
+      : loadout.naturalAttack.range,
+    attackCooldown: loadout.weapon
+      ? getPveAttackCooldown(loadout.weapon, 1.25)
+      : 1 / loadout.naturalAttack.frequency,
     attackTimer: Math.random() * 0.6,
     attackAnimation: null,
     aggro: false,
@@ -2513,32 +4057,23 @@ function spawnOutdoorDungeonMonster() {
     deathTimer: 0
   };
 
+  applyGremlinSize(monster);
+  if (tentExit) mesh.rotation.y = Math.atan2(tentExit.x - spawn.x, tentExit.z - spawn.z);
   world.outdoorMonsters.push(monster);
   addOutdoor(mesh);
   updatePveEnemyHealthBar(monster);
 }
 
-function createMonsterMesh({ id, name, color, position, weapon, armor = [] }) {
+function createMonsterMesh({ id, name, archetype = "creature", color, skinColor = "#9d8b74", position, weapon, armor = [] }) {
   const group = new THREE.Group();
   group.name = id;
   group.position.set(position.x, getTerrainHeightAt(position.x, position.z), position.z);
 
-  const cloth = new THREE.MeshStandardMaterial({ color, roughness: 0.74 });
-  const skin = new THREE.MeshStandardMaterial({ color: "#9d8b74", roughness: 0.86 });
+  const rig = createPveMobRig(archetype, color, skinColor, weapon);
+  group.add(rig.visualRoot);
+  group.userData.pveRig = rig;
 
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.85, 2.2, 5, 12), cloth);
-  body.position.y = 2.75;
-  group.add(body);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.52, 14, 10), skin);
-  head.position.y = 4.35;
-  group.add(head);
-
-  if (weapon) {
-    group.add(createPveEnemyWeaponMesh(weapon));
-  }
-
-  group.add(createPveEnemyArmorMesh(armor));
+  if (archetype === "raider") setPveEnemyArmor({ id, mesh: group, rig }, armor);
 
   const healthBar = createHealthBarSprite(name);
   healthBar.name = "healthBar";
@@ -2561,19 +4096,19 @@ function createMonsterMesh({ id, name, color, position, weapon, armor = [] }) {
 
 function createTradeNpc(npc) {
   const group = new THREE.Group();
+  group.userData.cameraOcclusionExcluded = true;
   group.name = `${npc.id}TradeNpc`;
-  group.position.set(npc.position.x, getTerrainHeightAt(npc.position.x, npc.position.z), npc.position.z);
-  group.rotation.y = npc.position.z < 0 ? 0 : Math.PI;
+  group.position.set(npc.position.x, npc.position.y ?? 0, npc.position.z);
+  group.rotation.y = 0; // Face the entrance across the desk.
 
-  const resource = RESOURCE_LOOKUP[npc.resourceId];
+  const marketColor = "#d6a542";
   const cloth = new THREE.MeshStandardMaterial({ color: npc.color, roughness: 0.72 });
   const skin = new THREE.MeshStandardMaterial({ color: "#d3b58f", roughness: 0.78 });
   const leather = new THREE.MeshStandardMaterial({ color: "#45301f", roughness: 0.86 });
-  const tool = new THREE.MeshStandardMaterial({ color: resource.color, roughness: 0.5, metalness: npc.resourceId === "iron" ? 0.32 : 0.04 });
 
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(3.2, 0.18, 8, 48),
-    new THREE.MeshBasicMaterial({ color: resource.color, transparent: true, opacity: 0.75 })
+    new THREE.MeshBasicMaterial({ color: marketColor, transparent: true, opacity: 0.75 })
   );
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.18;
@@ -2594,25 +4129,54 @@ function createTradeNpc(npc) {
   cap.castShadow = true;
   group.add(cap);
 
-  const crate = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.3, 1.7), tool);
-  crate.position.set(0, 0.72, 2.1);
-  crate.castShadow = true;
-  group.add(crate);
+  for (const x of [-0.38, 0.38]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 1.15, 8), leather);
+    leg.position.set(x, 0.94, 0);
+    group.add(leg);
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 0.8), leather);
+    boot.name = "shopkeepBoot";
+    boot.position.set(x, 0.2, 0.13);
+    group.add(boot);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.85, 4, 8), cloth);
+    arm.position.set(x * 2.5, 2.9, 0.35);
+    arm.rotation.x = -0.9;
+    group.add(arm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), skin);
+    hand.position.set(x * 2.5, 2.55, 0.8);
+    group.add(hand);
+  }
 
-  const counter = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.55, 1.5), leather);
-  counter.position.set(0, 1.42, 1.55);
+  const counter = new THREE.Mesh(new THREE.BoxGeometry(8, 0.35, 2.8), leather);
+  counter.name = "merchantDesktop";
+  counter.position.set(0, 2.35, 2.1);
   counter.castShadow = true;
   group.add(counter);
+  for (const x of [-3.5, 3.5]) {
+    for (const z of [1, 3.2]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.35, 2.2, 0.35), leather);
+      leg.position.set(x, 1.1, z);
+      group.add(leg);
+    }
+  }
+  const front = new THREE.Mesh(new THREE.BoxGeometry(7.2, 1.95, 0.16), cloth);
+  front.position.set(0, 1.18, 3.2);
+  group.add(front);
+  const ledger = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.12, 0.85), skin);
+  ledger.position.set(2.6, 2.59, 2.1);
+  ledger.rotation.y = -0.18;
+  group.add(ledger);
 
-  addTradeNpcProp(group, npc.resourceId, tool, leather);
+  const deskGoods = new THREE.Group();
+  deskGoods.position.y = 0.8;
+  addShopkeepProps(deskGoods, npc.resourceIds, leather);
+  group.add(deskGoods);
 
-  const label = createTextSprite(npc.name, resource.color, 28);
+  const label = createTextSprite(npc.name, marketColor, 28);
   label.position.set(0, 6.2, 0);
   group.add(label);
 
   group.traverse((child) => {
     child.userData.tradeNpcId = npc.id;
-    child.userData.resourceId = npc.resourceId;
   });
 
   return group;
@@ -2620,6 +4184,7 @@ function createTradeNpc(npc) {
 
 function createStewardNpc() {
   const group = new THREE.Group();
+  group.userData.cameraOcclusionExcluded = true;
   group.name = "factionStewardNpc";
   group.position.set(-18, 0, -9);
   group.rotation.y = Math.PI * 0.2;
@@ -2685,6 +4250,135 @@ function createStewardNpc() {
   return group;
 }
 
+function createBlacksmithNpc() {
+  const group = new THREE.Group();
+  group.userData.cameraOcclusionExcluded = true;
+  group.name = "factionBlacksmithNpc";
+  group.position.set(BLACKSMITH_NPC.position.x, 0, BLACKSMITH_NPC.position.z);
+  group.rotation.y = Math.PI * 0.68;
+
+  const cloth = new THREE.MeshStandardMaterial({ color: BLACKSMITH_NPC.color, roughness: 0.78 });
+  const skin = new THREE.MeshStandardMaterial({ color: "#d3b58f", roughness: 0.78 });
+  const leather = new THREE.MeshStandardMaterial({ color: "#3a2416", roughness: 0.88 });
+  const steel = new THREE.MeshStandardMaterial({ color: "#85898e", roughness: 0.42, metalness: 0.42 });
+  const ember = new THREE.MeshStandardMaterial({
+    color: "#f1792a",
+    emissive: "#b54218",
+    emissiveIntensity: 0.85,
+    roughness: 0.48
+  });
+
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(3.2, 0.18, 8, 48),
+    new THREE.MeshBasicMaterial({ color: "#f0a84a", transparent: true, opacity: 0.78 })
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.18;
+  group.add(ring);
+
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.84, 1.95, 5, 12), cloth);
+  body.position.y = 2.72;
+  body.castShadow = true;
+  group.add(body);
+
+  const apron = new THREE.Mesh(new THREE.BoxGeometry(1.25, 1.55, 0.18), leather);
+  apron.position.set(0, 2.62, -0.66);
+  apron.castShadow = true;
+  group.add(apron);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12), skin);
+  head.position.y = 4.18;
+  head.castShadow = true;
+  group.add(head);
+
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.54, 0.26, 10), leather);
+  cap.position.y = 4.58;
+  cap.castShadow = true;
+  group.add(cap);
+
+  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 1.2, 4, 8), skin);
+  arm.position.set(-0.72, 3.08, -0.18);
+  arm.rotation.z = -0.72;
+  arm.castShadow = true;
+  group.add(arm);
+
+  const hammerHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.25, 8), leather);
+  hammerHandle.position.set(-1.24, 2.8, -0.18);
+  hammerHandle.rotation.z = -0.72;
+  hammerHandle.castShadow = true;
+  group.add(hammerHandle);
+
+  const hammerHead = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.28, 0.28), steel);
+  hammerHead.position.set(-1.56, 3.28, -0.18);
+  hammerHead.rotation.z = -0.72;
+  hammerHead.castShadow = true;
+  group.add(hammerHead);
+
+  const billet = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.22, 0.38), ember);
+  billet.position.set(0.95, 1.72, 1.02);
+  billet.rotation.y = -0.22;
+  billet.castShadow = true;
+  group.add(billet);
+
+  const label = createTextSprite(BLACKSMITH_NPC.name, "#f0a84a", 30);
+  label.position.set(0, 6.25, 0);
+  group.add(label);
+
+  group.traverse((child) => {
+    child.userData.blacksmithNpc = true;
+  });
+
+  return group;
+}
+
+function addShopkeepProps(group, resourceIds, darkMaterial) {
+  resourceIds.forEach((resourceId, index) => {
+    const resource = RESOURCE_LOOKUP[resourceId];
+    const material = new THREE.MeshStandardMaterial({
+      color: resource.color,
+      roughness: 0.58,
+      metalness: resourceId === "iron" ? 0.28 : 0.04
+    });
+    const x = -1.35 + index * 0.9;
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.48, 0.52), material);
+    crate.position.set(x, 1.95, 1.15);
+    crate.castShadow = true;
+    group.add(crate);
+
+    if (resourceId === "wood") {
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.74, 8), material);
+      log.position.set(x, 2.34, 1.15);
+      log.rotation.z = Math.PI / 2;
+      log.castShadow = true;
+      group.add(log);
+    } else if (resourceId === "stone") {
+      const block = new THREE.Mesh(new THREE.DodecahedronGeometry(0.24), material);
+      block.position.set(x, 2.32, 1.15);
+      block.castShadow = true;
+      group.add(block);
+    } else if (resourceId === "wheat") {
+      const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.72, 5), material);
+      stalk.position.set(x, 2.45, 1.15);
+      stalk.rotation.z = 0.16;
+      group.add(stalk);
+      const grain = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.26, 6), material);
+      grain.position.set(x + 0.06, 2.9, 1.15);
+      grain.rotation.z = 0.16;
+      group.add(grain);
+    } else if (resourceId === "iron") {
+      const ingot = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.2, 0.34), material);
+      ingot.position.set(x, 2.32, 1.15);
+      ingot.castShadow = true;
+      group.add(ingot);
+    }
+  });
+
+  const scales = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.1, 0.42), darkMaterial);
+  scales.position.set(0, 2.12, 0.92);
+  scales.castShadow = true;
+  group.add(scales);
+}
+
 function addTradeNpcProp(group, resourceId, material, darkMaterial) {
   if (resourceId === "wood") {
     const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.3, 8), darkMaterial);
@@ -2743,7 +4437,7 @@ function createPlayerMesh() {
   chest.position.set(0, 3.65, 0);
   visualRoot.add(chest);
 
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.22, 1.08), leather);
+  const belt = new THREE.Mesh(createRoundedBoxGeometry(1.76, 0.22, 1.08, 0.08, 3), leather);
   belt.position.y = 2.55;
   belt.castShadow = true;
   visualRoot.add(belt);
@@ -2834,15 +4528,48 @@ function createPlayerMesh() {
   };
   world.scene.add(group);
   updatePlayerHealthBar();
+  attachWarriorModel(world.playerRig, group, { belt });
+}
+
+function createRoundedBoxGeometry(width, height, depth, radius, segments = 4) {
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
+  const cornerRadius = Math.min(radius, halfWidth * 0.92, halfHeight * 0.92, depth * 0.42);
+  const bevelSize = Math.min(cornerRadius * 0.48, depth * 0.18);
+  const shape = new THREE.Shape();
+
+  shape.moveTo(-halfWidth + cornerRadius, -halfHeight);
+  shape.lineTo(halfWidth - cornerRadius, -halfHeight);
+  shape.quadraticCurveTo(halfWidth, -halfHeight, halfWidth, -halfHeight + cornerRadius);
+  shape.lineTo(halfWidth, halfHeight - cornerRadius);
+  shape.quadraticCurveTo(halfWidth, halfHeight, halfWidth - cornerRadius, halfHeight);
+  shape.lineTo(-halfWidth + cornerRadius, halfHeight);
+  shape.quadraticCurveTo(-halfWidth, halfHeight, -halfWidth, halfHeight - cornerRadius);
+  shape.lineTo(-halfWidth, -halfHeight + cornerRadius);
+  shape.quadraticCurveTo(-halfWidth, -halfHeight, -halfWidth + cornerRadius, -halfHeight);
+  shape.closePath();
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: true,
+    bevelThickness: bevelSize,
+    bevelSize,
+    bevelSegments: segments,
+    curveSegments: segments
+  });
+
+  geometry.center();
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function createPlayerTorso(tunic, leather) {
   const torso = new THREE.Group();
   torso.name = "playerTorso";
 
-  const hips = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.68, 0.5, 12), tunic);
+  const hips = new THREE.Mesh(createRoundedBoxGeometry(1.58, 0.52, 0.88, 0.18, 5), tunic);
   hips.position.y = -0.72;
-  hips.scale.set(1.2, 1, 0.72);
+  hips.scale.set(1, 1, 1);
   torso.add(hips);
 
   const abdomen = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.42, 0.82, 12), tunic);
@@ -2988,7 +4715,7 @@ function createPlayerCrown() {
 
 function createPlayerArm(side, skin, leather) {
   const arm = new THREE.Group();
-  arm.position.set(side * 1.08, 4.35, 0.22);
+  arm.position.set(side * 0.92, 4.35, 0.02);
   arm.rotation.z = side * 0.16;
 
   const upperArm = new THREE.Group();
@@ -3120,7 +4847,7 @@ function syncArmorSlotVisual(visuals, rig, slotId, item, statusKey = null) {
   }
 
   for (const mount of getArmorSlotMounts(rig, slotId)) {
-    const mesh = createPlayerArmorSlotMesh(item, slotId, mount.side);
+    const mesh = createPlayerArmorSlotMesh(item, slotId, mount.side, mount.part);
 
     if (statusKey) {
       tagEntityStatusTarget(mesh, statusKey);
@@ -3137,32 +4864,42 @@ function getArmorSlotMounts(rig, slotId) {
   }
 
   if (slotId === "chest") {
-    return [{ parent: rig.body, side: 0 }];
+    return [
+      { parent: rig.body, side: 0 },
+      { parent: rig.leftArm?.userData.upperArm ?? rig.leftArm, side: 1, part: "shoulder" },
+      { parent: rig.rightArm?.userData.upperArm ?? rig.rightArm, side: -1, part: "shoulder" }
+    ].filter(mount => mount.parent);
   }
 
   if (slotId === "gloves") {
     return [
-      { parent: rig.leftForearm ?? rig.leftArm, side: HAND_CONFIG.left.side },
-      { parent: rig.rightForearm ?? rig.rightArm, side: HAND_CONFIG.right.side }
-    ];
+      { parent: rig.leftForearm ?? rig.leftArm, side: HAND_CONFIG.left.side, part: "forearm" },
+      { parent: rig.rightForearm ?? rig.rightArm, side: HAND_CONFIG.right.side, part: "forearm" },
+      { parent: rig.leftHand, side: HAND_CONFIG.left.side, part: "hand" },
+      { parent: rig.rightHand, side: HAND_CONFIG.right.side, part: "hand" }
+    ].filter(mount => mount.parent);
   }
 
   if (slotId === "feet") {
     return [
       { parent: rig.leftFoot ?? rig.leftLeg, side: HAND_CONFIG.left.side },
-      { parent: rig.rightFoot ?? rig.rightLeg, side: HAND_CONFIG.right.side }
-    ];
+      { parent: rig.rightFoot ?? rig.rightLeg, side: HAND_CONFIG.right.side },
+      { parent: rig.leftShin, side: HAND_CONFIG.left.side, part: "shin" },
+      { parent: rig.rightShin, side: HAND_CONFIG.right.side, part: "shin" }
+    ].filter(mount => mount.parent);
   }
 
   return [];
 }
 
-function createPlayerArmorSlotMesh(item, slotId, side = 0) {
+function createPlayerArmorSlotMesh(item, slotId, side = 0, part = null) {
   const group = new THREE.Group();
   const material = createArmorVisualMaterial(item);
   const trim = new THREE.MeshStandardMaterial({ color: "#d9d2b5", roughness: 0.48, metalness: 0.18 });
 
-  if (slotId === "head") {
+  if (part && !["forearm"].includes(part)) {
+    // Additional articulated parts have no legacy primitive equivalent.
+  } else if (slotId === "head") {
     const helm = new THREE.Mesh(new THREE.SphereGeometry(0.62, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.62), material);
     helm.position.set(0, 0.08, 0);
     group.add(helm);
@@ -3220,6 +4957,7 @@ function createPlayerArmorSlotMesh(item, slotId, side = 0) {
   group.userData.armorVisual = true;
   group.userData.armorSlot = slotId;
   group.userData.armorSide = side;
+  attachArmourModel(group, item, part ?? ({ gloves: "forearm", feet: "foot" }[slotId] ?? slotId), side);
   group.traverse((child) => {
     if (child.isMesh) {
       child.castShadow = true;
@@ -3259,7 +4997,7 @@ function createRemotePlayerVisual(player) {
   chest.position.set(0, 3.65, 0);
   group.add(chest);
 
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.22, 1.08), leather);
+  const belt = new THREE.Mesh(createRoundedBoxGeometry(1.76, 0.22, 1.08, 0.08, 3), leather);
   belt.position.y = 2.55;
   group.add(belt);
 
@@ -3357,29 +5095,56 @@ function createRemotePlayerVisual(player) {
       gait: 0
     },
     snapshot: player,
+    snapshots: [],
+    renderState: {
+      moving: Boolean(player.moving),
+      speed: player.speed ?? 0,
+      headRotation: player.headRotation ?? 0
+    },
     targetPosition: new THREE.Vector3(player.position.x, player.elevation ?? 0, player.position.z),
     targetRotation: player.rotation ?? 0,
     targetHeadRotation: player.headRotation ?? 0,
     lastDamagedAt: player.lastDamagedAt ?? 0
   };
 
+  attachWarriorModel(remote.rig, group, { belt, factionColor: faction?.color });
   return remote;
 }
 
+function respawnPlayer(event) {
+  event.preventDefault();
+  if (!state.player.dead || Date.now() < world.multiplayer.respawnAt) return;
+  const name = formatHouseName(ui.respawnName.value);
+  if (!name) { ui.respawnName.focus(); return; }
+  beginNewPlayerLife(state, name);
+  placePlayerAtRespawnPoint();
+  state.player.dead = false;
+  state.player.hp = state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
+  world.multiplayer.localDefeated = false;
+  world.multiplayer.respawnAt = 0;
+  ui.deathScreen.classList.add("is-hidden");
+  ui.deathScreen.setAttribute("aria-hidden", "true");
+  markPlayerPersistenceDue();
+  updatePlayerHealthBar();
+  refreshUi();
+  if (world.multiplayer.enabled) publishLocalPlayer(true);
+  canvas.focus();
+  flash(`You respawned as ${state.player.name}.`);
+}
+
 function setupUi() {
+  ui.respawnForm.addEventListener("submit", respawnPlayer);
+  if (!account.authenticated) {
+    document.querySelector("#faction-title").textContent = "Begin your life";
+    document.querySelector(".house-field span").textContent = "First name";
+    ui.houseNameInput.placeholder = "Rowan";
+    ui.hudHouseButton.disabled = true;
+  }
   if (ui.houseNameInput) {
     ui.houseNameInput.value = sanitizeHouseName(state.player.houseName);
   }
 
-  ui.factionCards.innerHTML = FACTIONS.map(
-    (faction) => `
-      <button class="faction-card" style="--faction-color: ${faction.color}66" data-faction="${faction.id}" type="button">
-        <span class="trait">${faction.trait}</span>
-        <h2>${faction.name}</h2>
-        <p>${faction.summary}</p>
-      </button>
-    `
-  ).join("");
+  renderFactionChoices();
 
   updateHouseNameGate();
   ui.houseNameInput?.addEventListener("input", () => {
@@ -3396,22 +5161,27 @@ function setupUi() {
       return;
     }
 
-    const houseName = sanitizeHouseName(ui.houseNameInput?.value);
+    const enteredName = sanitizeHouseName(ui.houseNameInput?.value);
+    const houseName = account.authenticated ? enteredName : "";
 
-    if (!houseName) {
-      flash("Choose a house name.");
+    if (!enteredName) {
+      flash(account.authenticated ? "Choose a family name." : "Choose a first name.");
       ui.houseNameInput?.focus();
       updateHouseNameGate();
       return;
     }
 
-    try {
-      localStorage.setItem("kok3d.houseName", houseName);
-    } catch {
-      // Local saves are optional; server persistence still receives the house name.
+    if (!account.authenticated) {
+      state.player.firstName = formatHouseName(enteredName);
+      state.player.lifeNumber = Math.max(1, state.player.lifeNumber || 0);
     }
 
-    const result = joinFaction(state, button.dataset.faction, { houseName });
+    let result;
+    if (button.dataset.faction === "unsworn") {
+      setPlayerHouseName(state, houseName);
+      if (!state.player.lifeNumber) beginNewPlayerLife(state);
+      result = { ok: true, message: "Find an abandoned castle and sit on its throne to found your kingdom." };
+    } else result = joinFaction(state, button.dataset.faction, { houseName });
     runAction(result);
 
     if (result.ok) {
@@ -3421,7 +5191,7 @@ function setupUi() {
     }
   });
 
-  if (state.selectedFactionId && state.player.houseName) {
+  if (state.player.firstName && (!account.authenticated || state.player.houseName)) {
     ui.factionSelect.classList.add("is-hidden");
     ui.factionSelect.setAttribute("aria-hidden", "true");
   }
@@ -3437,8 +5207,15 @@ function setupUi() {
     });
   });
 
+  ui.rulerResources.addEventListener("click", event => {
+    const button = event.target.closest("[data-give-resource]");
+    if (button) openResourceGift(button.dataset.giveResource);
+  });
   ui.hudFactionButton.addEventListener("click", () => {
     setRulerPanelOpen(ui.rulerPanel.classList.contains("is-hidden"), { leaveSeat: false });
+  });
+  ui.hudHouseButton.addEventListener("click", () => {
+    setHousePanelOpen(ui.housePanel.classList.contains("is-hidden"));
   });
   ui.hudPlayerButton.addEventListener("click", () => {
     setInventoryPanelOpen(ui.inventoryPanel.classList.contains("is-hidden"));
@@ -3476,9 +5253,6 @@ function setupUi() {
     }
 
     startBuildingPlacement(world.selectedBuildingType);
-  });
-  ui.leaveInterior.addEventListener("click", () => {
-    leaveCurrentInterior();
   });
   ui.npcTradeClose.addEventListener("click", () => {
     closeNpcTradePanel();
@@ -3522,29 +5296,57 @@ function setupUi() {
 
     runAction(depositToFaction(state, button.dataset.depositResource, getStewardAmount()));
   });
-  ui.npcBuyResource.addEventListener("click", () => {
-    const npc = getActiveTradeNpc();
-    if (!npc) {
+  ui.npcTradeResourceList.addEventListener("click", (event) => {
+    const weaponButton = event.target.closest("[data-buy-blacksmith-weapon]");
+    if (weaponButton) {
+      runAction(buyBlacksmithWeapon(weaponButton.dataset.buyBlacksmithWeapon));
       return;
     }
 
-    runAction(buyResource(state, npc.resourceId, getTradeAmount()));
-  });
-  ui.npcSellResource.addEventListener("click", () => {
-    const npc = getActiveTradeNpc();
-    if (!npc) {
+    const sellAllEquipmentButton = event.target.closest("[data-sell-all-blacksmith-equipment]");
+    if (sellAllEquipmentButton) {
+      runAction(sellAllBlacksmithEquipment());
       return;
     }
 
-    runAction(sellResource(state, npc.resourceId, getTradeAmount()));
+    const sellEquipmentButton = event.target.closest("[data-sell-blacksmith-equipment]");
+    if (sellEquipmentButton) {
+      runAction(sellBlacksmithEquipment(sellEquipmentButton.dataset.sellBlacksmithEquipment));
+      return;
+    }
+
+    const button = event.target.closest("[data-trade-resource]");
+    const npc = getActiveTradeNpc();
+
+    if (!button || !npc) {
+      return;
+    }
+
+    const resourceId = button.dataset.tradeResource;
+    if (!npc.resourceIds.includes(resourceId)) {
+      return;
+    }
+
+    const quantity = getTradeAmount();
+    const result =
+      button.dataset.tradeAction === "sell"
+        ? sellResource(state, resourceId, quantity)
+        : buyResource(state, resourceId, quantity);
+    runAction(result);
   });
   ui.rulerClose.addEventListener("click", () => {
     setRulerPanelOpen(false);
+  });
+  ui.houseClose.addEventListener("click", () => {
+    setHousePanelOpen(false);
   });
   ui.loreClose?.addEventListener("click", () => {
     setLoreScrollOpen(false);
   });
   ui.rulerPolitics.addEventListener("click", (event) => {
+    if (event.target.closest("[data-edit-faction]") && world.seatedOnThrone && isFactionRuler(state, world.interiorFactionId)) {
+      openFoundingEditor(world.interiorFactionId, true); return;
+    }
     const button = event.target.closest("[data-politics-action]");
     const factionId = state.selectedFactionId || world.interiorFactionId;
 
@@ -3556,14 +5358,8 @@ function setupUi() {
     const action = button.dataset.politicsAction;
     let result = null;
 
-    if (action === "enemy") {
-      result = setFactionRelation(state, factionId, targetFactionId, "Enemy");
-    } else if (action === "neutral") {
-      result = setFactionRelation(state, factionId, targetFactionId, "Neutral");
-    } else if (action === "request") {
-      result = requestFactionAllegiance(state, factionId, targetFactionId);
-    } else if (action === "accept") {
-      result = acceptFactionAllegiance(state, factionId, targetFactionId);
+    if (["ally", "neutral", "enemy"].includes(action)) {
+      result = setFactionRelation(state, factionId, targetFactionId, capitalize(action));
     }
 
     if (result) {
@@ -3571,11 +5367,89 @@ function setupUi() {
       renderRulerPanel();
     }
   });
+  ui.houseBody.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-house-politics-action]");
+
+    if (!button) {
+      return;
+    }
+
+    const action = button.dataset.housePoliticsAction;
+    if (!["ally", "neutral", "enemy"].includes(action)) {
+      return;
+    }
+
+    runAction(setHouseRelation(state, state.player.houseName, button.dataset.targetHouse, capitalize(action)));
+    renderHousePanel();
+  });
   ui.leftHandIcon.parentElement.addEventListener("click", () => clearHand("left"));
   ui.rightHandIcon.parentElement.addEventListener("click", () => clearHand("right"));
   setupInventoryControls();
 
+  const cheatConsole = createCheatConsole({
+    request: async (url, body) => {
+      const response = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+      if (response.status === 404) throw new Error('The running game server is out of date. Restart it, reload this page, then try again.');
+      const result = await response.json();
+      if (!result.ok) { const error = new Error(result.message || 'Cheat request failed.'); error.status = response.status; throw error; }
+      return result;
+    },
+    beforeOpen: () => { world.keys.clear(); world.pointer.buttons = 0; stopSpaceLocationAction(); releaseLockedCameraForMenu(); },
+    afterClose: () => resumeLockedCameraAfterMenu(),
+    execute: async command => {
+      if (world.persistence.saveInFlight || world.persistence.loadInFlight) throw new Error('A save is in progress. Try again in a moment.');
+      if (/^\/spawn\s+(building|mob)\b/i.test(command) && world.sceneMode !== 'outdoor') throw new Error('Go outdoors to spawn buildings or mobs.');
+      if (/^\/spawn\s+mob\b/i.test(command) && !GAME_FLAGS.pve) throw new Error('PvE is disabled. Reload with ?pve=true to spawn mobs.');
+      if (!await savePersistentState({ includeWorld: world.persistence.dirty })) throw new Error('Could not save before running the command.');
+      world.persistence.saveInFlight = true;
+      try {
+        const response = await fetch('/api/world/cheats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
+        const data = await response.json();
+        if (!data.ok) { const error = new Error(data.message || 'Command failed.'); error.status = response.status; throw error; }
+        if (data.mob) {
+          const creature = PVE_CREATURE_TEMPLATES.find(t => t.name === data.mob);
+          const raider = PVE_RAIDER_TEMPLATES.find(t => t.name === data.mob);
+          const archetype = creature || data.mob === 'gremlin' ? 'creature' : 'raider';
+          const template = creature || raider || { ...getPveMobTemplate(archetype), name: data.mob === 'gremlin' ? 'Gremlin' : 'Orc' };
+          spawnOutdoorDungeonMonster(null, { archetype, template });
+        } else { applyPersistentPayload(data, { includePlayer: true }); refreshUi(); }
+        return data.message;
+      } finally { world.persistence.saveInFlight = false; }
+    }
+  });
   window.addEventListener("keydown", (event) => {
+    if (isDiagnosticsShortcut(event)) {
+      event.preventDefault();
+      if (!event.repeat) diagnostics.toggle();
+      return;
+    }
+    if (event.key === '/' && !isTypingInField(event.target) && !event.repeat) {
+      event.preventDefault(); void cheatConsole.open(); return;
+    }
+    if (event.code === "KeyF" && !isTypingInField(event.target)) {
+      event.preventDefault();
+      if (event.repeat) {
+        return;
+      }
+      if (!ui.factionSelect.classList.contains("is-hidden")) {
+        return;
+      }
+      setRulerPanelOpen(ui.rulerPanel.classList.contains("is-hidden"), { leaveSeat: false });
+      return;
+    }
+
+    if (event.code === "KeyH" && !isTypingInField(event.target)) {
+      event.preventDefault();
+      if (event.repeat) {
+        return;
+      }
+      if (!ui.factionSelect.classList.contains("is-hidden")) {
+        return;
+      }
+      setHousePanelOpen(ui.housePanel.classList.contains("is-hidden"));
+      return;
+    }
+
     if (event.code === "KeyL" && !isTypingInField(event.target)) {
       event.preventDefault();
       if (!ui.factionSelect.classList.contains("is-hidden")) {
@@ -3624,6 +5498,7 @@ function setupUi() {
       event.preventDefault();
       if (!event.repeat) {
         const startedLocationAction = startSpaceLocationAction();
+        if (startedLocationAction) world.playerMotion.lastSpaceTap = null;
         if (!startedLocationAction) {
           handleSpaceMovementAction();
         }
@@ -3631,7 +5506,10 @@ function setupUi() {
       return;
     }
 
-    if (["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight", "ShiftLeft"].includes(event.code)) {
+    if (
+      !isTypingInField(event.target) &&
+      ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight", "ShiftLeft"].includes(event.code)
+    ) {
       world.keys.add(event.code);
       event.preventDefault();
     }
@@ -3648,11 +5526,28 @@ function setupUi() {
   });
 
   canvas.addEventListener("pointerdown", (event) => {
+    world.pointer.captureId = null;
+    // Pointer capture is unavailable while pointer lock owns the mouse, and
+    // lock transitions can invalidate a pointer between this check and capture.
+    if (document.pointerLockElement || isCameraMenuOpen()) return;
+    try {
+      canvas.setPointerCapture(event.pointerId);
+      world.pointer.captureId = event.pointerId;
+    } catch (error) {
+      if (!['InvalidStateError', 'NotFoundError'].includes(error.name)) throw error;
+    }
+  });
+  // Mouse events fire for each button in a chord; pointerdown/up only fire
+  // for the first press and last release, losing alternating-hand inputs.
+  canvas.addEventListener("mousedown", (event) => {
     if (event.button !== 0 && event.button !== 1 && event.button !== 2) {
       return;
     }
+    if ((event.buttons & 4) && event.button !== 1) return;
 
     event.preventDefault();
+    resumeLockedCameraAfterMenu();
+    syncPointerButtons(event);
     world.pointer.insideCanvas = true;
     world.pointer.x = event.clientX;
     world.pointer.y = event.clientY;
@@ -3666,14 +5561,12 @@ function setupUi() {
       world.pointer.downAt = performance.now();
       world.pointer.x = event.clientX;
       world.pointer.y = event.clientY;
-      canvas.setPointerCapture(event.pointerId);
       return;
     }
 
     if (isLockedThirdPersonCamera() && event.button === 1) {
       world.pointer.suppressClickAction = true;
       world.pointer.button = event.button;
-      canvas.setPointerCapture(event.pointerId);
       return;
     }
 
@@ -3689,6 +5582,12 @@ function setupUi() {
       return;
     }
 
+    if (event.button !== 1 && !world.outpostTower.active &&
+        !isCombatInputReady(event.button === 2 ? 'right' : 'left')) {
+      world.pointer.rejectedAttackButtons = (world.pointer.rejectedAttackButtons ?? 0) | (event.button === 2 ? 2 : 1);
+      return;
+    }
+
     world.pointer.dragging = true;
     world.pointer.cameraDragging = event.button === 1;
     world.pointer.moved = false;
@@ -3697,10 +5596,15 @@ function setupUi() {
     world.pointer.button = event.button;
     world.pointer.attackHand = event.button === 2 ? "right" : "left";
     world.pointer.downAt = performance.now();
-    world.pointer.rangedCharge = null;
+    if (world.pointer.rangedCharge?.hand === world.pointer.attackHand) clearRangedCharge();
 
     if (world.pointer.cameraDragging) {
-      canvas.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    if (world.outpostTower.active) {
+      world.outpostTower.drawStartedAt = performance.now();
+      requestOutpostTowerPointerLock();
       return;
     }
 
@@ -3711,21 +5615,16 @@ function setupUi() {
       updateAimFromPointer(event);
       updateBaseHoverFromPointer(event);
     }
-    if (world.outpostTower.active) {
-      world.outpostTower.drawStartedAt = performance.now();
-      canvas.setPointerCapture(event.pointerId);
-      return;
-    }
 
     world.pointer.enteringBase = world.sceneMode === "interior" ? startRulerSeatAction(event) : false;
     world.pointer.working = world.pointer.enteringBase ? false : startWorkAction(world.pointer.attackHand);
+    if (!world.pointer.enteringBase && !world.pointer.working && getEquippedItem(state,world.pointer.attackHand)?.type === 'Flail') startFlailCharge(world.pointer.attackHand);
     if (!world.pointer.enteringBase && !world.pointer.working && canChargeRangedHand(world.pointer.attackHand)) {
       world.pointer.rangedCharge = {
         hand: world.pointer.attackHand,
         startedAt: world.pointer.downAt
       };
     }
-    canvas.setPointerCapture(event.pointerId);
   });
 
   canvas.addEventListener("contextmenu", (event) => {
@@ -3753,11 +5652,26 @@ function setupUi() {
     const previousX = world.pointer.x;
     const previousY = world.pointer.y;
     world.pointer.insideCanvas = true;
+    syncPointerButtons(event);
 
     if (world.placement.active) {
       world.pointer.x = event.clientX;
       world.pointer.y = event.clientY;
       updatePlacementFromPointer(event);
+      return;
+    }
+
+    if (world.outpostTower.active) {
+      const deltaX = event.clientX - previousX;
+      const deltaY = event.clientY - previousY;
+      world.pointer.x = event.clientX;
+      world.pointer.y = event.clientY;
+
+      if (document.pointerLockElement !== canvas) {
+        rotateOutpostTowerCamera(deltaX, deltaY);
+      }
+
+      hideBaseTooltip();
       return;
     }
 
@@ -3816,11 +5730,23 @@ function setupUi() {
     }
   });
 
-  canvas.addEventListener("pointerup", (event) => {
+  window.addEventListener("mouseup", (event) => {
+    const releasedBit = event.button === 0 ? 1 : event.button === 2 ? 2 : 0;
+    if ((world.pointer.rejectedAttackButtons ?? 0) & releasedBit) {
+      world.pointer.rejectedAttackButtons &= ~releasedBit;
+      syncPointerButtons(event);
+      if (!event.buttons) world.pointer.dragging = false;
+      return;
+    }
+    if (!world.pointer.dragging && !world.pointer.suppressClickAction) return;
+    syncPointerButtons(event);
+
     if (world.pointer.suppressClickAction) {
       // Double middle-click toggles camera mode and should not trigger world actions.
     } else if (world.pointer.cameraDragging) {
       // Camera movement is bound to middle mouse, so it should never trigger an attack or work action.
+    } else if (world.outpostTower.active) {
+      // Tower aiming is controlled by first-person mouse look.
     } else if (isLockedThirdPersonCamera()) {
       updateLockedThirdPersonAim();
       hideBaseTooltip();
@@ -3839,23 +5765,34 @@ function setupUi() {
       stopBaseEntryAction();
     } else if (world.pointer.working) {
       stopWorkAction();
+    } else if (world.flailCharge?.hand === (event.button === 2 ? 'right' : 'left')) {
+      const charge = world.flailCharge;
+      tryAttackFromPointer(charge.hand, flailChargePower(charge.elapsed));
+      world.flailCharge = null;
+    } else if (!world.pointer.moved && tryClaimCampChestFromPointer(event)) {
+      // Camp loot clicks resolve before weapon swings.
+    } else if (!world.pointer.moved && tryClaimDungeonTreasureFromPointer(event)) {
+      // Ordinary dungeon chests remain available before and during escape.
     } else if (!world.pointer.moved && tryPickupDroppedItemFromPointer(event)) {
       // Loot clicks should resolve before weapon swings.
     } else if (!world.pointer.moved && openNpcPanelFromPointer(event)) {
       // NPC clicks open their panel instead of swinging an equipped weapon.
-    } else if (world.pointer.rangedCharge?.hand === (event.button === 2 ? "right" : "left") || !world.pointer.moved) {
+    } else if (getEquippedItem(state,event.button === 2 ? 'right' : 'left')?.type === 'Flail') {
+      // Only a successfully started hold can release this weapon.
+    } else if (event.button === 0 || event.button === 2) {
+      // Aiming while holding a button is still an attack, not a cancelled click.
       const hand = event.button === 2 ? "right" : "left";
       tryAttackFromPointer(hand, getRangedChargePower(hand));
     }
 
-    clearRangedCharge();
-    world.pointer.dragging = false;
-    world.pointer.cameraDragging = false;
+    if (world.pointer.rangedCharge?.hand === (event.button === 2 ? 'right' : 'left')) clearRangedCharge();
+    world.pointer.dragging = event.buttons !== 0;
+    world.pointer.cameraDragging = Boolean(event.buttons & 4);
     world.pointer.working = false;
     world.pointer.enteringBase = false;
     world.pointer.suppressClickAction = false;
     world.pointer.attackHand = null;
-    canvas.releasePointerCapture(event.pointerId);
+    if (!event.buttons && canvas.hasPointerCapture(world.pointer.captureId)) canvas.releasePointerCapture(world.pointer.captureId);
   });
 
   canvas.addEventListener("pointerleave", () => {
@@ -3864,8 +5801,13 @@ function setupUi() {
     hideBaseTooltip();
   });
 
+  window.addEventListener('blur', () => { stopSpaceLocationAction(); world.playerMotion.lastSpaceTap = null; world.flailCharge = null; world.pointer.buttons = 0; world.guard.hand = null; world.weaveQueue = null; world.comboChains = { left: null, right: null }; });
   canvas.addEventListener("pointercancel", () => {
+    world.flailCharge = null;
+    world.guard.hand = null;
+    world.weaveQueue = null;
     clearRangedCharge();
+    world.pointer.buttons = 0;
     world.pointer.dragging = false;
     world.pointer.cameraDragging = false;
     world.pointer.working = false;
@@ -3877,6 +5819,7 @@ function setupUi() {
   });
 
   document.addEventListener("pointerlockchange", handlePointerLockChange);
+  document.addEventListener("pointerlockerror", () => { world.cameraLockPending = false; });
   document.addEventListener("mousemove", handleLockedThirdPersonMouseMove);
 
   world.uiReady = true;
@@ -3890,7 +5833,7 @@ function updateHouseNameGate() {
 
   const houseName = sanitizeHouseName(ui.houseNameInput.value);
   const valid = houseName.length > 0;
-  ui.houseNameStatus.textContent = valid ? `House ${formatHouseName(houseName)}` : "A-Z";
+  ui.houseNameStatus.textContent = valid ? (account.authenticated ? `Family ${formatHouseName(houseName)}` : formatHouseName(houseName)) : "A-Z";
   ui.houseNameStatus.classList.toggle("is-valid", valid);
 
   for (const card of ui.factionCards.querySelectorAll("[data-faction]")) {
@@ -3907,6 +5850,7 @@ function isDoubleMiddleClick() {
 
 function toggleThirdPersonCameraLock() {
   const locked = world.cameraMode !== "lockedThirdPerson";
+  world.cameraMenuSuspended = false;
   world.cameraMode = locked ? "lockedThirdPerson" : "free";
 
   if (locked) {
@@ -3926,20 +5870,22 @@ function isLockedThirdPersonCamera() {
 
 function requestLockedThirdPersonPointerLock() {
   if (!canvas.requestPointerLock) {
-    world.cameraMode = "free";
+    if (!world.cameraMenuSuspended) world.cameraMode = "free";
     flash("Pointer lock unavailable.");
     return;
   }
 
-  if (document.pointerLockElement === canvas) {
+  if (document.pointerLockElement === canvas || world.cameraLockPending) {
     return;
   }
 
+  world.cameraLockPending = true;
   const lockRequest = canvas.requestPointerLock();
 
   if (lockRequest?.catch) {
     lockRequest.catch(() => {
-      if (world.cameraMode === "lockedThirdPerson") {
+      world.cameraLockPending = false;
+      if (world.cameraMode === "lockedThirdPerson" && !world.cameraMenuSuspended) {
         world.cameraMode = "free";
         syncFreeCameraYawToCurrentView();
         flash("Pointer lock unavailable.");
@@ -3954,24 +5900,66 @@ function releaseLockedThirdPersonPointerLock() {
   }
 }
 
+function requestOutpostTowerPointerLock() {
+  if (!world.outpostTower.active || !canvas.requestPointerLock || document.pointerLockElement === canvas) {
+    return;
+  }
+
+  const lockRequest = canvas.requestPointerLock();
+
+  if (lockRequest?.catch) {
+    lockRequest.catch(() => {
+      // The tower remains playable with normal mouse movement if pointer lock is denied.
+    });
+  }
+}
+
 function releaseLockedCameraForMenu() {
   if (world.cameraMode !== "lockedThirdPerson") {
     return;
   }
 
-  syncFreeCameraYawToCurrentView();
-  world.cameraMode = "free";
+  world.cameraMenuSuspended = true;
   releaseLockedThirdPersonPointerLock();
 }
 
+function isCameraMenuOpen() {
+  return state.player.dead || isBlockingLocationInput() ||
+    !ui.housePanel.classList.contains("is-hidden") ||
+    !ui.loreScroll.classList.contains("is-hidden") ||
+    !ui.factionSelect.classList.contains("is-hidden") ||
+    Boolean(document.querySelector("dialog[open], .minimap.is-expanded"));
+}
+
+function resumeLockedCameraAfterMenu() {
+  if (world.cameraMenuSuspended && isLockedThirdPersonCamera() && !isCameraMenuOpen()) {
+    requestLockedThirdPersonPointerLock();
+  }
+}
+
 function handlePointerLockChange() {
-  if (world.cameraMode === "lockedThirdPerson" && document.pointerLockElement !== canvas) {
+  world.cameraLockPending = false;
+  if (document.pointerLockElement === canvas && world.cameraMenuSuspended) {
+    if (isCameraMenuOpen()) {
+      releaseLockedThirdPersonPointerLock();
+    } else {
+      world.cameraMenuSuspended = false;
+    }
+    return;
+  }
+  if (world.cameraMode === "lockedThirdPerson" && !world.cameraMenuSuspended && document.pointerLockElement !== canvas) {
     world.cameraMode = "free";
     syncFreeCameraYawToCurrentView();
   }
 }
 
 function handleLockedThirdPersonMouseMove(event) {
+  if (world.cameraMenuSuspended) return;
+  if (world.outpostTower.active && document.pointerLockElement === canvas) {
+    rotateOutpostTowerCamera(event.movementX, event.movementY);
+    return;
+  }
+
   if (!isLockedThirdPersonCamera() || document.pointerLockElement !== canvas) {
     return;
   }
@@ -3988,6 +5976,68 @@ function rotateLockedThirdPersonCamera(deltaX, deltaY) {
   world.cameraYaw -= deltaX * 0.0032;
   world.cameraPitch = clamp(world.cameraPitch + deltaY * 0.003, minPitch, maxPitch);
   updateLockedThirdPersonAim();
+}
+
+function rotateOutpostTowerCamera(deltaX, deltaY) {
+  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+    return;
+  }
+
+  const config = OUTPOST_TOWER_CAMERA;
+  world.outpostTower.yaw -= deltaX * config.sensitivity;
+  world.outpostTower.pitch = clamp(world.outpostTower.pitch - deltaY * config.sensitivity, config.minPitch, config.maxPitch);
+  updateOutpostTowerAimFromAngles();
+}
+
+function getOutpostTowerAimDirection() {
+  const horizontal = Math.cos(world.outpostTower.pitch);
+  return new THREE.Vector3(
+    -Math.sin(world.outpostTower.yaw) * horizontal,
+    Math.sin(world.outpostTower.pitch),
+    -Math.cos(world.outpostTower.yaw) * horizontal
+  ).normalize();
+}
+
+function syncOutpostTowerAimToCurrentView() {
+  const forward = new THREE.Vector3();
+  world.camera.getWorldDirection(forward);
+
+  if (forward.lengthSq() >= 0.001) {
+    forward.normalize();
+    world.outpostTower.yaw = Math.atan2(-forward.x, -forward.z);
+    // Keep the current heading, but do not inherit the steep downward pitch of the orbit camera.
+    world.outpostTower.pitch = clamp(Math.asin(clamp(forward.y, -0.98, 0.98)), -0.22, 0.18);
+  }
+
+  updateOutpostTowerAimFromAngles();
+}
+
+function updateOutpostTowerAimFromAngles() {
+  if (!world.outpostTower.active) {
+    return;
+  }
+
+  const direction = getOutpostTowerAimDirection();
+  world.outpostTower.aimDirection.copy(direction);
+
+  const origin = getOutpostTowerCameraOrigin();
+  world.aimRayOrigin.copy(origin);
+  world.aimRayDirection.copy(direction);
+  world.aimPoint.copy(origin).addScaledVector(direction, 90);
+
+  const horizontal = direction.clone();
+  horizontal.y = 0;
+
+  if (horizontal.lengthSq() > 0.001) {
+    horizontal.normalize();
+    world.aimDirection.copy(horizontal);
+    world.aimTarget.set(
+      state.player.position.x + horizontal.x * 42,
+      0,
+      state.player.position.z + horizontal.z * 42
+    );
+    world.hasAim = true;
+  }
 }
 
 function updateLockedThirdPersonAim() {
@@ -4019,6 +6069,7 @@ function updateLockedThirdPersonAim() {
       getPlayerWorldElevation() + 4 + forward.y * 42,
       state.player.position.z + forward.z * 42
     );
+    world.aimRayOrigin.copy(world.camera.position);
     world.aimRayDirection.copy(forward);
     world.aimTarget.set(
       state.player.position.x + horizontalForward.x * 42,
@@ -4077,7 +6128,9 @@ function clearHand(hand) {
   refreshUi();
 }
 
-function setLoreScrollOpen(open) {
+function setLoreScrollOpen(open, archiveTab = "book") {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
   if (!ui.loreScroll) {
     return;
   }
@@ -4088,6 +6141,7 @@ function setLoreScrollOpen(open) {
   ui.hudLoreButton.classList.toggle("is-active", open);
 
   if (open) {
+    world.keys.clear();
     releaseLockedCameraForMenu();
     setStatusPanelOpen(false);
     setInventoryPanelOpen(false);
@@ -4095,7 +6149,9 @@ function setLoreScrollOpen(open) {
     closeNpcTradePanel();
     closeStewardPanel();
     closeDepotPanel();
+    setHousePanelOpen(false);
     setRulerPanelOpen(false);
+    selectArchiveDisplay(ui.loreBody, archiveTab);
     renderLoreScroll();
   }
 }
@@ -4105,17 +6161,10 @@ function renderLoreScroll() {
     return;
   }
 
-  const volumes = Array.isArray(state.lore?.volumes)
-    ? state.lore.volumes.slice().sort((a, b) => a.number - b.number)
-    : [];
-  ui.loreMeta.textContent = volumes.length
-    ? `${volumes.length} ${volumes.length === 1 ? "addition" : "additions"} written`
-    : "Opening";
+  const castleId = world.sceneMode === "interior" ? world.interiorFactionId : null;
+  ui.loreMeta.textContent = castleId ? "Castle archive · family histories" : "Grand Library · histories of the realm";
+  renderArchive(ui.loreBody, state, castleId);
 
-  ui.loreBody.innerHTML = `
-    ${renderLoreStory(state.lore?.story ?? state.lore?.opening ?? "", getLoreProgress(state))}
-    ${volumes.length ? renderLoreAdditionList(volumes) : ""}
-  `;
 }
 
 function renderLoreStory(story, progress) {
@@ -4170,6 +6219,7 @@ function renderLoreVolume(volume) {
         </div>
         ${awardLine}
       </header>
+      ${(volume.foundings ?? []).map(f => `<div class="founding-record">${flagIcon(f.flag)}<strong>${escapeHtml(f.factionName)} — King ${escapeHtml(f.rulerName)}</strong></div>`).join("")}
       ${renderLoreParagraphs(volume.text ?? "")}
     </article>
   `;
@@ -4199,6 +6249,8 @@ function escapeHtml(value) {
 }
 
 function setStatusPanelOpen(open) {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
   ui.statusPanel.classList.toggle("is-hidden", !open);
   ui.statusPanel.setAttribute("aria-hidden", String(!open));
   ui.hudStatusButton.setAttribute("aria-expanded", String(open));
@@ -4212,12 +6264,15 @@ function setStatusPanelOpen(open) {
     closeNpcTradePanel();
     closeStewardPanel();
     closeDepotPanel();
+    setHousePanelOpen(false);
     setRulerPanelOpen(false, { leaveSeat: false });
     renderStatusPanel();
   }
 }
 
 function setInventoryPanelOpen(open) {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
   ui.inventoryPanel.classList.toggle("is-hidden", !open);
   ui.inventoryPanel.setAttribute("aria-hidden", String(!open));
   ui.hudPlayerButton.setAttribute("aria-expanded", String(open));
@@ -4232,12 +6287,15 @@ function setInventoryPanelOpen(open) {
     closeNpcTradePanel();
     closeStewardPanel();
     closeDepotPanel();
+    setHousePanelOpen(false);
     setRulerPanelOpen(false);
     renderInventoryPanel();
   }
 }
 
 function setBuildPanelOpen(open) {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
   ui.buildPanel.classList.toggle("is-hidden", !open);
   ui.buildPanel.setAttribute("aria-hidden", String(!open));
   ui.hotbar.classList.toggle("is-hidden", open || !ui.inventoryPanel.classList.contains("is-hidden"));
@@ -4250,6 +6308,7 @@ function setBuildPanelOpen(open) {
     closeNpcTradePanel();
     closeStewardPanel();
     closeDepotPanel();
+    setHousePanelOpen(false);
     setRulerPanelOpen(false);
     renderBuildPanel();
   }
@@ -4259,7 +6318,31 @@ function isTypingInField(target) {
   return ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName);
 }
 
+function setHousePanelOpen(open) {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
+  ui.housePanel.classList.toggle("is-hidden", !open);
+  ui.housePanel.setAttribute("aria-hidden", String(!open));
+  ui.hudHouseButton.setAttribute("aria-expanded", String(open));
+  ui.hudHouseButton.classList.toggle("is-active", open);
+
+  if (open) {
+    releaseLockedCameraForMenu();
+    setLoreScrollOpen(false);
+    setStatusPanelOpen(false);
+    setInventoryPanelOpen(false);
+    setBuildPanelOpen(false);
+    closeNpcTradePanel();
+    closeStewardPanel();
+    closeDepotPanel();
+    setRulerPanelOpen(false, { leaveSeat: false });
+    renderHousePanel();
+  }
+}
+
 function setRulerPanelOpen(open, options = {}) {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
   ui.rulerPanel.classList.toggle("is-hidden", !open);
   ui.rulerPanel.setAttribute("aria-hidden", String(!open));
   ui.hudFactionButton.setAttribute("aria-expanded", String(open));
@@ -4274,10 +6357,77 @@ function setRulerPanelOpen(open, options = {}) {
     closeNpcTradePanel();
     closeStewardPanel();
     closeDepotPanel();
+    setHousePanelOpen(false);
     renderRulerPanel();
   } else if (options.leaveSeat !== false) {
     leaveRulerSeat();
   }
+}
+
+function renderHousePanel() {
+  const houseId = sanitizeHouseName(state.player.houseName);
+
+  if (!houseId) {
+    setHousePanelOpen(false);
+    return;
+  }
+
+  const houseName = formatHouseName(houseId);
+  const members = getHouseMembers(state, houseId);
+  const otherHouses = getKnownHouses(state).filter((house) => house.id !== houseId);
+  const factionNames = [...new Set(members.map((member) => FACTION_LOOKUP[member.factionId]?.name).filter(Boolean))];
+
+  ui.houseTitle.textContent = `House ${houseName}`;
+  ui.houseStatus.textContent = `${members.length} ${members.length === 1 ? "member" : "members"}${
+    factionNames.length ? ` | ${factionNames.join(", ")}` : ""
+  }`;
+  ui.houseBody.innerHTML = `
+    <section class="house-section" aria-label="House members">
+      <div class="house-section-heading">
+        <strong>Members</strong>
+        <span>${members.length}</span>
+      </div>
+      ${
+        members.length
+          ? members
+              .map(
+                (member) => `
+                  <article class="ruler-row">
+                    <strong>${escapeHtml(member.name)}</strong>
+                    <span>${escapeHtml(FACTION_LOOKUP[member.factionId]?.name ?? "Unsworn")} | ${historyRenown(state.history, member.playerId)} renown</span>
+                  </article>
+                `
+              )
+              .join("")
+          : `<div class="notice">No house members are known.</div>`
+      }
+    </section>
+    <section class="house-section" aria-label="House relations">
+      <div class="house-section-heading">
+        <strong>House Relations</strong>
+        <span>Ally, Neutral, or Enemy</span>
+      </div>
+      ${
+        otherHouses.length
+          ? otherHouses
+              .map((house) => {
+                const relation = state.houseRelations?.[houseId]?.[house.id] ?? "Neutral";
+                const houseFactions = house.factionIds.map((factionId) => FACTION_LOOKUP[factionId]?.name).filter(Boolean);
+                return `
+                  <article class="ruler-row">
+                    <strong>House ${escapeHtml(house.name)}</strong>
+                    <span>${relation}${houseFactions.length ? ` | ${escapeHtml(houseFactions.join(", "))}` : ""}</span>
+                    <div class="politics-actions">
+                      ${renderRelationButtons("house", house.id, relation)}
+                    </div>
+                  </article>
+                `;
+              })
+              .join("")
+          : `<div class="notice">No other houses are known yet. They will appear here when their members join the realm.</div>`
+      }
+    </section>
+  `;
 }
 
 function renderRulerPanel() {
@@ -4293,8 +6443,16 @@ function renderRulerPanel() {
   ui.rulerTitle.textContent = `Faction: ${faction.name}`;
   ui.rulerStatus.textContent = `${rulerName ? `King: ${rulerName}` : "No king"} | ${faction.trait}`;
   ui.rulerMembers.innerHTML = renderRulerMembers(factionId);
-  ui.rulerResources.innerHTML = renderRulerResources(factionId);
-  ui.rulerPolitics.innerHTML = renderRulerPolitics(factionId);
+  const giftForm = ui.rulerResources.querySelector("[data-resource-gift]");
+  const stockpile = ui.rulerResources.querySelector("[data-resource-stockpile]");
+  if (giftForm && stockpile && giftForm.dataset.factionId === factionId && isFactionRuler(state, factionId)) {
+    // Updating totals must not interrupt typing or close the autocomplete popup.
+    stockpile.innerHTML = renderRulerResources(factionId);
+  } else {
+    ui.rulerResources.innerHTML = `<div data-resource-stockpile>${renderRulerResources(factionId)}</div>`;
+  }
+  ui.rulerPolitics.innerHTML = `<article class="founding-record">${flagIcon(faction.flag)}<div><strong>${escapeHtml(faction.name)}</strong><p>${escapeHtml(faction.summary)}</p>
+    ${isFactionRuler(state, factionId) ? `<button type="button" data-edit-faction ${world.seatedOnThrone && world.interiorFactionId === factionId ? "" : "disabled"}>Edit name, flag and mission</button><p>Sit on your throne to edit your faction.</p>` : ""}</div></article>` + renderRulerPolitics(factionId);
 }
 
 function renderRulerMembers(factionId) {
@@ -4317,8 +6475,8 @@ function renderRulerMembers(factionId) {
 
   return `
     <article class="status-card">
-      <strong>${faction.name}</strong>
-      <p>${faction.summary}</p>
+      <strong>${escapeHtml(faction.name)}</strong>
+      <p>${escapeHtml(faction.summary)}</p>
       <span>${rulerName ? `King ${rulerName}` : "The throne is unclaimed."}</span>
     </article>
     ${[...houses.entries()]
@@ -4346,7 +6504,7 @@ function renderHouseFolder(houseName, members, rulerName) {
             (member) => `
               <article class="house-member">
                 <strong>${escapeHtml(member.name)}</strong>
-                <span>${member.name === rulerName ? "King" : "Member"} | ${Math.round(member.renown)} lore</span>
+                <span>${member.name === rulerName ? "King" : "Member"} | ${historyRenown(state.history, member.playerId)} renown</span>
               </article>
             `
           )
@@ -4356,19 +6514,89 @@ function renderHouseFolder(houseName, members, rulerName) {
   `;
 }
 
+function openResourceGift(resourceId) {
+  const factionId = state.selectedFactionId || world.interiorFactionId;
+  if (!isFactionRuler(state, factionId)) return;
+  const previous = ui.rulerResources.querySelector("[data-resource-gift]");
+  if (previous?.dataset.busy === "true") return;
+  previous?.remove();
+  const form = document.createElement("form");
+  form.dataset.resourceGift = resourceId;
+  form.dataset.factionId = factionId;
+  form.className = "resource-gift-form";
+  const members = getFactionMembers(state, factionId);
+  const choices = members.map(member => ({ ...member, label: members.filter(other => other.name === member.name).length > 1
+    ? `${member.name} (${member.playerId})` : member.name }));
+  form.innerHTML = `
+    <strong>Give ${escapeHtml(resourceId === "gold" ? "Gold" : RESOURCE_LOOKUP[resourceId].name)}</strong>
+    <label>Faction member <input name="recipient" list="resource-gift-members" placeholder="Type a member's name" autocomplete="off" required></label>
+    <datalist id="resource-gift-members">${choices.map(member => `<option value="${escapeHtml(member.label)}"></option>`).join("")}</datalist>
+    <label>Amount <input name="amount" type="number" min="1" step="1" max="9007199254740991" value="1" required></label>
+    <div class="politics-actions"><button type="submit">Send</button><button type="button" data-cancel-gift>Cancel</button></div>
+    <p role="status" aria-live="polite"></p>`;
+  form.querySelector("[data-cancel-gift]").onclick = () => { if (form.dataset.busy !== "true") form.remove(); };
+  let pendingRequest = null;
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (form.dataset.busy === "true") return;
+    const status = form.querySelector('[role="status"]');
+    const recipient = choices.find(member => member.label.toLocaleLowerCase() === form.elements.recipient.value.trim().toLocaleLowerCase());
+    const amount = Number(form.elements.amount.value);
+    if (!recipient) { status.textContent = "Select a faction member from the suggestions."; return; }
+    if (!Number.isSafeInteger(amount) || amount <= 0) { status.textContent = "Enter a positive whole-number amount."; return; }
+    if (!world.persistence.enabled) { status.textContent = "Connect to the server to send resources."; return; }
+    if (world.persistence.saveInFlight || world.persistence.loadInFlight) { status.textContent = "Syncing resources. Please try Send again in a moment."; return; }
+    const signature = `${recipient.playerId}:${amount}`;
+    if (pendingRequest?.signature !== signature) pendingRequest = { signature, id: createId("transfer") };
+    form.dataset.busy = "true";
+    form.querySelectorAll("button, input").forEach(control => control.disabled = true);
+    status.textContent = "Sending…";
+    try {
+      await savePersistentState({ includeWorld: world.persistence.dirty });
+      if (!world.persistence.online) throw new Error("Unable to sync resources. Please try again.");
+      world.persistence.saveInFlight = true;
+      const data = await fetchPersistentJson("/api/world/give-resource", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId: state.player.id, factionId, recipientId: recipient.playerId, resourceId, amount, requestId: pendingRequest.id })
+      });
+      applyPersistentPayload(data);
+      status.textContent = data.message || "Unable to send resources.";
+      pendingRequest = null;
+      if (data.ok) { form.elements.amount.value = "1"; refreshUi(); }
+    } catch (error) {
+      status.textContent = error.message || "Unable to send resources. Check your connection.";
+    } finally {
+      world.persistence.saveInFlight = false;
+      form.dataset.busy = "false";
+      form.querySelectorAll("button, input").forEach(control => control.disabled = false);
+    }
+  };
+  ui.rulerResources.append(form);
+  form.elements.recipient.focus();
+}
+
 function renderRulerResources(factionId) {
   const store = state.factionResources[factionId];
-
+  const incomeNotice = world.persistence.enabled && world.persistence.incomeSupported === false
+    ? "The running server needs restarting to enable passive production. Reload the game after restarting it."
+    : "Live faction stockpile: totals update as production is received.";
+  const production = id => {
+    const rate = factionProduction(state, factionId, id);
+    return `+${rate.amount} / 5s from ${rate.count} captured ${rate.count === 1 ? "site" : "sites"}`;
+  };
   return `
+    <p class="notice" role="status">${incomeNotice}</p>
     <article class="ruler-row">
       <strong>Gold</strong>
-      <span>${Math.round(store.gold)}</span>
+      <span>${Math.round(store.gold)} | ${production("gold")}</span>
+      ${isFactionRuler(state, factionId) ? `<button type="button" data-give-resource="gold">Give</button>` : ""}
     </article>
     ${RESOURCE_TYPES.map(
       (resource) => `
         <article class="ruler-row">
           <strong>${resource.name}</strong>
-          <span>${store.resources[resource.id] ?? 0}</span>
+          <span>${store.resources[resource.id] ?? 0} | ${production(resource.id)}</span>
+          ${isFactionRuler(state, factionId) ? `<button type="button" data-give-resource="${resource.id}">Give</button>` : ""}
         </article>
       `
     ).join("")}
@@ -4379,28 +6607,32 @@ function renderRulerPolitics(factionId) {
   const governance = state.factionGovernance[factionId];
   const canManage = isFactionRuler(state, factionId);
 
-  return FACTIONS.filter((faction) => faction.id !== factionId)
+  return FACTIONS.filter((faction) => state.factions[faction.id] && faction.id !== factionId)
     .map((faction) => {
       const relation = governance.relationStatus[faction.id] ?? "Neutral";
-      const hasRequest = governance.allianceRequests.includes(faction.id);
-      const requested = state.factionGovernance[faction.id].allianceRequests.includes(factionId);
-
       return `
         <article class="ruler-row">
-          <strong>${faction.name}</strong>
-          <span>${relation}${hasRequest ? " | request waiting" : ""}${requested ? " | requested" : ""}</span>
+          <strong>${escapeHtml(faction.name)}</strong>
+          <span>${relation}</span>
           <div class="politics-actions">
-            <button data-politics-action="enemy" data-target-faction="${faction.id}" type="button" ${canManage ? "" : "disabled"}>Enemy</button>
-            <button data-politics-action="neutral" data-target-faction="${faction.id}" type="button" ${canManage ? "" : "disabled"}>Neutral</button>
-            ${
-              hasRequest
-                ? `<button data-politics-action="accept" data-target-faction="${faction.id}" type="button" ${canManage ? "" : "disabled"}>Accept Allegiance</button>`
-                : `<button data-politics-action="request" data-target-faction="${faction.id}" type="button" ${canManage ? "" : "disabled"}>Request Allegiance</button>`
-            }
+            ${renderRelationButtons("faction", faction.id, relation, canManage)}
           </div>
         </article>
       `;
     })
+    .join("");
+}
+
+function renderRelationButtons(kind, targetId, relation, enabled = true) {
+  const dataAction = kind === "house" ? "data-house-politics-action" : "data-politics-action";
+  const dataTarget = kind === "house" ? "data-target-house" : "data-target-faction";
+
+  return ["Ally", "Neutral", "Enemy"]
+    .map(
+      (status) => `
+        <button class="${relation === status ? "is-active" : ""}" ${dataAction}="${status.toLowerCase()}" ${dataTarget}="${targetId}" type="button" ${enabled ? "" : "disabled"}>${status}</button>
+      `
+    )
     .join("");
 }
 
@@ -4419,7 +6651,7 @@ function renderStatusPanel() {
       ? `${interiorFaction.name} Keep`
       : world.sceneMode === "poiInterior" && interiorPoi
         ? interiorPoi.name
-        : zone.label;
+        : zone.label === "Wildlands" ? getRegionAt(state.player.position.x, state.player.position.z).name : zone.label;
   const nearestLabel = nearest
     ? `${nearest.poi.name} | ${Math.round(nearest.distance)}m | ${
         nearest.poi.ownerFactionId ? FACTION_LOOKUP[nearest.poi.ownerFactionId].name : "Neutral"
@@ -4432,6 +6664,7 @@ function renderStatusPanel() {
       <strong>Location</strong>
       <span>${escapeHtml(locationName)}</span>
       <p>${escapeHtml(nearestLabel)}</p>
+      ${world.sceneMode === "outdoor" ? `<p>Grand Library ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${Math.round(Math.hypot(state.player.position.x,state.player.position.z))}m toward the island's centre. Follow the pale roads to the twin towers.</p>` : ""}
     </article>
     <article class="status-card">
       <strong>Player</strong>
@@ -4698,6 +6931,19 @@ function setupDebugTools() {
     registerWeaponAssetLoader,
     registerProceduralWeaponFallback,
     getPlayerPosition: () => ({ ...state.player.position }),
+    setCameraView: ({ yaw = 0, pitch = 0.6, distance = 90 } = {}) => {
+      world.cameraYaw = yaw;
+      world.cameraPitch = isLockedThirdPersonCamera()
+        ? clamp(pitch, LOCKED_THIRD_PERSON_CAMERA.minPitch, LOCKED_THIRD_PERSON_CAMERA.maxPitch)
+        : clamp(pitch, 0.15, 1.4);
+      world.cameraDistance = clamp(distance, 20, 240);
+    },
+    getWorldStats: () => ({
+      region: getRegionAt(state.player.position.x,state.player.position.z).name,
+      camps: MOB_CAMPS.map(camp => ({id:camp.id, alive:world.outdoorMonsters.filter(mob => mob.campId === camp.id && !mob.dead).length})),
+      drawCalls: world.renderer.info.render.calls,
+      triangles: world.renderer.info.render.triangles
+    }),
     getAim: () => ({
       target: { x: world.aimTarget.x, z: world.aimTarget.z },
       direction: { x: world.aimDirection.x, z: world.aimDirection.z },
@@ -4879,10 +7125,7 @@ function updatePlacementFromPointer(event) {
     return;
   }
 
-  world.placement.position = {
-    x: clamp(target.x, -248, 248),
-    z: clamp(target.z, -248, 248)
-  };
+  world.placement.position = clampWorldPosition(target, 60);
   updatePlacementPreview();
 }
 
@@ -4925,6 +7168,7 @@ function updatePlacementPreview() {
 }
 
 function isPlacementValid(position) {
+  if (distanceToCoast(position.x, position.z) < 60 || Math.hypot(position.x, position.z) < 130 || getInlandLakeDistance(position.x, position.z) < 1.25) return false;
   if (!state.selectedFactionId || world.sceneMode !== "outdoor") {
     return false;
   }
@@ -4954,6 +7198,10 @@ function getStructurePlacementRadius(type) {
 
   if (type === "depot") {
     return 6.2;
+  }
+
+  if (type === "street-lamp") {
+    return 3.4;
   }
 
   return 5.2;
@@ -5023,11 +7271,45 @@ function openNpcTradePanel(npcId) {
   setStatusPanelOpen(false);
   setInventoryPanelOpen(false);
   setBuildPanelOpen(false);
+  setHousePanelOpen(false);
+  setRulerPanelOpen(false);
+  renderNpcTradePanel();
+}
+
+function openBlacksmithPanel() {
+  if (world.sceneMode !== "interior") {
+    return;
+  }
+
+  const factionId = getActiveBlacksmithFactionId();
+  if (!factionId) {
+    flash("This forge has no faction to serve.");
+    return;
+  }
+
+  if (!getFactionBlacksmithStock(factionId).length) {
+    refreshBlacksmithStock(factionId);
+  }
+
+  world.activeTradeNpcId = BLACKSMITH_NPC.id;
+  ui.npcTradeAmount.value = 1;
+  ui.npcTradePanel.classList.remove("is-hidden");
+  ui.npcTradePanel.setAttribute("aria-hidden", "false");
+  releaseLockedCameraForMenu();
+  setLoreScrollOpen(false);
+  closeStewardPanel();
+  closeDepotPanel();
+  setStatusPanelOpen(false);
+  setInventoryPanelOpen(false);
+  setBuildPanelOpen(false);
+  setHousePanelOpen(false);
   setRulerPanelOpen(false);
   renderNpcTradePanel();
 }
 
 function closeNpcTradePanel() {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
   world.activeTradeNpcId = null;
   ui.npcTradePanel.classList.add("is-hidden");
   ui.npcTradePanel.setAttribute("aria-hidden", "true");
@@ -5050,11 +7332,14 @@ function openStewardPanel() {
   setStatusPanelOpen(false);
   setInventoryPanelOpen(false);
   setBuildPanelOpen(false);
+  setHousePanelOpen(false);
   setRulerPanelOpen(false);
   renderStewardPanel();
 }
 
 function closeStewardPanel() {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
   world.stewardPanelOpen = false;
   ui.stewardPanel.classList.add("is-hidden");
   ui.stewardPanel.setAttribute("aria-hidden", "true");
@@ -5086,11 +7371,14 @@ function openDepotPanel(depotId) {
   setStatusPanelOpen(false);
   setInventoryPanelOpen(false);
   setBuildPanelOpen(false);
+  setHousePanelOpen(false);
   setRulerPanelOpen(false);
   renderDepotPanel();
 }
 
 function closeDepotPanel() {
+  // Wait until all panels finish switching before recapturing the cursor.
+  queueMicrotask(resumeLockedCameraAfterMenu);
   world.depotPanelOpen = false;
   world.activeDepotId = null;
   ui.depotPanel.classList.add("is-hidden");
@@ -5098,6 +7386,10 @@ function closeDepotPanel() {
 }
 
 function getActiveTradeNpc() {
+  if (world.activeTradeNpcId === BLACKSMITH_NPC.id) {
+    return BLACKSMITH_NPC;
+  }
+
   return TRADE_NPCS.find((entry) => entry.id === world.activeTradeNpcId) ?? null;
 }
 
@@ -5123,6 +7415,354 @@ function normalizeTradeAmount(value) {
   return Math.max(1, Math.floor(Number(value) || 1));
 }
 
+function getActiveBlacksmithFactionId() {
+  return world.sceneMode === "interior" ? world.interiorFactionId : state.selectedFactionId;
+}
+
+function getFactionBlacksmithProgress(factionId = getActiveBlacksmithFactionId()) {
+  const store = factionId ? state.factionResources[factionId] : null;
+
+  if (!store) {
+    return { xp: 0, level: 1 };
+  }
+
+  store.blacksmith = normalizeBlacksmithProgress(store.blacksmith);
+  return store.blacksmith;
+}
+
+function getBlacksmithLevelFromXp(xp) {
+  const safeXp = Math.max(0, Number(xp) || 0);
+  let level = 1;
+
+  while (level < BLACKSMITH_MAX_LEVEL && safeXp >= getBlacksmithXpForLevel(level + 1)) {
+    level += 1;
+  }
+
+  return level;
+}
+
+function getBlacksmithXpForLevel(level) {
+  const safeLevel = clamp(Math.floor(Number(level) || 1), 1, BLACKSMITH_MAX_LEVEL);
+  if (safeLevel <= 1) {
+    return 0;
+  }
+
+  return Math.round(90 * (safeLevel - 1) * safeLevel * 0.75);
+}
+
+function getBlacksmithNextLevelXp(progress) {
+  return progress.level >= BLACKSMITH_MAX_LEVEL
+    ? progress.xp
+    : getBlacksmithXpForLevel(progress.level + 1);
+}
+
+function addBlacksmithXp(factionId, amount) {
+  const progress = getFactionBlacksmithProgress(factionId);
+  const beforeLevel = progress.level;
+  progress.xp = Math.max(0, Math.round(progress.xp + Math.max(0, Number(amount) || 0)));
+  progress.level = getBlacksmithLevelFromXp(progress.xp);
+
+  if (progress.level > beforeLevel) {
+    refreshBlacksmithStock(factionId);
+  }
+
+  return {
+    progress,
+    levelGained: progress.level > beforeLevel
+  };
+}
+
+function getFactionBlacksmithStock(factionId = getActiveBlacksmithFactionId()) {
+  if (!factionId) {
+    return world.blacksmithStock;
+  }
+
+  world.blacksmithStockByFaction[factionId] = world.blacksmithStockByFaction[factionId] ?? [];
+
+  if (factionId === getActiveBlacksmithFactionId()) {
+    world.blacksmithStock = world.blacksmithStockByFaction[factionId];
+  }
+
+  return world.blacksmithStockByFaction[factionId];
+}
+
+function setFactionBlacksmithStock(factionId, stock) {
+  if (!factionId) {
+    world.blacksmithStock = stock;
+    return stock;
+  }
+
+  world.blacksmithStockByFaction[factionId] = stock;
+
+  if (factionId === getActiveBlacksmithFactionId()) {
+    world.blacksmithStock = stock;
+  }
+
+  return stock;
+}
+
+function refreshBlacksmithStock(factionId = getActiveBlacksmithFactionId()) {
+  const progress = getFactionBlacksmithProgress(factionId);
+  const stock = Array.from({ length: BLACKSMITH_STOCK_SIZE }, () => {
+    const item = createRandomBlacksmithWeapon(progress.level);
+    return {
+      id: createId("smith-stock"),
+      item,
+      price: getBlacksmithWeaponPrice(item)
+    };
+  });
+
+  for (const definition of ITEM_DEFINITIONS.filter(item => isShield(item.type))) {
+    const item = stampEquipmentMaterial({ ...definition, id: createId('item'), durability: definition.maxDurability, weapon: null, armor: null });
+    stock.push({ id: createId('smith-stock'), item, price: getBlacksmithEquipmentPrice(item) });
+  }
+  return setFactionBlacksmithStock(factionId, stock);
+}
+
+function createRandomBlacksmithWeapon(level = 1) {
+  const safeLevel = clamp(Math.floor(Number(level) || 1), 1, BLACKSMITH_MAX_LEVEL);
+  const definition = randomItem(getBlacksmithWeaponDefinitionsForLevel(safeLevel));
+  const baseStats = WEAPON_STATS[definition.type];
+  const levelBonus = (safeLevel - 1) * 0.055;
+  const quality = randomBetween(0.84 + levelBonus * 0.65, 1.14 + levelBonus);
+  const maxDurability = Math.round(clamp(
+    definition.maxDurability * randomBetween(0.84 + levelBonus * 0.35, 1.12 + levelBonus),
+    45,
+    150 + safeLevel * 12
+  ));
+  const weapon = {
+    range: roundStat(clamp(baseStats.range * randomBetween(0.94, 1.08 + levelBonus * 0.35), 0.8, 28 + safeLevel * 0.8)),
+    damage: Math.round(clamp(baseStats.damage * quality * randomBetween(0.9, 1.12 + levelBonus), 1, 48 + safeLevel * 6)),
+    penetration: Math.round(clamp(baseStats.penetration * quality * randomBetween(0.86, 1.12 + levelBonus), 0, 24 + safeLevel * 3)),
+    frequency: roundStat(clamp(baseStats.frequency * randomBetween(0.9, 1.08 + levelBonus * 0.45), 0.35, 2.25 + safeLevel * 0.04)),
+    speed: roundStat(clamp(baseStats.speed * randomBetween(0.9, 1.1 + levelBonus * 0.45), 0.45, 2.25 + safeLevel * 0.04)),
+    knockback: roundStat(clamp(baseStats.knockback * quality * randomBetween(0.9, 1.12 + levelBonus), 0, 6 + safeLevel * 0.8))
+  };
+  const prefixPool = safeLevel >= 6
+    ? [...BLACKSMITH_WEAPON_PREFIXES, ...BLACKSMITH_MASTER_PREFIXES]
+    : BLACKSMITH_WEAPON_PREFIXES;
+
+  return stampEquipmentMaterial({
+    id: createId("item"),
+    name: `${randomItem(prefixPool)} ${definition.type}`,
+    type: definition.type,
+    category: "Weapon",
+    rarity: getBlacksmithWeaponRarity(quality, weapon),
+    weapon,
+    durability: maxDurability,
+    maxDurability
+  });
+}
+
+function getBlacksmithWeaponDefinitionsForLevel(level) {
+  return PVE_WEAPON_DEFINITIONS.filter((definition) => {
+    if (definition.type === "Long Sword") return level >= 3;
+    if (definition.type === "Crossbow") return level >= 5;
+    if (definition.type === "Long Bow") return level >= 7;
+    return true;
+  });
+}
+
+function getBlacksmithWeaponPrice(item) {
+  const stats = item.weapon ?? {};
+  const rarityMultiplier = {
+    Common: 1,
+    Uncommon: 1.22,
+    Rare: 1.55,
+    Epic: 2.05
+  }[item.rarity] ?? 1;
+  const rating =
+    Number(stats.damage) * 6 +
+    Number(stats.penetration) * 5 +
+    Number(stats.range) * 2.5 +
+    Number(stats.knockback) * 8 +
+    Number(stats.frequency) * 34 +
+    Number(stats.speed) * 26 +
+    Number(item.maxDurability) * 0.65;
+
+  return Math.max(45, Math.round(rating * rarityMultiplier));
+}
+
+function getBlacksmithArmorPrice(item) {
+  const stats = item.armor ?? {};
+  const rarityMultiplier = {
+    Common: 1,
+    Uncommon: 1.22,
+    Rare: 1.55,
+    Epic: 2.05
+  }[item.rarity] ?? 1;
+  const rating =
+    Number(stats.defense) * 8 +
+    Number(stats.resistance) * 5 +
+    Number(stats.toughness) * 7 +
+    Number(item.maxDurability) * 0.65;
+
+  return Math.max(45, Math.round(rating * rarityMultiplier));
+}
+
+function getBlacksmithEquipmentPrice(item) {
+  if (isShield(item?.type)) return item.type === "Long Shield" ? 260 : 160;
+  return isArmorItem(item) ? getBlacksmithArmorPrice(item) : getBlacksmithWeaponPrice(item);
+}
+
+function getBlacksmithEquipmentSellPrice(item) {
+  const condition = clamp((Number(item.durability) || 0) / Math.max(1, Number(item.maxDurability) || 1), 0, 1);
+  return Math.floor(getBlacksmithEquipmentPrice(item) * 0.10 * condition);
+}
+
+function isBlacksmithEquipment(item) {
+  return isWeaponItem(item) || isArmorItem(item) || isShield(item?.type);
+}
+
+function getEquippedItemIds() {
+  return new Set(
+    Object.entries(state.player.equipment)
+      .filter(([key, itemId]) => key.endsWith("ItemId") && itemId)
+      .map(([, itemId]) => itemId)
+  );
+}
+
+function getBlacksmithWeaponRarity(quality, stats) {
+  const score = quality + (stats.damage + stats.penetration + stats.knockback) / 100;
+
+  if (score > 1.88) return "Epic";
+  if (score > 1.55) return "Rare";
+  if (score > 1.22) return "Uncommon";
+  return "Common";
+}
+
+function buyBlacksmithWeapon(stockId) {
+  if (world.activeTradeNpcId !== BLACKSMITH_NPC.id) {
+    return { ok: false, message: "The blacksmith is not trading right now." };
+  }
+
+  const factionId = getActiveBlacksmithFactionId();
+  const stockList = getFactionBlacksmithStock(factionId);
+  const stockIndex = stockList.findIndex((entry) => entry.id === stockId);
+  const stock = stockList[stockIndex];
+
+  if (!stock) {
+    return { ok: false, message: "That equipment is no longer available." };
+  }
+
+  if (state.player.gold < stock.price) {
+    return { ok: false, message: `You need ${stock.price} gold for ${stock.item.name}.` };
+  }
+
+  state.player.gold -= stock.price;
+  state.player.inventory.push(stock.item);
+  state.player.selectedGearItemId = stock.item.id;
+  stockList.splice(stockIndex, 1);
+  const xpResult = addBlacksmithXp(factionId, Math.max(8, Math.round(stock.price * BLACKSMITH_BUY_XP_RATE)));
+
+  if (!stockList.length) {
+    refreshBlacksmithStock(factionId);
+  }
+
+  return {
+    ok: true,
+    message: xpResult.levelGained
+      ? `Bought ${stock.item.name} for ${stock.price} gold. The blacksmith reached level ${xpResult.progress.level}.`
+      : `Bought ${stock.item.name} for ${stock.price} gold.`
+  };
+}
+
+function sellBlacksmithEquipment(itemId) {
+  if (world.activeTradeNpcId !== BLACKSMITH_NPC.id) {
+    return { ok: false, message: "The blacksmith is not trading right now." };
+  }
+
+  const factionId = getActiveBlacksmithFactionId();
+  const itemIndex = state.player.inventory.findIndex((entry) => entry.id === itemId);
+  const item = state.player.inventory[itemIndex];
+
+  if (!item) {
+    return { ok: false, message: "That equipment is no longer in your inventory." };
+  }
+
+  if (!isBlacksmithEquipment(item)) {
+    return { ok: false, message: `${item.name} is not equipment.` };
+  }
+
+  const price = getBlacksmithEquipmentSellPrice(item);
+  state.player.inventory.splice(itemIndex, 1);
+  state.player.gold += price;
+  state.player.hotbar = state.player.hotbar.map((entry) => (entry === item.id ? null : entry));
+  clearItemFromAllEquipment(item.id);
+
+  if (state.player.selectedGearItemId === item.id) {
+    state.player.selectedGearItemId = state.player.inventory[0]?.id ?? null;
+  }
+
+  const xpResult = addBlacksmithXp(factionId, Math.max(6, Math.round(price * BLACKSMITH_SELL_XP_RATE)));
+  const stockList = getFactionBlacksmithStock(factionId);
+  stockList.push({
+    id: createId("smith-stock"),
+    item,
+    price: getBlacksmithEquipmentPrice(item)
+  });
+
+  if (stockList.length > BLACKSMITH_MAX_STOCK_SIZE) {
+    stockList.splice(0, stockList.length - BLACKSMITH_MAX_STOCK_SIZE);
+  }
+
+  return {
+    ok: true,
+    message: xpResult.levelGained
+      ? `Sold ${item.name} for ${price} gold. The blacksmith reached level ${xpResult.progress.level}.`
+      : `Sold ${item.name} for ${price} gold.`
+  };
+}
+
+function sellAllBlacksmithEquipment() {
+  if (world.activeTradeNpcId !== BLACKSMITH_NPC.id) {
+    return { ok: false, message: "The blacksmith is not trading right now." };
+  }
+
+  const equippedIds = getEquippedItemIds();
+  const items = state.player.inventory.filter((item) => isBlacksmithEquipment(item) && !equippedIds.has(item.id));
+
+  if (!items.length) {
+    return { ok: false, message: "You have no unequipped equipment to sell." };
+  }
+
+  const soldIds = new Set(items.map((item) => item.id));
+  const salePrices = items.map((item) => getBlacksmithEquipmentSellPrice(item));
+  const totalPrice = salePrices.reduce((total, price) => total + price, 0);
+  state.player.inventory = state.player.inventory.filter((item) => !soldIds.has(item.id));
+  state.player.gold += totalPrice;
+  state.player.hotbar = state.player.hotbar.map((itemId) => (soldIds.has(itemId) ? null : itemId));
+
+  if (soldIds.has(state.player.selectedGearItemId)) {
+    state.player.selectedGearItemId = state.player.inventory[0]?.id ?? null;
+  }
+
+  const factionId = getActiveBlacksmithFactionId();
+  const xp = salePrices.reduce(
+    (total, price) => total + Math.max(6, Math.round(price * BLACKSMITH_SELL_XP_RATE)),
+    0
+  );
+  const xpResult = addBlacksmithXp(factionId, xp);
+  const stockList = getFactionBlacksmithStock(factionId);
+  stockList.push(...items.map((item) => ({
+    id: createId("smith-stock"),
+    item,
+    price: getBlacksmithEquipmentPrice(item)
+  })));
+
+  if (stockList.length > BLACKSMITH_MAX_STOCK_SIZE) {
+    stockList.splice(0, stockList.length - BLACKSMITH_MAX_STOCK_SIZE);
+  }
+
+  const levelMessage = xpResult.levelGained
+    ? ` The blacksmith reached level ${xpResult.progress.level}.`
+    : "";
+  return {
+    ok: true,
+    message: `Sold ${items.length} unequipped item${items.length === 1 ? "" : "s"} for ${totalPrice} gold.${levelMessage}`
+  };
+}
+
 function renderNpcTradePanel() {
   const npc = getActiveTradeNpc();
 
@@ -5130,22 +7770,102 @@ function renderNpcTradePanel() {
     return;
   }
 
-  const resource = RESOURCE_LOOKUP[npc.resourceId];
+  ui.npcTradeAmount.closest(".trade-amount")?.classList.toggle("is-hidden", npc.id === BLACKSMITH_NPC.id);
+
+  if (npc.id === BLACKSMITH_NPC.id) {
+    renderBlacksmithPanel();
+    return;
+  }
+
   const amount = normalizeTradeAmount(ui.npcTradeAmount.value);
-  const price = state.market[npc.resourceId];
-  const buyPrice = Math.round(price.buy);
-  const sellPrice = Math.round(price.sell);
-  const buyTotal = Math.round(price.buy * amount);
-  const sellTotal = Math.round(price.sell * amount);
 
   ui.npcTradeTitle.textContent = npc.name;
-  ui.npcTradeResource.textContent = resource.name;
-  ui.npcBuyPrice.textContent = String(buyPrice);
-  ui.npcSellPrice.textContent = String(sellPrice);
-  ui.npcBuyResource.textContent = `Buy (${buyTotal})`;
-  ui.npcSellResource.textContent = `Sell (${sellTotal})`;
-  ui.npcBuyResource.disabled = state.player.gold < buyTotal;
-  ui.npcSellResource.disabled = state.player.resources[npc.resourceId] < amount;
+  ui.npcTradeResource.textContent = "Resource market";
+  ui.npcTradeResourceList.innerHTML = npc.resourceIds
+    .map((resourceId) => {
+      const resource = RESOURCE_LOOKUP[resourceId];
+      const price = state.market[resourceId];
+      const buyPrice = Math.round(price.buy);
+      const sellPrice = Math.round(price.sell);
+      const buyTotal = Math.round(price.buy * amount);
+      const sellTotal = Math.round(price.sell * amount);
+      const canBuy = state.player.gold >= buyTotal;
+      const canSell = state.player.resources[resourceId] >= amount;
+
+      return `
+        <article class="deposit-row market-trade-row">
+          <strong>${resource.name}</strong>
+          <span>Buy ${buyPrice}</span>
+          <span>Sell ${sellPrice}</span>
+          <button class="primary" data-trade-resource="${resourceId}" data-trade-action="buy" type="button" ${canBuy ? "" : "disabled"}>Buy (${buyTotal})</button>
+          <button data-trade-resource="${resourceId}" data-trade-action="sell" type="button" ${canSell ? "" : "disabled"}>Sell (${sellTotal})</button>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderBlacksmithPanel() {
+  const factionId = getActiveBlacksmithFactionId();
+  const faction = factionId ? FACTION_LOOKUP[factionId] : null;
+  const progress = getFactionBlacksmithProgress(factionId);
+  const nextXp = getBlacksmithNextLevelXp(progress);
+  const equippedIds = getEquippedItemIds();
+  const stockRows = getFactionBlacksmithStock(factionId)
+    .map((entry) => {
+      const item = entry.item;
+      const canBuy = state.player.gold >= entry.price;
+      const statSummary = isShield(item.type) ? "Hold to block | Frontal defence" : isArmorItem(item)
+        ? `DEF ${item.armor.defense} | RES ${item.armor.resistance}% | TGH ${item.armor.toughness}`
+        : `DMG ${item.weapon.damage} | PEN ${item.weapon.penetration} | RNG ${item.weapon.range}`;
+
+      return `
+        <article class="deposit-row market-trade-row weapon-trade-row">
+          <strong class="trade-item-name">${getItemIconMarkup(item, { decorative: true })}<span>${escapeHtml(equipmentName(item))}</span></strong>
+          <span>${escapeHtml(item.rarity)}</span>
+          <span>${entry.price} gold</span>
+          <span>${statSummary}</span>
+          <button class="primary" data-buy-blacksmith-weapon="${entry.id}" type="button" ${canBuy ? "" : "disabled"}>Buy</button>
+        </article>
+      `;
+    })
+    .join("");
+  const sellRows = state.player.inventory
+    .filter(isBlacksmithEquipment)
+    .map((item) => {
+      const price = getBlacksmithEquipmentSellPrice(item);
+      const equipped = equippedIds.has(item.id);
+      const statSummary = isShield(item.type) ? "Hold to block | Frontal defence" : isArmorItem(item)
+        ? `DEF ${item.armor.defense} | RES ${item.armor.resistance}% | TGH ${item.armor.toughness}`
+        : `DMG ${item.weapon.damage} | PEN ${item.weapon.penetration} | RNG ${item.weapon.range}`;
+
+      return `
+        <article class="deposit-row market-trade-row weapon-trade-row">
+          <strong class="trade-item-name">${getItemIconMarkup(item, { decorative: true })}<span>${escapeHtml(equipmentName(item))}</span></strong>
+          <span>${equipped ? "Equipped" : escapeHtml(item.rarity)}</span>
+          <span>${price} gold</span>
+          <span>${statSummary} | Durability ${Math.round(item.durability)} / ${item.maxDurability}</span>
+          <button data-sell-blacksmith-equipment="${item.id}" type="button">Sell</button>
+        </article>
+      `;
+    })
+    .join("");
+  const sellableItems = state.player.inventory.filter((item) => isBlacksmithEquipment(item) && !equippedIds.has(item.id));
+  const xpText = progress.level >= BLACKSMITH_MAX_LEVEL
+    ? `${Math.round(progress.xp)} XP`
+    : `${Math.round(progress.xp)} / ${nextXp} XP`;
+
+  ui.npcTradeTitle.textContent = faction ? `${faction.name} Blacksmith` : BLACKSMITH_NPC.name;
+  ui.npcTradeResource.textContent = `Level ${progress.level} | ${xpText}`;
+  ui.npcTradeResourceList.innerHTML = `
+    <div class="blacksmith-section-title">For sale</div>
+    ${stockRows || `<div class="notice">No equipment for sale.</div>`}
+    <div class="blacksmith-section-header">
+      <div class="blacksmith-section-title">Sell equipment</div>
+      <button class="primary" data-sell-all-blacksmith-equipment type="button" ${sellableItems.length ? "" : "disabled"}>Sell all unequipped (${sellableItems.length})</button>
+    </div>
+    ${sellRows || `<div class="notice">You have no equipment to sell.</div>`}
+  `;
 }
 
 function renderStewardPanel() {
@@ -5219,9 +7939,10 @@ function renderDepotPanel() {
         .map(
           (item) => `
             <button class="depot-item-row" data-depot-item="${item.id}" type="button">
-              <strong>${getItemGlyph(item)}</strong>
-              <span>${item.name}</span>
-              <span>${item.rarity} | ${Math.round(item.durability)} / ${item.maxDurability}</span>
+              ${getItemIconMarkup(item, { decorative: true })}
+              <strong>${escapeHtml(item.type)}</strong>
+              <span>${escapeHtml(equipmentName(item))}</span>
+              <span>${escapeHtml(item.rarity)} | ${Math.round(item.durability)} / ${item.maxDurability}</span>
             </button>
           `
         )
@@ -5288,21 +8009,31 @@ function depositItemToDepot(itemId) {
 
 function handleSpaceMovementAction() {
   const motion = world.playerMotion;
-
-  if (!canUseMovementAbility()) {
+  if (!canUseMovementAbility() || isCameraMenuOpen()) {
+    motion.lastSpaceTap = null;
     return;
   }
-
-  if (isPlayerAirborne(motion) && startPlayerDive()) {
+  const planted = Object.values(world.attacks).find(a => a?.jumpAttack === 'plant');
+  if (planted && canSpearVault(planted, motion)) {
+    planted.vaultUsed = true;
+    world.attacks[planted.hand] = null;
+    motion.jumping = true;
+    motion.verticalVelocity = JUMP_VELOCITY;
+    motion.airborneDirection.copy(getPlayerWalkingDirection());
+    motion.airborneSpeed = getPlayerWalkingSpeed();
+    motion.lastSpaceTap = null;
     return;
   }
-
+  const now = performance.now();
+  const doubleTap = motion.lastSpaceTap != null && now - motion.lastSpaceTap <= ROLL_DOUBLE_TAP_MS;
+  motion.lastSpaceTap = doubleTap ? null : now;
+  if (doubleTap) { startPlayerRoll(); return; }
   startPlayerJump();
 }
 
 function canUseMovementAbility() {
   return Boolean(
-    state.selectedFactionId &&
+    state.player.firstName &&
     ui.factionSelect.classList.contains("is-hidden") &&
     !world.seatedOnThrone &&
     !world.outpostTower.active &&
@@ -5314,33 +8045,49 @@ function startPlayerJump() {
   const motion = world.playerMotion;
   motion.supportOffset = getPlayerSupportOffset(state.player.position);
 
-  if (motion.jumping || motion.diving || isPlayerAirborne(motion)) {
+  if (motion.jumping || motion.rolling || isPlayerAirborne(motion)) {
     return false;
   }
 
   motion.jumping = true;
   motion.verticalOffset = motion.supportOffset;
   motion.verticalVelocity = JUMP_VELOCITY;
+  motion.airborneDirection.copy(getPlayerWalkingDirection());
+  motion.airborneSpeed = getPlayerWalkingSpeed();
   return true;
 }
 
-function startPlayerDive() {
+function startPlayerRoll() {
   const motion = world.playerMotion;
 
-  if (!isPlayerAirborne(motion) || motion.diving || motion.diveCooldown > 0) {
+  if (motion.rolling || motion.rollCooldown > 0) {
     return false;
   }
 
-  const direction = getSpaceDiveDirection();
+  const direction = getSpaceRollDirection();
 
   if (direction.lengthSq() < 0.001) {
     return false;
   }
 
-  motion.diving = true;
-  motion.diveElapsed = 0;
-  motion.diveDirection.copy(direction);
-  motion.verticalVelocity = Math.min(motion.verticalVelocity, DIVE_VERTICAL_VELOCITY);
+  world.attacks = { left: null, right: null };
+  world.comboChains = { left: null, right: null };
+  world.weaveQueue = null;
+  world.flailCharge = null;
+  world.guard.hand = null;
+  clearRangedCharge();
+  motion.rollBlendFrom = world.playerRig
+    ? captureCombatTransforms().filter(entry => entry.node !== world.playerMesh)
+    : null;
+  motion.rolling = true;
+  motion.rollElapsed = 0;
+  motion.rollDirection.copy(direction);
+  motion.airborneDirection.copy(direction);
+  motion.airborneSpeed = ROLL_SPEED;
+  // Carry the jump into a low forward flight instead of forcing an immediate landing.
+  motion.verticalVelocity = isPlayerAirborne(motion)
+    ? Math.min(motion.verticalVelocity, ROLL_VERTICAL_VELOCITY)
+    : ROLL_VERTICAL_VELOCITY;
   motion.jumping = false;
   return true;
 }
@@ -5349,11 +8096,11 @@ function isPlayerAirborne(motion = world.playerMotion) {
   return motion.verticalOffset > (motion.supportOffset ?? 0) + 0.08;
 }
 
-function isPlayerDiving(motion = world.playerMotion) {
-  return Boolean(motion.diving);
+function isPlayerRolling(motion = world.playerMotion) {
+  return Boolean(motion.rolling);
 }
 
-function getSpaceDiveDirection() {
+function getSpaceRollDirection() {
   const input = getMovementInput();
   const { forward, right } = getCameraMovementBasis();
   const direction = new THREE.Vector3()
@@ -5389,16 +8136,45 @@ function getMovementInput() {
   return input;
 }
 
+function getPlayerWalkingDirection(input = getMovementInput()) {
+  const { forward, right } = getCameraMovementBasis();
+  const direction = new THREE.Vector3()
+    .addScaledVector(forward, input.y)
+    .addScaledVector(right, input.x);
+
+  return direction.lengthSq() > 0 ? direction.normalize() : direction;
+}
+
+function getPlayerWalkingSpeed(input = getMovementInput()) {
+  const baseSpeed = world.keys.has("ShiftLeft") ? 30 : 19;
+  // Pure strafing is 30% slower, with a proportional penalty on diagonals.
+  const strafeMultiplier = 1 - 0.3 * Math.abs(input.x);
+  return baseSpeed * strafeMultiplier * roadSpeedMultiplier(WORLD_ROUTES, state.player.position, {
+    outdoor: world.sceneMode === "outdoor",
+    wading: isPositionInInlandLake(state.player.position),
+    elevated: world.playerMotion.verticalOffset > 0.1
+  });
+}
+
 function resetPlayerMovementAbility() {
   const motion = world.playerMotion;
+  motion.jumpAnimation = undefined;
+  if (world.playerVisualRoot) world.playerVisualRoot.position.set(0, 0, 0);
+  resetPlayerRootLean();
   motion.verticalOffset = 0;
   motion.verticalVelocity = 0;
+  motion.spearJumpUsedByHand = {};
+  motion.daggerAirStrikesUsed = 0;
   motion.supportOffset = 0;
   motion.jumping = false;
-  motion.diving = false;
-  motion.diveElapsed = 0;
-  motion.diveCooldown = 0;
-  motion.diveDirection.set(0, 0, 1);
+  motion.rolling = false;
+  motion.rollElapsed = 0;
+  motion.rollCooldown = 0;
+  motion.rollBlendFrom = null;
+  motion.lastSpaceTap = null;
+  motion.rollDirection.set(0, 0, 1);
+  motion.airborneDirection.set(0, 0, 0);
+  motion.airborneSpeed = 0;
 }
 
 function updatePlayerJump(deltaSeconds) {
@@ -5406,14 +8182,16 @@ function updatePlayerJump(deltaSeconds) {
   const supportOffset = getPlayerSupportOffset(state.player.position);
   motion.supportOffset = supportOffset;
 
-  if (!motion.jumping && !motion.diving && motion.verticalOffset > supportOffset + 0.05) {
+  if (!motion.jumping && !motion.rolling && motion.verticalOffset > supportOffset + 0.05) {
     motion.jumping = true;
     motion.verticalVelocity = Math.min(0, motion.verticalVelocity);
   }
 
-  if (!motion.jumping && !motion.diving && motion.verticalOffset <= supportOffset + 0.05) {
+  if (!motion.jumping && !motion.rolling && motion.verticalOffset <= supportOffset + 0.05) {
     motion.verticalOffset = supportOffset;
     motion.verticalVelocity = 0;
+    motion.spearJumpUsedByHand = {};
+    motion.daggerAirStrikesUsed = 0;
     return;
   }
 
@@ -5423,6 +8201,8 @@ function updatePlayerJump(deltaSeconds) {
   if (motion.verticalOffset <= supportOffset) {
     motion.verticalOffset = supportOffset;
     motion.verticalVelocity = 0;
+    motion.spearJumpUsedByHand = {};
+    motion.daggerAirStrikesUsed = 0;
     motion.jumping = false;
   }
 }
@@ -5432,10 +8212,12 @@ function settlePlayerSupportAfterMove() {
   const supportOffset = getPlayerSupportOffset(state.player.position);
   motion.supportOffset = supportOffset;
 
-  if (motion.jumping || motion.diving) {
+  if (motion.jumping || motion.rolling) {
     if (motion.verticalVelocity <= 0 && motion.verticalOffset <= supportOffset) {
       motion.verticalOffset = supportOffset;
       motion.verticalVelocity = 0;
+      motion.spearJumpUsedByHand = {};
+      motion.daggerAirStrikesUsed = 0;
       motion.jumping = false;
     }
     return;
@@ -5444,6 +8226,8 @@ function settlePlayerSupportAfterMove() {
   if (motion.verticalOffset <= supportOffset + 0.05) {
     motion.verticalOffset = supportOffset;
     motion.verticalVelocity = 0;
+    motion.spearJumpUsedByHand = {};
+    motion.daggerAirStrikesUsed = 0;
     return;
   }
 
@@ -5451,56 +8235,83 @@ function settlePlayerSupportAfterMove() {
   motion.verticalVelocity = Math.min(0, motion.verticalVelocity);
 }
 
+function getOutdoorMovementBounds() {
+  return {
+    minX: -PLAYABLE_HALF,
+    maxX: PLAYABLE_HALF,
+    minZ: -PLAYABLE_HALF,
+    maxZ: PLAYABLE_HALF
+  };
+}
+
 function updateMovement(deltaSeconds) {
-  if (!state.selectedFactionId || world.seatedOnThrone || world.outpostTower.active || state.player.dead) {
+  if (!ui.factionSelect.classList.contains("is-hidden") || !ui.loreScroll.classList.contains("is-hidden") || !state.player.firstName || world.seatedOnThrone || world.outpostTower.active || state.player.dead) {
     world.playerMotion.moving = false;
     world.playerMotion.speed = 0;
     resetPlayerMovementAbility();
     return;
   }
 
+  const motion = world.playerMotion;
   const input = getMovementInput();
-  const speed = world.keys.has("ShiftLeft") ? 30 : 19;
-  const { forward, right } = getCameraMovementBasis();
-  const move = new THREE.Vector3()
-    .addScaledVector(forward, input.y)
-    .addScaledVector(right, input.x)
-    .normalize();
+  const committed = world.attacks.left ?? world.attacks.right;
+  const combatSpeed = world.guard.hand ? .5 : world.flailCharge ? .6 : committed ? (MELEE_STYLES[committed.itemType]?.movement ?? .75) : 1;
+  const speed = getPlayerWalkingSpeed() * combatSpeed;
+  const move = getPlayerWalkingDirection(input);
+  const wasAirborne = motion.jumping || motion.rolling || isPlayerAirborne(motion);
 
-  if (input.lengthSq() === 0) {
-    move.set(0, 0, 0);
+  if (!wasAirborne) {
+    motion.airborneDirection.copy(move);
+    motion.airborneSpeed = speed;
   }
 
-  const motion = world.playerMotion;
   let activeMove = move;
   let activeSpeed = speed;
 
-  if (motion.diveCooldown > 0) {
-    motion.diveCooldown = Math.max(0, motion.diveCooldown - deltaSeconds);
+  if (wasAirborne) {
+    activeMove = motion.airborneDirection;
+    activeSpeed = motion.airborneSpeed;
   }
 
-  if (motion.diving) {
-    if (motion.diveElapsed >= DIVE_DURATION) {
-      motion.diving = false;
-      motion.diveElapsed = 0;
-      motion.diveCooldown = DIVE_COOLDOWN;
+  if (motion.rollCooldown > 0) {
+    motion.rollCooldown = Math.max(0, motion.rollCooldown - deltaSeconds);
+  }
+
+  if (motion.rolling) {
+    if (motion.rollElapsed >= ROLL_DURATION) {
+      motion.rolling = false;
+      motion.rollElapsed = 0;
+      motion.rollCooldown = ROLL_COOLDOWN;
+      motion.rollBlendFrom = null;
+      motion.airborneSpeed = speed;
       activeMove = move;
       activeSpeed = speed;
     } else {
-      motion.diveElapsed = Math.min(DIVE_DURATION, motion.diveElapsed + deltaSeconds);
-      activeMove = motion.diveDirection;
-      activeSpeed = DIVE_SPEED;
+      motion.rollElapsed = Math.min(ROLL_DURATION, motion.rollElapsed + deltaSeconds);
+      activeMove = motion.rollDirection;
+      const rollProgress = motion.rollElapsed / ROLL_DURATION;
+      // Hold the dash through the extended dive, then ease it out as the body tucks.
+      const diveFade = clamp((rollProgress - 0.3) / 0.18, 0, 1);
+      const diveBoost = ROLL_DIVE_SPEED_BOOST * (1 - diveFade * diveFade * (3 - 2 * diveFade));
+      activeSpeed = ROLL_SPEED * (1 - 0.65 * Math.pow(rollProgress, 2)) + diveBoost;
     }
   }
 
+  const isWading = !wasAirborne && isPositionInInlandLake(state.player.position);
+  if (isWading) {
+    activeSpeed *= WATER_WADING_SPEED_MULTIPLIER;
+  }
+  document.body.dataset.playerWading = String(isWading);
+
   updatePlayerJump(deltaSeconds);
 
-  world.playerMotion.moving = activeMove.lengthSq() > 0 || motion.diving;
+  const walking = !motion.jumping && !motion.rolling && !isPlayerAirborne(motion) && activeMove.lengthSq() > 0;
+  world.playerMotion.moving = walking;
   world.playerMotion.speed = world.playerMotion.moving ? activeSpeed : 0;
 
   const bounds = world.sceneMode === "interior" || world.sceneMode === "poiInterior"
     ? getInteriorMovementBounds()
-    : { minX: -248, maxX: 248, minZ: -248, maxZ: 248 };
+    : getOutdoorMovementBounds();
 
   const nextPosition = {
     x: clamp(state.player.position.x + activeMove.x * activeSpeed * deltaSeconds, bounds.minX, bounds.maxX),
@@ -5510,6 +8321,94 @@ function updateMovement(deltaSeconds) {
   settlePlayerSupportAfterMove();
   applyLocalPlayerKnockbackMotion(deltaSeconds, bounds);
   resolveLocalPlayerActorCollisions(bounds);
+}
+
+function updateWaterSplashEffects(deltaSeconds) {
+  world.waterSplashCooldown = Math.max(0, world.waterSplashCooldown - deltaSeconds);
+  const isWading = isPositionInInlandLake(state.player.position);
+
+  if (isWading && world.playerMotion.moving && world.waterSplashCooldown <= 0) {
+    spawnWaterSplash(state.player.position);
+    world.waterSplashCooldown = WATER_SPLASH_INTERVAL;
+  }
+
+  for (let index = world.waterSplashes.length - 1; index >= 0; index -= 1) {
+    const splash = world.waterSplashes[index];
+    splash.age += deltaSeconds;
+    const progress = clamp(splash.age / splash.lifetime, 0, 1);
+    splash.ring.scale.setScalar(0.45 + progress * 4.4);
+    splash.ring.material.opacity = (1 - progress) * 0.72;
+
+    for (const droplet of splash.droplets) {
+      droplet.velocity.y -= 8.5 * deltaSeconds;
+      droplet.mesh.position.addScaledVector(droplet.velocity, deltaSeconds);
+      droplet.mesh.material.opacity = (1 - progress) * 0.88;
+      droplet.mesh.scale.setScalar(0.7 + progress * 0.35);
+    }
+
+    if (progress < 1) {
+      continue;
+    }
+
+    removeFromParent(splash.group);
+    splash.group.traverse((child) => {
+      child.geometry?.dispose?.();
+      child.material?.dispose?.();
+    });
+    world.waterSplashes.splice(index, 1);
+  }
+}
+
+function spawnWaterSplash(position) {
+  const group = new THREE.Group();
+  group.name = "water-wading-splash";
+  const side = Math.sin(state.elapsed * 16) >= 0 ? 1 : -1;
+  const offsetPosition = {
+    x: position.x + side * 0.34,
+    z: position.z + Math.cos(state.elapsed * 13) * 0.28
+  };
+  const splashPosition = isPositionInInlandLake(offsetPosition) ? offsetPosition : position;
+  group.position.set(splashPosition.x, nearestLake(splashPosition.x, splashPosition.z).waterHeight + 0.055, splashPosition.z);
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.17, 0.29, 18),
+    new THREE.MeshBasicMaterial({
+      color: "#b9f3ff",
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  group.add(ring);
+
+  const droplets = [];
+  for (let index = 0; index < 7; index += 1) {
+    const angle = (index / 7) * Math.PI * 2 + state.elapsed;
+    const droplet = new THREE.Mesh(
+      new THREE.SphereGeometry(0.07 + (index % 3) * 0.018, 6, 4),
+      new THREE.MeshBasicMaterial({
+        color: index % 2 === 0 ? "#d1f8ff" : "#75d5ed",
+        transparent: true,
+        opacity: 0.88,
+        depthWrite: false
+      })
+    );
+    droplet.position.set(Math.cos(angle) * 0.18, 0.04, Math.sin(angle) * 0.18);
+    group.add(droplet);
+    droplets.push({
+      mesh: droplet,
+      velocity: new THREE.Vector3(
+        Math.cos(angle) * (1.2 + (index % 3) * 0.28),
+        1.7 + (index % 2) * 0.55,
+        Math.sin(angle) * (1.2 + (index % 3) * 0.28)
+      )
+    });
+  }
+
+  addOutdoor(group);
+  world.waterSplashes.push({ group, ring, droplets, age: 0, lifetime: 0.62 });
 }
 
 function applyLocalPlayerKnockbackMotion(deltaSeconds, bounds) {
@@ -5530,12 +8429,55 @@ function applyLocalPlayerKnockbackMotion(deltaSeconds, bounds) {
 }
 
 function moveLocalPlayerTo(position, bounds, radius = PLAYER_COLLISION_RADIUS) {
-  const resolvedPosition = world.sceneMode === "outdoor"
-    ? resolveOutdoorSceneryCollision(position, radius)
-    : position;
+  let resolvedPosition = world.sceneMode === "outdoor"
+    ? resolveOutdoorSceneryCollision(clampWorldPosition(position, 38 + radius), radius)
+    : world.sceneMode === "interior"
+      ? resolveCastleInteriorMovementPosition(position)
+      : getActivePoiInterior()?.type === "Dungeon"
+        ? resolveDungeonMovementPosition(position)
+      : position;
 
-  state.player.position.x = clamp(resolvedPosition.x, bounds.minX, bounds.maxX);
-  state.player.position.z = clamp(resolvedPosition.z, bounds.minZ, bounds.maxZ);
+  if (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon" && world.dungeon.gate && !world.dungeon.gate.open) {
+    resolvedPosition = constrainToDungeonAntechamber(resolvedPosition, world.dungeon.layout.entranceRoom, radius);
+  }
+  if (world.activePoiInteriorId === LIBRARY_ID && world.sceneMode === "poiInterior") {
+    for (const side of [-1, 1]) {
+      for (const z of [-14, -2, 10]) {
+        pushCircleOutOfAabb(resolvedPosition, {x:side*29*LIBRARY_INTERIOR_WIDTH_SCALE,z}, 3*LIBRARY_INTERIOR_WIDTH_SCALE, 5, radius);
+        pushCircleOutOfAabb(resolvedPosition, {x:side*13*LIBRARY_INTERIOR_WIDTH_SCALE,z}, LIBRARY_INTERIOR_WIDTH_SCALE, 1, radius);
+      }
+      for (const z of [-6,9]) pushCircleOutOfAabb(resolvedPosition, {x:side*20*LIBRARY_INTERIOR_WIDTH_SCALE,z}, 3*LIBRARY_INTERIOR_WIDTH_SCALE, 3, radius);
+    }
+  }
+  if (world.sceneMode === "interior") {
+    for (const prop of world.interiorRoot.getObjectByName("castleInteriorDetails")?.userData.colliders ?? []) pushCircleOutOfAabb(resolvedPosition, prop, prop.halfWidth, prop.halfDepth, radius);
+  }
+  if (world.sceneMode === "poiInterior") {
+    const furnishings = world.meshes.poiInteriors.get(world.activePoiInteriorId)?.getObjectByName("furnishedPoiHall");
+    for (const prop of furnishings?.userData.colliders ?? []) pushCircleOutOfAabb(resolvedPosition, prop, prop.halfWidth, prop.halfDepth, radius);
+  }
+  const finalPosition = world.sceneMode === "outdoor" ? clampWorldPosition(resolvedPosition, 38 + radius) : resolvedPosition;
+  const previousPosition = { ...state.player.position };
+  state.player.position.x = clamp(finalPosition.x, bounds.minX, bounds.maxX);
+  state.player.position.z = clamp(finalPosition.z, bounds.minZ, bounds.maxZ);
+  preservePlayerElevationAfterMove(previousPosition);
+}
+
+function preservePlayerElevationAfterMove(previousPosition) {
+  if (world.sceneMode !== "outdoor") return;
+
+  const motion = world.playerMotion;
+  const position = state.player.position;
+  const terrainDrop = getTerrainHeightAt(previousPosition.x, previousPosition.z)
+    - getTerrainHeightAt(position.x, position.z);
+  const distance = Math.hypot(position.x - previousPosition.x, position.z - previousPosition.z);
+  // Offsets are terrain-relative for rendering/combat, but flight is in world space.
+  // Only grounded walking follows gentle terrain; steep drops start a free fall.
+  const inFlight = motion.jumping || motion.rolling || isPlayerAirborne(motion);
+  const leavingLedge = terrainDrop > Math.max(0.05, distance * 0.75);
+  if (inFlight || motion.verticalOffset > 0.08 || leavingLedge) {
+    motion.verticalOffset += terrainDrop;
+  }
 }
 
 function getPlayerSupportOffset(position) {
@@ -5546,7 +8488,7 @@ function getPlayerSupportOffset(position) {
   const terrainY = getTerrainHeightAt(position.x, position.z);
   let supportOffset = 0;
 
-  for (const collider of world.sceneryColliders) {
+  for (const collider of world.sceneryGrid.query(position.x, position.z)) {
     if (collider.type !== "rock" || !collider.platformRadius) {
       continue;
     }
@@ -5557,14 +8499,15 @@ function getPlayerSupportOffset(position) {
       continue;
     }
 
-    supportOffset = Math.max(supportOffset, getRockPlatformWorldY(collider) - terrainY);
+    const surfaceY = rockSurfaceWorldY(collider, position);
+    if (surfaceY !== null) supportOffset = Math.max(supportOffset, surfaceY - terrainY);
   }
 
   return Math.max(0, supportOffset);
 }
 
-function getRockPlatformWorldY(collider) {
-  return (collider.groundY ?? getTerrainHeightAt(collider.x, collider.z)) + (collider.platformHeight ?? 0);
+function getRockPlatformWorldY(collider, position) {
+  return rockSurfaceWorldY(collider, position) ?? ((collider.groundY ?? getTerrainHeightAt(collider.x, collider.z)) + (collider.platformHeight ?? 0));
 }
 
 function canPlayerClearSceneryCollider(collider, position) {
@@ -5572,15 +8515,15 @@ function canPlayerClearSceneryCollider(collider, position) {
     return false;
   }
 
-  const terrainY = getTerrainHeightAt(position.x, position.z);
-  const platformOffset = getRockPlatformWorldY(collider) - terrainY;
-  return world.playerMotion.verticalOffset >= platformOffset - 0.16;
+  const playerY = getTerrainHeightAt(state.player.position.x, state.player.position.z)
+    + world.playerMotion.verticalOffset;
+  return playerY >= getRockPlatformWorldY(collider, position) - 0.16;
 }
 
 function resolveOutdoorSceneryCollision(position, moverRadius = 1.15) {
   const resolved = { ...position };
 
-  for (const collider of world.sceneryColliders) {
+  for (const collider of world.sceneryGrid.query(position.x-moverRadius-32, position.z-moverRadius-32, position.x+moverRadius+32, position.z+moverRadius+32)) {
     const dx = resolved.x - collider.x;
     const dz = resolved.z - collider.z;
     const distance = Math.hypot(dx, dz);
@@ -5600,6 +8543,16 @@ function resolveOutdoorSceneryCollision(position, moverRadius = 1.15) {
     resolved.z += (dz / distance) * push;
   }
 
+  for (const collider of [...world.poiExteriorColliders, ...world.castleExteriorColliders]) {
+    pushCircleOutOfAabb(
+      resolved,
+      { x: collider.x, z: collider.z },
+      collider.halfWidth,
+      collider.halfDepth,
+      moverRadius
+    );
+  }
+
   for (const structure of state.structures) {
     if (structure.hp <= 0) {
       continue;
@@ -5617,7 +8570,14 @@ function resolveOutdoorSceneryCollision(position, moverRadius = 1.15) {
       continue;
     }
 
-    const radius = structure.type === "depot" ? 5.4 : structure.type === "outpost" ? 4.2 : 3.2;
+    const radius =
+      structure.type === "depot"
+        ? 5.4
+        : structure.type === "outpost"
+          ? 4.2
+          : structure.type === "street-lamp"
+            ? 1.45
+            : 3.2;
     const dx = resolved.x - structure.position.x;
     const dz = resolved.z - structure.position.z;
     const distance = Math.hypot(dx, dz);
@@ -5693,11 +8653,61 @@ function pushCircleOutOfOrientedAabb(position, center, rotation, halfWidth, half
 }
 
 function getInteriorMovementBounds() {
-  if (world.activePoiInteriorId === "ebon-hollow") {
-    return { minX: -52, maxX: 52, minZ: -38, maxZ: 40 };
+  if (getActivePoiInterior()?.type === "Dungeon") {
+    return world.dungeon.layout?.bounds ?? { minX: -52, maxX: 52, minZ: -38, maxZ: 40 };
   }
 
-  return { minX: -29, maxX: 29, minZ: -22, maxZ: 22 };
+  if (world.sceneMode === "interior") {
+    return CASTLE_INTERIOR.bounds;
+  }
+
+  if (getActivePoiInterior()?.type === "Library") return { minX: -29*LIBRARY_INTERIOR_WIDTH_SCALE, maxX: 29*LIBRARY_INTERIOR_WIDTH_SCALE, minZ: -22, maxZ: 22 };
+  return POI_HALL.bounds;
+}
+
+function resolveCastleInteriorMovementPosition(position) {
+  const rooms = CASTLE_INTERIOR.rooms;
+
+  if (rooms.some((room) => isPointInsideRect(position, room))) {
+    return position;
+  }
+
+  return rooms
+    .map((room) => {
+      const x = clamp(position.x, room.minX, room.maxX);
+      const z = clamp(position.z, room.minZ, room.maxZ);
+      return {
+        x,
+        z,
+        distanceSq: (position.x - x) ** 2 + (position.z - z) ** 2
+      };
+    })
+    .sort((a, b) => a.distanceSq - b.distanceSq)[0];
+}
+
+function isPointInsideRect(position, rect) {
+  return position.x >= rect.minX && position.x <= rect.maxX && position.z >= rect.minZ && position.z <= rect.maxZ;
+}
+
+function resolveDungeonMovementPosition(position) {
+  const layout = world.dungeon.layout;
+  const rects = layout?.walkRects ?? [];
+
+  if (!rects.length || rects.some((rect) => isPointInsideRect(position, rect))) {
+    return position;
+  }
+
+  return rects
+    .map((rect) => {
+      const x = clamp(position.x, rect.minX, rect.maxX);
+      const z = clamp(position.z, rect.minZ, rect.maxZ);
+      return {
+        x,
+        z,
+        distanceSq: (position.x - x) ** 2 + (position.z - z) ** 2
+      };
+    })
+    .sort((a, b) => a.distanceSq - b.distanceSq)[0] ?? position;
 }
 
 function getCameraMovementBasis() {
@@ -5721,11 +8731,11 @@ function updateAimFromPointer(event) {
     return;
   }
 
-  if (isPlayerDiving()) {
+  if (isPlayerRolling()) {
     return;
   }
 
-  const target = getGroundPointFromPointer(event);
+  const target = getAimPointFromNdc(getNdcFromPointer(event));
 
   if (!target) {
     return;
@@ -5749,22 +8759,7 @@ function updateAimFromPointer(event) {
 }
 
 function updateTowerAimFromPointer(event) {
-  world.raycaster.setFromCamera(getNdcFromPointer(event), world.camera);
-  world.outpostTower.aimDirection.copy(world.raycaster.ray.direction).normalize();
-
-  const horizontal = world.outpostTower.aimDirection.clone();
-  horizontal.y = 0;
-
-  if (horizontal.lengthSq() > 0.001) {
-    horizontal.normalize();
-    world.aimDirection.copy(horizontal);
-    world.aimTarget.set(
-      state.player.position.x + horizontal.x * 42,
-      0,
-      state.player.position.z + horizontal.z * 42
-    );
-    world.hasAim = true;
-  }
+  updateOutpostTowerAimFromAngles();
 }
 
 function getGroundPointFromPointer(event) {
@@ -5795,9 +8790,10 @@ function getGroundPointFromNdc(ndc) {
   const target = new THREE.Vector3();
 
   world.raycaster.setFromCamera(ndc, world.camera);
+  world.aimRayOrigin.copy(world.raycaster.ray.origin);
   world.aimRayDirection.copy(world.raycaster.ray.direction).normalize();
   if (world.sceneMode === "outdoor" && world.meshes.terrain) {
-    const terrainHit = world.raycaster.intersectObject(world.meshes.terrain, false)[0];
+    const terrainHit = raycastTerrain();
     if (terrainHit) {
       return terrainHit.point;
     }
@@ -5810,35 +8806,40 @@ function getAimPointFromNdc(ndc) {
   const fallbackTarget = new THREE.Vector3();
 
   world.raycaster.setFromCamera(ndc, world.camera);
+  world.aimRayOrigin.copy(world.raycaster.ray.origin);
   world.aimRayDirection.copy(world.raycaster.ray.direction).normalize();
 
-  const combatMeshes = getActiveCombatTargets()
-    .map((target) => target.mesh)
-    .filter((mesh) => mesh?.isObject3D);
-  const combatHit = combatMeshes.length
-    ? world.raycaster.intersectObjects(combatMeshes, true)[0]
-    : null;
+  // The camera sits behind the character. A hit in that intervening space
+  // is ahead of the camera but behind the player, and used to reverse attacks.
+  // Free-pointer aiming must still allow deliberately aiming behind yourself.
+  const forward = world.aimRayDirection.clone().setY(0);
+  const shoulderAim = isLockedThirdPersonCamera();
+  if (forward.lengthSq() > 0.000001) forward.normalize();
+  const isForwardHit = (point) => !shoulderAim || (
+    (point.x - state.player.position.x) * forward.x +
+    (point.z - state.player.position.z) * forward.z >= 0.65
+  );
 
-  if (combatHit) {
-    return combatHit.point;
-  }
+  const combatHit = pickCombatAimPoint([
+    ...getActiveCombatEnemies(), ...getAttackableRemotePlayers()
+  ], world.raycaster.ray, isForwardHit);
+  if (combatHit) return combatHit;
 
-  if (world.sceneMode === "outdoor" && world.meshes.terrain) {
-    const terrainHit = world.raycaster.intersectObject(world.meshes.terrain, false)[0];
-    if (terrainHit) {
-      return terrainHit.point;
-    }
-  }
-
-  if (world.raycaster.ray.intersectPlane(world.groundPlane, fallbackTarget)) {
+  // Free-pointer aiming retains a flat baseline; shoulder aim follows the view.
+  // Scenery and terrain triangles never participate in combat targeting.
+  if (!shoulderAim && world.raycaster.ray.intersectPlane(world.groundPlane, fallbackTarget)) {
     return fallbackTarget;
   }
+
+  // Let shoulder aiming use its player-relative forward fallback when the
+  // crosshair hits nearby ground (or looks into the sky), never a rear point.
+  if (shoulderAim) return null;
 
   return world.raycaster.ray.origin.clone().addScaledVector(world.raycaster.ray.direction, 90);
 }
 
 function applyAimFacing() {
-  if (!world.playerMesh || !world.hasAim || isPlayerDiving()) {
+  if (!world.playerMesh || !world.hasAim || isPlayerRolling()) {
     return;
   }
 
@@ -5853,6 +8854,12 @@ function applyAimFacing() {
   }
 
   world.aimDirection.copy(direction.normalize());
+  // Keep body yaw consistent with the stroke until its recovery finishes.
+  const committed = world.attacks?.left ?? world.attacks?.right;
+  if (committed) {
+    facePlayerTowardAttack(committed);
+    return;
+  }
   if (world.seatedOnThrone) {
     world.playerMesh.rotation.y = 0;
     world.playerRig.headGroup.rotation.y = clamp(Math.atan2(world.aimDirection.x, world.aimDirection.z), -0.85, 0.85);
@@ -5902,7 +8909,7 @@ function showBaseTooltip(factionId, x, y) {
   }
 
   ui.baseTooltip.innerHTML = `
-    <strong>${faction.name}</strong>
+    <strong>${escapeHtml(faction.name)}</strong>
     <span>Gold ${Math.round(store.gold)}</span>
     ${RESOURCE_TYPES.map((resource) => `<span>${resource.name} ${store.resources[resource.id] ?? 0}</span>`).join("")}
   `;
@@ -5928,6 +8935,7 @@ function hideBaseTooltip() {
 }
 
 function startSpaceLocationAction() {
+  if (isPlayerRolling()) return false;
   if (world.baseEntryAction?.source === "space") {
     return true;
   }
@@ -5941,8 +8949,8 @@ function startSpaceLocationAction() {
   world.baseEntryAction = {
     ...action,
     source: "space",
-    elapsed: 0,
-    duration: action.type === "claimPoiFlag" ? POI_FLAG_HOLD_DURATION : LOCATION_HOLD_DURATION
+    elapsed: action.type === "openDungeonGate" ? world.dungeon.gate.progress * DUNGEON_GATE_HOLD_SECONDS : 0,
+    duration: action.type === "openDungeonGate" ? DUNGEON_GATE_HOLD_SECONDS : action.type === "claimPoiFlag" ? POI_FLAG_HOLD_DURATION : LOCATION_HOLD_DURATION
   };
   document.body.dataset.castleTransition = action.type;
   document.body.dataset.enteringProgress = "0";
@@ -5958,7 +8966,7 @@ function stopSpaceLocationAction() {
 }
 
 function getAvailableLocationAction() {
-  if (!state.selectedFactionId || !ui.factionSelect.classList.contains("is-hidden") || isBlockingLocationInput()) {
+  if (!state.player.firstName || !ui.factionSelect.classList.contains("is-hidden") || isBlockingLocationInput()) {
     return null;
   }
 
@@ -5993,9 +9001,9 @@ function getAvailableLocationAction() {
       };
     }
 
-    const faction = FACTION_LOOKUP[state.selectedFactionId];
+    const faction = FACTIONS.find(entry => (!state.selectedFactionId || !state.factions[entry.id] || entry.id === state.selectedFactionId) && distance2D(state.player.position, castleEntrance(entry)) <= 7.5);
 
-    if (faction && distance2D(state.player.position, faction.position) <= faction.safeRadius + 5) {
+    if (faction && distance2D(state.player.position, castleEntrance(faction)) <= 7.5) {
       return {
         type: "enterCastle",
         label: `${faction.name} Keep`,
@@ -6004,9 +9012,13 @@ function getAvailableLocationAction() {
       };
     }
 
-    const nearest = getNearestPoi(state);
+    const nearest = getNearestPoiEntrance();
 
-    if (nearest && nearest.distance <= nearest.poi.radius + 6) {
+    if (nearest && nearest.distance <= POI_DOOR_INTERACTION_RANGE) {
+      if (nearest.poi.type === "Dungeon" && world.dungeons.get(nearest.poi.id)?.status !== "active") {
+        return null;
+      }
+
       return {
         type: "enterPoi",
         label: nearest.poi.name,
@@ -6019,6 +9031,9 @@ function getAvailableLocationAction() {
   }
 
   if (world.sceneMode === "interior") {
+    for (const [z,archiveTab,label] of [[-9,"resources","Family treasury"],[0,"book","Castle history books"],[9,"scroll","Castle history scroll"]]) {
+      if (Math.hypot(state.player.position.x + 12, state.player.position.z-z) < 4.5) return { type:"readChronicle", archiveTab, label, prompt:"Hold Space to read" };
+    }
     const rulerSeatAction = getAvailableRulerSeatAction();
 
     if (rulerSeatAction) {
@@ -6035,6 +9050,18 @@ function getAvailableLocationAction() {
   }
 
   if (world.sceneMode === "poiInterior") {
+    if (getActivePoiInterior()?.type === "Dungeon" && !state.player.dead && isNearDungeonGate(world.dungeon.gate, state.player.position)) {
+      return { type: "openDungeonGate", poiId: world.activePoiInteriorId, label: "Dungeon doors", prompt: "Hold Space to open the dungeon doors" };
+    }
+    if (world.activePoiInteriorId === LIBRARY_ID) {
+      if (Math.hypot(state.player.position.x,state.player.position.z+10)<6) return {type:"readChronicle",archiveTab:"book",label:"Living Chronicles",prompt:"Hold Space to read"};
+      for (const {x,z,tab:archiveTab,label} of LIBRARY_TABLE_DISPLAYS) {
+        if (Math.hypot(state.player.position.x-x*LIBRARY_INTERIOR_WIDTH_SCALE,state.player.position.z-z)<6) return {type:"readChronicle",archiveTab,label,prompt:"Hold Space to read"};
+      }
+    }
+    if (world.activePoiInteriorId === LIBRARY_ID && distance2D(state.player.position, LIBRARY_SCROLL_POSITION) < 9) {
+      return { type: "readChronicle", archiveTab: "scroll", label: "The Living Chronicle", prompt: "Hold Space to read the wall scroll" };
+    }
     const flagAction = getAvailablePoiFlagAction();
 
     if (flagAction) {
@@ -6053,11 +9080,21 @@ function getAvailableLocationAction() {
   return null;
 }
 
+function getNearestPoiEntrance() {
+  return state.pois
+    .map((poi) => ({
+      poi,
+      entrance: getPoiEntrancePosition(poi),
+      distance: distance2D(state.player.position, getPoiEntrancePosition(poi))
+    }))
+    .sort((a, b) => a.distance - b.distance)[0] ?? null;
+}
+
 function getAvailablePoiFlagAction() {
   const poi = getActivePoiInterior();
   const playerFaction = state.selectedFactionId ? FACTION_LOOKUP[state.selectedFactionId] : null;
 
-  if (!poi || poi.type === "Dungeon" || !playerFaction || poi.ownerFactionId === playerFaction.id || !isNearPoiFlagpole()) {
+  if (!poi || (poi.type === "Dungeon" || poi.type === "Library") || !playerFaction || poi.ownerFactionId === playerFaction.id || !isNearPoiFlagpole()) {
     return null;
   }
 
@@ -6100,6 +9137,7 @@ function getNearestOwnedStructure(type, maxDistance) {
 
 function isBlockingLocationInput() {
   return (
+    state.player.dead ||
     !ui.inventoryPanel.classList.contains("is-hidden") ||
     !ui.buildPanel.classList.contains("is-hidden") ||
     !ui.statusPanel.classList.contains("is-hidden") ||
@@ -6111,26 +9149,26 @@ function isBlockingLocationInput() {
 }
 
 function isNearCastleExit() {
-  return Math.abs(state.player.position.x) <= 18 && state.player.position.z >= 11;
+  return distance2D(state.player.position, { x: 0, z: CASTLE_INTERIOR.exitZ }) <= 7.5;
 }
 
 function getAvailableRulerSeatAction() {
   const factionId = world.interiorFactionId;
 
-  if (!factionId || state.selectedFactionId !== factionId || !isNearRulerSeat()) {
+  if (!canUseFactionThrone(state, factionId) || !factionId || (state.factions[factionId] && state.selectedFactionId && state.selectedFactionId !== factionId) || !isNearRulerSeat()) {
     return null;
   }
 
   const currentRulerName = getFactionRulerName(state, factionId);
 
-  if (currentRulerName && !isFactionRuler(state, factionId)) {
+  if (currentRulerName && state.selectedFactionId && !isFactionRuler(state, factionId)) {
     return null;
   }
 
   return {
     type: "throne",
     label: "Throne",
-    prompt: currentRulerName ? "Hold Space to sit on the throne" : "Hold Space to claim the throne",
+    prompt: state.factions[factionId] && !state.selectedFactionId ? `Hold Space to join ${FACTION_LOOKUP[factionId].name}` : currentRulerName ? "Hold Space to sit on the throne" : "Hold Space to claim the throne",
     factionId
   };
 }
@@ -6140,7 +9178,9 @@ function isNearRulerSeat() {
 }
 
 function isNearPoiExit() {
-  return Math.abs(state.player.position.x) <= 18 && state.player.position.z >= 13;
+  const type = getActivePoiInterior()?.type;
+  if (type === "Dungeon" || type === "Library") return Math.abs(state.player.position.x) <= 18 && state.player.position.z >= 13;
+  return distance2D(state.player.position, { x: 0, z: POI_HALL.exitZ }) <= 6.5;
 }
 
 function isNearPoiFlagpole() {
@@ -6149,6 +9189,16 @@ function isNearPoiFlagpole() {
 
 function updateLocationPrompt() {
   const action = world.baseEntryAction?.source === "space" ? world.baseEntryAction : getAvailableLocationAction();
+
+  const workstation = getTargetedWorkstation();
+  if (!action && workstation) {
+    const station = getPoiWorkstation(workstation);
+    ui.locationPromptTitle.textContent = `${station.name}: hold left / right click with free hands to gather`;
+    ui.locationPromptProgress.style.width = `${Math.round(100 * (world.workAction?.elapsed ?? 0) / WORK_ACTION_DURATION)}%`;
+    ui.locationPrompt.classList.remove("is-hidden");
+    ui.locationPrompt.setAttribute("aria-hidden", "false");
+    return;
+  }
 
   if (!action) {
     ui.locationPrompt.classList.add("is-hidden");
@@ -6182,7 +9232,7 @@ function startBaseEntryAction(event) {
     return false;
   }
 
-  if (hit.object.userData.factionId !== state.selectedFactionId) {
+  if (state.selectedFactionId && state.factions[hit.object.userData.factionId] && hit.object.userData.factionId !== state.selectedFactionId) {
     flash("You can only enter your own faction keep.");
     return false;
   }
@@ -6199,7 +9249,8 @@ function startBaseEntryAction(event) {
 }
 
 function startRulerSeatAction(event) {
-  if (!world.interiorFactionId || state.selectedFactionId !== world.interiorFactionId) {
+  if (!canUseFactionThrone(state, world.interiorFactionId)) return false;
+  if (!world.interiorFactionId || (state.selectedFactionId && state.factions[world.interiorFactionId] && state.selectedFactionId !== world.interiorFactionId)) {
     return false;
   }
 
@@ -6236,6 +9287,13 @@ function openNpcPanelFromPointer(event) {
     return false;
   }
 
+  const blacksmithHit = getBlacksmithNpcHitFromPointer(event);
+
+  if (blacksmithHit) {
+    openBlacksmithPanel();
+    return true;
+  }
+
   const stewardHit = getStewardNpcHitFromPointer(event);
 
   if (stewardHit) {
@@ -6254,13 +9312,13 @@ function openNpcPanelFromPointer(event) {
 }
 
 function getTradeNpcHitFromPointer(event) {
-  if (world.sceneMode !== "poiInterior" || world.activePoiInteriorId !== "river-market" || !world.tradeNpcs.length) {
+  if (world.sceneMode !== "poiInterior" || getActivePoiInterior()?.type !== "Trade Post" || !world.tradeNpcs.length) {
     return null;
   }
 
   world.raycaster.setFromCamera(getNdcFromPointer(event), world.camera);
   return world.raycaster
-    .intersectObjects(world.tradeNpcs, true)
+    .intersectObjects(world.tradeNpcs.filter((npc) => npc.parent?.visible), true)
     .find((entry) => entry.object.userData.tradeNpcId);
 }
 
@@ -6275,8 +9333,76 @@ function getStewardNpcHitFromPointer(event) {
     .find((entry) => entry.object.userData.stewardNpc);
 }
 
+function getBlacksmithNpcHitFromPointer(event) {
+  if (world.sceneMode !== "interior" || !world.blacksmithNpcs.length) {
+    return null;
+  }
+
+  world.raycaster.setFromCamera(getNdcFromPointer(event), world.camera);
+  return world.raycaster
+    .intersectObjects(world.blacksmithNpcs, true)
+    .find((entry) => entry.object.userData.blacksmithNpc);
+}
+
+function tryClaimCampChestFromPointer(event) {
+  if (event.button !== 0 || world.sceneMode !== "outdoor" || state.player.dead) return false;
+  world.raycaster.setFromCamera(getNdcFromPointer(event), world.camera);
+  const hit = world.raycaster.intersectObjects(world.campChests, true)[0];
+  if (!hit) return false;
+  let chest = hit.object;
+  while (chest.parent && !world.campChests.includes(chest)) chest = chest.parent;
+  const position = chest.getWorldPosition(new THREE.Vector3());
+  if (distance2D(state.player.position, position) > CAMP_CHEST_REACH) {
+    flash("Move closer to open the chest.");
+    return true;
+  }
+  const items = claimCampChest(chest, state.player);
+  if (!items.length) {
+    flash("This chest is empty. Camp supplies refill five minutes after looting.");
+    return true;
+  }
+  markPersistenceDirty();
+  refreshUi();
+  flash(`Found ${items.map(item => item.name).join(" and ")}.`);
+  return true;
+}
+
+function tryClaimDungeonTreasureFromPointer(event) {
+  if (event.button !== 0 || world.sceneMode !== "poiInterior" || getActivePoiInterior()?.type !== "Dungeon") {
+    return false;
+  }
+
+  if (state.player.dead) return false;
+  world.raycaster.setFromCamera(getNdcFromPointer(event), world.camera);
+  const chestHit = world.raycaster.intersectObjects(world.dungeon.chests.filter(chest => !chest.userData.opened), true)[0];
+  if (chestHit) {
+    let chest = chestHit.object;
+    while (chest.parent && !world.dungeon.chests.includes(chest)) chest = chest.parent;
+    if (distance2D(state.player.position, chest.position) > DUNGEON_TREASURE_PICKUP_RANGE) {
+      flash("Move closer to open the chest.");
+      return true;
+    }
+    const room = world.dungeon.layout.rooms.find(room => room.id === chest.userData.roomId);
+    if (world.pveEnemies.some(enemy => !enemy.dead && Math.abs(enemy.mesh.position.x - room.x) < room.width / 2 + 6 && Math.abs(enemy.mesh.position.z - room.z) < room.depth / 2 + 6)) {
+      flash("Defeat the nearby guards to open this chest.");
+      return true;
+    }
+    const item = Math.random() < 0.65 ? createRandomPveWeapon() : createRandomPveArmor();
+    chest.userData.opened = true;
+    chest.userData.lid.rotation.x = -Math.PI / 3;
+    chest.userData.label.visible = false;
+    state.player.inventory.push(item);
+    state.player.gold += chest.userData.gold;
+    markPersistenceDirty();
+    refreshUi();
+    flash(`Found ${item.name} and ${chest.userData.gold} gold.`);
+    return true;
+  }
+  return false;
+}
+
 function tryPickupDroppedItemFromPointer(event) {
-  if (event.button !== 0 || world.sceneMode !== "outdoor" || !world.droppedItems.length) {
+  if (event.button !== 0 || state.player.dead || !world.droppedItems.length) {
     return false;
   }
 
@@ -6298,8 +9424,16 @@ function tryPickupDroppedItemFromPointer(event) {
     return true;
   }
 
-  state.player.inventory.push(drop.item);
-  state.player.selectedGearItemId = drop.item.id;
+  if (drop.shared) {
+    void pickupSharedDeathDrop(drop);
+    return true;
+  }
+  if (drop.item.goldAmount) {
+    state.player.gold += drop.item.goldAmount;
+  } else {
+    state.player.inventory.push(drop.item);
+    state.player.selectedGearItemId = drop.item.id;
+  }
   removeDroppedItem(drop.id);
   markPersistenceDirty();
   refreshUi();
@@ -6314,7 +9448,7 @@ function getDroppedItemHitFromPointer(event) {
 
   world.raycaster.setFromCamera(getNdcFromPointer(event), world.camera);
   const meshHit = world.raycaster
-    .intersectObjects(world.droppedItems.map((entry) => entry.mesh), true)
+    .intersectObjects(world.droppedItems.filter(entry => entry.mesh.visible).map((entry) => entry.mesh), true)
     .find((entry) => entry.object.userData.droppedItemId);
 
   if (meshHit || !isLockedThirdPersonCamera()) {
@@ -6328,7 +9462,7 @@ function getDroppedItemHitFromPointer(event) {
   }
 
   const nearestDrop = world.droppedItems
-    .filter((drop) => distance2D(state.player.position, drop.position) <= DROPPED_ITEM_PICKUP_RANGE)
+    .filter((drop) => drop.mesh.visible && distance2D(state.player.position, drop.position) <= DROPPED_ITEM_PICKUP_RANGE)
     .map((drop) => ({
       drop,
       distance: Math.hypot(drop.position.x - target.x, drop.position.z - target.z)
@@ -6369,8 +9503,8 @@ function startInteriorExitAction(event) {
 }
 
 function isInteriorDoorExitTarget(target) {
-  const playerNearDoor = Math.abs(state.player.position.x) <= 18 && state.player.position.z >= 11;
-  const pointerBeyondDoor = Math.abs(target.x) <= 12 && target.z >= 22 && target.z <= 36;
+  const playerNearDoor = isNearCastleExit();
+  const pointerBeyondDoor = Math.abs(target.x) <= 12 && target.z >= CASTLE_INTERIOR.exitZ - 2 && target.z <= CASTLE_INTERIOR.exitZ + 10;
   return playerNearDoor && pointerBeyondDoor;
 }
 
@@ -6388,12 +9522,21 @@ function updateBaseEntryAction(deltaSeconds) {
     return;
   }
 
+  if (action.type === "openDungeonGate") {
+    if (world.sceneMode !== "poiInterior" || world.activePoiInteriorId !== action.poiId || state.player.dead || isBlockingLocationInput() || !isNearDungeonGate(world.dungeon.gate, state.player.position)) {
+      stopSpaceLocationAction(); return;
+    }
+    advanceDungeonGate(world.dungeon.gate, deltaSeconds);
+  }
   action.elapsed += deltaSeconds;
   document.body.dataset.enteringProgress = String(Math.min(1, action.elapsed / action.duration).toFixed(2));
   updateLocationPrompt();
 
   if (action.elapsed >= action.duration) {
-    if (action.type === "exit" || action.type === "exitCastle") {
+    if (action.type === "openDungeonGate") {
+      stopSpaceLocationAction();
+      flash("The dungeon doors are open.");
+    } else if (action.type === "exit" || action.type === "exitCastle") {
       leaveCastleInterior();
     } else if (action.type === "exitPoi") {
       leavePoiInterior();
@@ -6403,6 +9546,9 @@ function updateBaseEntryAction(deltaSeconds) {
       enterCastleInterior(action.factionId);
     } else if (action.type === "enterPoi") {
       enterPoiInterior(action.poiId);
+    } else if (action.type === "readChronicle") {
+      stopBaseEntryAction();
+      setLoreScrollOpen(true, action.archiveTab || "book");
     } else if (action.type === "claimPoiFlag") {
       resolvePoiFlagAction(action);
     } else if (action.type === "enterOutpost") {
@@ -6421,7 +9567,7 @@ function resolvePoiFlagAction(action) {
   const poi = state.pois.find((entry) => entry.id === action.poiId);
   const playerFaction = state.selectedFactionId ? FACTION_LOOKUP[state.selectedFactionId] : null;
 
-  if (!poi || poi.type === "Dungeon" || !playerFaction || !isNearPoiFlagpole()) {
+  if (!poi || (poi.type === "Dungeon" || poi.type === "Library") || !playerFaction || !isNearPoiFlagpole()) {
     stopBaseEntryAction();
     flash("Move back to the flagpole.");
     refreshUi();
@@ -6463,6 +9609,21 @@ function resolvePoiFlagAction(action) {
 
 function resolveRulerSeatAction(factionId) {
   stopBaseEntryAction();
+  if (!canUseFactionThrone(state, factionId)) { flash("As king, you can only use your own faction’s throne."); return; }
+  if (state.factions[factionId] && !state.selectedFactionId) {
+    const position = { ...state.player.position };
+    const result = joinFaction(state, factionId);
+    state.player.position = position;
+    runAction(result);
+    publishLocalPlayer(true);
+    return;
+  }
+
+  if (!state.factions[factionId]) {
+    sitOnRulerSeat();
+    openFoundingEditor(factionId);
+    return;
+  }
 
   if (isFactionRuler(state, factionId)) {
     sitOnRulerSeat();
@@ -6498,16 +9659,13 @@ function enterOutpostTower(structureId) {
   world.outpostTower.structureId = structure.id;
   world.outpostTower.position = { ...structure.position };
   world.outpostTower.elevation = getTerrainHeightAt(structure.position.x, structure.position.z) + 16.2;
-  world.outpostTower.aimDirection.set(0, -0.12, 1).normalize();
   world.outpostTower.drawStartedAt = 0;
   world.outpostTower.shotCooldown = 0;
   state.player.position.x = structure.position.x;
   state.player.position.z = structure.position.z;
+  syncOutpostTowerAimToCurrentView();
   world.playerMotion.moving = false;
   world.playerMotion.speed = 0;
-  world.hasAim = true;
-  world.aimDirection.set(0, 0, 1);
-  world.aimTarget.set(structure.position.x, 0, structure.position.z + 30);
   clearRangedCharge();
   stopWorkAction();
   closeNpcTradePanel();
@@ -6516,6 +9674,7 @@ function enterOutpostTower(structureId) {
   setStatusPanelOpen(false);
   setInventoryPanelOpen(false);
   setBuildPanelOpen(false);
+  requestOutpostTowerPointerLock();
   flash("You climbed into the outpost.");
 }
 
@@ -6534,6 +9693,7 @@ function exitOutpostTower() {
   world.outpostTower.drawStartedAt = 0;
   world.hasAim = false;
   clearRangedCharge();
+  releaseLockedThirdPersonPointerLock();
   flash("You climbed down from the outpost.");
 }
 
@@ -6572,7 +9732,7 @@ function enterCastleInterior(factionId) {
     return;
   }
 
-  world.outdoorReturnPosition = { ...state.player.position };
+  world.outdoorReturnPosition = { x: faction.position.x, z: faction.position.z + CASTLE_GATE_Z + 5 };
   world.sceneMode = "interior";
   world.interiorFactionId = factionId;
   world.activePoiInteriorId = null;
@@ -6581,7 +9741,7 @@ function enterCastleInterior(factionId) {
   world.poiInteriorRoot.visible = false;
   setActivePoiInterior(null);
   state.player.position.x = 0;
-  state.player.position.z = 17;
+  state.player.position.z = CASTLE_INTERIOR.spawnZ;
   world.cameraYaw = 0;
   world.cameraPitch = 0.6;
   world.hasAim = false;
@@ -6593,11 +9753,8 @@ function enterCastleInterior(factionId) {
   closeDepotPanel();
   clearProjectiles();
   leaveRulerSeat();
+  setHousePanelOpen(false);
   setRulerPanelOpen(false, { leaveSeat: false });
-  ui.interiorTitle.textContent = `${faction.name} Keep`;
-  ui.leaveInterior.textContent = "Leave Keep";
-  ui.interiorHint.classList.remove("is-hidden");
-  ui.interiorHint.setAttribute("aria-hidden", "false");
   refreshUi();
 }
 
@@ -6626,9 +9783,8 @@ function leaveCastleInterior() {
   closeStewardPanel();
   closeDepotPanel();
   clearProjectiles();
+  setHousePanelOpen(false);
   setRulerPanelOpen(false, { leaveSeat: false });
-  ui.interiorHint.classList.add("is-hidden");
-  ui.interiorHint.setAttribute("aria-hidden", "true");
   refreshUi();
 }
 
@@ -6637,6 +9793,12 @@ function enterPoiInterior(poiId) {
 
   if (!poi) {
     stopBaseEntryAction();
+    return;
+  }
+
+  if (poi.type === "Dungeon" && world.dungeons.get(poi.id)?.status !== "active") {
+    stopBaseEntryAction();
+    flash(`${poi.name} is temporarily closed while it regenerates.`);
     return;
   }
 
@@ -6649,7 +9811,7 @@ function enterPoiInterior(poiId) {
   world.poiInteriorRoot.visible = true;
   setActivePoiInterior(poiId);
   state.player.position.x = 0;
-  state.player.position.z = 17;
+  state.player.position.z = poi.type === "Dungeon" || poi.type === "Library" ? 17 : POI_HALL.spawnZ;
   world.cameraYaw = 0;
   world.cameraPitch = 0.6;
   world.hasAim = false;
@@ -6661,15 +9823,13 @@ function enterPoiInterior(poiId) {
   closeDepotPanel();
   clearProjectiles();
   leaveRulerSeat();
+  setHousePanelOpen(false);
   setRulerPanelOpen(false, { leaveSeat: false });
-  ui.interiorTitle.textContent = poi.name;
-  ui.leaveInterior.textContent = "Leave POI";
-  ui.interiorHint.classList.remove("is-hidden");
-  ui.interiorHint.setAttribute("aria-hidden", "false");
   refreshUi();
 }
 
 function leavePoiInterior() {
+  for (const enemy of world.pveEnemies) enemy.spells?.clear();
   if (world.sceneMode !== "poiInterior") {
     return;
   }
@@ -6692,8 +9852,6 @@ function leavePoiInterior() {
   closeStewardPanel();
   closeDepotPanel();
   clearProjectiles();
-  ui.interiorHint.classList.add("is-hidden");
-  ui.interiorHint.setAttribute("aria-hidden", "true");
   refreshUi();
 }
 
@@ -6712,7 +9870,7 @@ function setActivePoiInterior(poiId) {
 }
 
 function resetPveEnemiesForPoi(poiId) {
-  if (!GAME_FLAGS.pve || poiId !== "ebon-hollow") {
+  if (!GAME_FLAGS.pve || state.pois.find(poi => poi.id === poiId)?.type !== "Dungeon") {
     return;
   }
 
@@ -6720,11 +9878,17 @@ function resetPveEnemiesForPoi(poiId) {
     enemy.hp = enemy.maxHp;
     enemy.dead = false;
     enemy.deathTimer = 0;
+    enemy.shoveStaggerTimer = 0;
     enemy.attackTimer = Math.random() * 0.8;
     resetPveEnemyAttackState(enemy);
     enemy.knockbackVelocity?.set(0, 0, 0);
-    setPveEnemyWeapon(enemy, createRandomPveWeapon());
-    setPveEnemyArmor(enemy, createRandomPveArmorSet());
+    const loadout = createPveMobLoadout(enemy.mobClass);
+    enemy.naturalAttack = loadout.naturalAttack;
+    enemy.goldMin = loadout.goldMin;
+    enemy.goldMax = loadout.goldMax;
+    restoreGremlinRewards(enemy);
+    setPveEnemyWeapon(enemy, loadout.weapon);
+    setPveEnemyArmor(enemy, loadout.armor);
     enemy.mesh.visible = true;
     enemy.mesh.scale.set(1, 1, 1);
     enemy.mesh.position.set(enemy.spawn.x, 0, enemy.spawn.z);
@@ -6732,25 +9896,111 @@ function resetPveEnemiesForPoi(poiId) {
   }
 }
 
-function tryAttackFromPointer(hand, rangedChargePower = 0) {
-  if (state.player.dead) {
-    flash("You are respawning.");
+function isCombatInputReady(hand) {
+  const other = hand === 'left' ? 'right' : 'left';
+  if (!canWeaveAttack(world.attacks[other])) return false;
+  const active = world.attacks[hand];
+  if (active && (!active.hitResolved || active.elapsed < active.duration * (active.comboChainPoint ?? 1))) return false;
+  const item = getEquippedItem(state, hand);
+  const chain = world.comboChains[hand];
+  if (chain && chain.itemId === item?.id) return state.elapsed >= chain.readyAt;
+  const frequency = item?.weapon?.frequency ?? WEAPON_STATS['Empty Hand'].frequency;
+  const last = state.player.equipment[hand === 'left' ? 'lastLeftAttackAt' : 'lastRightAttackAt'];
+  return state.elapsed >= last + 1 / Math.max(.1, frequency);
+}
+
+function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null) {
+  // Only fresh clicks renew the short buffer; retries keep their original deadline.
+  if (inputExpiresAt === null) {
+    inputExpiresAt = state.elapsed + .15;
+    world.weaveQueue = null;
+    for (const chain of Object.values(world.comboChains)) {
+      if (chain) chain.queued = false;
+    }
+  }
+  if (state.elapsed > inputExpiresAt) return false;
+  if (state.player.dead || isCameraMenuOpen() || isPlayerRolling()) {
+    flash("You cannot attack right now.");
     return false;
   }
 
-  const result = performWeaponAttack(state, hand);
+  const pendingItem = getEquippedItem(state, hand);
+  const pendingItemType = pendingItem?.type ?? "Empty Hand";
+  if (isShield(pendingItemType)) return false;
+  if (pendingItemType === 'Dagger' && !canStartDaggerAirAttack(world.playerMotion)) return false;
+  if (world.flailCharge && world.flailCharge.hand !== hand) return false;
+  const otherHand = hand === 'left' ? 'right' : 'left';
+  if (!canWeaveAttack(world.attacks[otherHand])) {
+    world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id, expiresAt: inputExpiresAt };
+    if (world.comboChains[otherHand]) world.comboChains[otherHand].queued = false;
+    return true;
+  }
+  // The incoming stroke owns the body; the outgoing stroke has already landed.
+  const outgoing = world.attacks[otherHand];
+  const hasCombo = getCombatComboTiming(pendingItemType).steps > 1;
+  const chain = world.comboChains[hand];
+  const sameWeapon = chain?.itemId === pendingItem?.id;
+  const active = world.attacks[hand];
+  if (active && (!hasCombo || active.jumpAttack) && active.elapsed < active.duration) {
+    const readyAt = Math.max(state.elapsed + active.duration - active.elapsed, active.cooldownReadyAt ?? 0);
+    world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id,
+      readyAt, expiresAt: inputExpiresAt };
+    return true;
+  }
+  if (hasCombo && sameWeapon && (state.elapsed < chain.readyAt ||
+      (active && (!active.hitResolved || active.elapsed < active.duration * (active.comboChainPoint ?? 1))))) {
+    chain.queued = true;
+    chain.inputExpiresAt = inputExpiresAt;
+    chain.chargePower = rangedChargePower;
+    world.weaveQueue = null;
+    return true;
+  }
+  const attackCycle = hasCombo ? getComboIndex(chain, pendingItem.id, state.elapsed) : world.attackCycles[hand];
+  const comboTiming = getCombatComboTiming(pendingItemType, attackCycle);
+  const result = performWeaponAttack(state, hand, {
+    cooldownScale: comboTiming.cooldownScale,
+    cooldownSeconds: hasCombo && sameWeapon ? chain.interval : undefined
+  });
 
   if (!result.ok) {
+    if (result.cooldown > 0 && result.cooldown <= .35) {
+      world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id,
+        readyAt: state.elapsed + result.cooldown, expiresAt: inputExpiresAt };
+      return true;
+    }
     return false;
   }
 
-  const kind = getAttackKind(result.item.type);
-  const profile = getCombatProfile(result.item.type);
-  const chargePower = isChargeableRangedType(result.item.type) ? clamp(rangedChargePower, 0, 1) : 0;
+  if (outgoing) world.attacks[otherHand] = null;
+  if (world.guard) world.guard.hand = null;
+  world.weaveQueue = null;
+
+  const jumpAttack = getJumpAttack(result.item.type, world.playerMotion, hand);
+  const kind = jumpAttack === 'flurry' ? 'thrust' : comboTiming.kind ?? getAttackKind(result.item.type);
+  const profile = { ...getCombatProfile(result.item.type), kind, comboName: comboTiming.name };
+  const chargePower = result.item.type === "Flail" || isChargeableRangedType(result.item.type) ? clamp(rangedChargePower, 0, 1) : 0;
   const range = getEffectiveAttackRange(result.item, result.stats, chargePower);
-  const damage = getEffectiveAttackDamage(result.item, result.stats, chargePower);
-  const duration = getAttackDuration(result.item.type, result.stats, chargePower);
-  const slashDirection = kind === "slash" || kind === "chop" ? getNextSlashDirection(hand) : 0;
+  const damage = getEffectiveAttackDamage(result.item, result.stats, chargePower) * (comboTiming.damageScale ?? 1);
+  const duration = jumpAttack ? (jumpAttack === 'flurry' ? .66 : jumpAttack === 'plant' ? 1.2 : .8) : getAttackDuration(result.item.type, result.stats, chargePower) * comboTiming.durationScale;
+  if (jumpAttack) {
+    Object.assign(profile, { windup: .18, strike: .52, hitMoment: .4 });
+    world.playerMotion.lastSpaceTap = null;
+    if (jumpAttack !== 'plant' && jumpAttack !== 'flurry') world.playerMotion.verticalVelocity = Math.min(world.playerMotion.verticalVelocity, -8);
+  }
+  if (world.comboChains[otherHand]) {
+    world.comboChains[otherHand].expiresAt = Math.max(world.comboChains[otherHand].expiresAt, state.elapsed + duration + .6);
+  }
+  const cadence = hasCombo && !jumpAttack ? getComboCadence(result.item.type, result.stats, attackCycle) : null;
+  const blendFrom = captureComboPose(hand);
+  world.comboChains[hand] = cadence ? createComboChain(pendingItem.id, attackCycle, cadence, state.elapsed) : null;
+  const slashDirection = Number.isFinite(comboTiming.slashDirection)
+    ? comboTiming.slashDirection
+    : kind === "slash" || kind === "chop"
+      ? getSlashDirectionForCycle(attackCycle)
+      : 0;
+  if (comboTiming.steps > 1 || kind === "slash" || kind === "chop") {
+    world.attackCycles[hand] += 1;
+  }
   const attackDirection = world.aimDirection.clone();
   attackDirection.y = 0;
   if (attackDirection.lengthSq() > 0.001) {
@@ -6763,29 +10013,52 @@ function tryAttackFromPointer(hand, rangedChargePower = 0) {
   const aimRayDirection = world.aimRayDirection.lengthSq() > 0.001
     ? world.aimRayDirection.clone().normalize()
     : null;
+  const aimRayOrigin = world.aimRayOrigin.clone();
   world.attacks[hand] = {
     hand,
+    jumpAttack,
+    weaponItem: result.item,
     itemName: result.item.name,
+    broken: Boolean(result.broken),
     itemType: result.item.type,
     kind,
     profile,
     range,
-    damage,
+    damage: result.item.type === "Flail" ? damage * (.65 + chargePower * 1.85) : damage,
     penetration: result.stats.penetration ?? 0,
-    knockback: result.stats.knockback ?? 0,
+    knockback: (result.stats.knockback ?? 0) * (comboTiming.knockbackScale ?? 1) * (result.item.type === "Flail" ? .6 + chargePower * 2 : 1),
+    id: createId("swing"),
+    hitTargets: new Set(),
     speed: result.stats.speed,
     direction: attackDirection,
     aimPoint,
+    aimRayOrigin,
     aimRayDirection,
+    screenX: isLockedThirdPersonCamera() ? window.innerWidth * 0.5 : world.pointer.x,
+    screenY: isLockedThirdPersonCamera() ? window.innerHeight * 0.5 : world.pointer.y,
     chargePower,
-    slashDirection,
+    flailReleaseAngle: world.flailCharge?.angle ?? Math.atan2(attackDirection.x,attackDirection.z),
+    comboStep: comboTiming.step,
+    comboName: comboTiming.name,
+    comboFollowUp: comboTiming.isFollowUp,
+    comboHitVolume: comboTiming.hitVolume,
+    comboChainPoint: cadence && !cadence.final ? cadence.chainPoint : 1,
+    comboBlendFrom: blendFrom,
+    slashDirection: slashDirection * (hand === "left" ? -1 : 1),
     elapsed: 0,
     duration,
+    cooldownReadyAt: state.elapsed + 1 / Math.max(.1, result.stats.frequency),
     projectileSpawned: false,
     hitResolved: isProjectileWeapon(result.item.type)
   };
 
-  refreshUi();
+  if (jumpAttack === 'plant') startSpearJump(world.attacks[hand], world.playerMotion);
+
+  markPlayerPersistenceDue();
+  if (result.broken) {
+    flash(result.message);
+  }
+  // A swing changes no visible inventory data. Hit wear refreshes separately.
   return true;
 }
 
@@ -6794,19 +10067,8 @@ function startWorkAction(hand) {
     return false;
   }
 
-  const target = world.hasAim ? world.aimTarget : null;
-  const poi = target ? getPoiAtPoint(target) : null;
-
-  if (!poi) {
-    return false;
-  }
-
-  const playerDistance = distance2D(state.player.position, poi.position);
-
-  if (playerDistance > poi.radius + 5) {
-    flash(`Move closer to ${poi.name}.`);
-    return false;
-  }
+  const poi = getTargetedWorkstation();
+  if (!poi) return false;
 
   world.workAction = {
     hand,
@@ -6814,7 +10076,7 @@ function startWorkAction(hand) {
     resourceId: poi.resourceId,
     yield: poi.yield,
     elapsed: 0,
-    duration: 1.15
+    duration: WORK_ACTION_DURATION
   };
   document.body.dataset.workingHand = hand;
   document.body.dataset.workingPoi = poi.id;
@@ -6822,12 +10084,13 @@ function startWorkAction(hand) {
   return true;
 }
 
-function getPoiAtPoint(point) {
-  return (
-    state.pois
-      .filter((poi) => distance2D(point, poi.position) <= poi.radius + 1.5)
-      .sort((a, b) => distance2D(point, a.position) - distance2D(point, b.position))[0] ?? null
-  );
+function getTargetedWorkstation() {
+  if (world.sceneMode !== "outdoor" || !world.hasAim || isBlockingLocationInput()) return null;
+  return state.pois.find(poi => {
+    if (!isWithinWorkstationReach(poi, state.player.position)) return false;
+    const station = getPoiWorkstation(poi);
+    return rayHitsWorkstation(poi, getTerrainHeightAt(station.x, station.z), world.aimRayOrigin, world.aimRayDirection);
+  }) ?? null;
 }
 
 function stopWorkAction() {
@@ -6835,12 +10098,15 @@ function stopWorkAction() {
     return;
   }
 
-  const hand = world.workAction.hand;
-  const mount = hand === "left" ? world.leftHandMount : world.rightHandMount;
-  const base = getHandBasePose(hand);
+  const animatedHands = new Set([world.workAction.hand, ...(world.workAction.animatedHands ?? [])]);
 
-  mount.position.copy(base.position);
-  mount.rotation.copy(base.rotation);
+  for (const hand of animatedHands) {
+    const mount = hand === "left" ? world.leftHandMount : world.rightHandMount;
+    const base = getHandBasePose(hand);
+
+    mount.position.copy(base.position);
+    mount.rotation.copy(base.rotation);
+  }
   world.workAction = null;
   delete document.body.dataset.workingHand;
   delete document.body.dataset.workingPoi;
@@ -6859,14 +10125,15 @@ function updateWorkAction(deltaSeconds) {
     return;
   }
 
-  const nearest = getNearestPoi(state);
+  const target = getTargetedWorkstation();
+  const heldButton = action.hand === "left" ? POINTER_BUTTON_LEFT : POINTER_BUTTON_RIGHT;
 
-  if (!nearest || nearest.poi.id !== action.poiId || nearest.distance > nearest.poi.radius + 5) {
+  if (!target || target.id !== action.poiId || !(world.pointer.buttons & heldButton)) {
     stopWorkAction();
     return;
   }
 
-  action.elapsed += deltaSeconds;
+  action.elapsed += deltaSeconds * getWorkActionSpeedMultiplier();
   animateWorkAction(action);
 
   if (action.elapsed < action.duration) {
@@ -6880,12 +10147,22 @@ function updateWorkAction(deltaSeconds) {
 }
 
 function animateWorkAction(action) {
-  const mount = action.hand === "left" ? world.leftHandMount : world.rightHandMount;
-  const side = HAND_CONFIG[action.hand].side;
-  const base = getHandBasePose(action.hand);
+  const hands = getWorkActionAnimationHands(action);
+  action.animatedHands = hands;
+
+  for (const hand of hands) {
+    animateWorkHand(action, hand, hand === action.hand ? 0 : 0.5);
+  }
+}
+
+function animateWorkHand(action, hand, phaseOffset = 0) {
+  const mount = hand === "left" ? world.leftHandMount : world.rightHandMount;
+  const side = HAND_CONFIG[hand].side;
+  const base = getHandBasePose(hand);
   const progress = (action.elapsed % action.duration) / action.duration;
-  const stroke = Math.sin(progress * Math.PI);
-  const cycle = Math.sin(progress * Math.PI * 2);
+  const localProgress = (progress + phaseOffset) % 1;
+  const stroke = Math.sin(localProgress * Math.PI);
+  const cycle = Math.sin(localProgress * Math.PI * 2);
 
   mount.position.copy(base.position);
   mount.rotation.copy(base.rotation);
@@ -6894,21 +10171,44 @@ function animateWorkAction(action) {
   mount.position.x += side * cycle * 0.08;
   mount.rotation.x -= 0.55 + stroke * 0.48;
   mount.rotation.z += side * cycle * 0.28;
-  poseAttackArm(action.hand, -0.72 - stroke * 0.34, side * (0.16 + stroke * 0.14), side * cycle * 0.12, 0.42 + stroke * 0.22, -0.04 * stroke);
+  poseAttackArm(hand, -0.72 - stroke * 0.34, side * (0.16 + stroke * 0.14), side * cycle * 0.12, 0.42 + stroke * 0.22, -0.04 * stroke);
+}
+
+function syncPointerButtons(event) {
+  if (typeof event.buttons === "number") {
+    world.pointer.buttons = event.buttons;
+  }
+}
+
+function getWorkActionSpeedMultiplier() {
+  if (isDualHandWorkActive()) {
+    return DUAL_HAND_WORK_SPEED_MULTIPLIER;
+  }
+
+  return 1;
+}
+
+function getWorkActionAnimationHands(action) {
+  return isDualHandWorkActive() ? ["left", "right"] : [action.hand];
+}
+
+function isDualHandWorkActive() {
+  const leftHeld = (world.pointer.buttons & POINTER_BUTTON_LEFT) !== 0;
+  const rightHeld = (world.pointer.buttons & POINTER_BUTTON_RIGHT) !== 0;
+
+  if (leftHeld && rightHeld && !getEquippedItem(state, "left") && !getEquippedItem(state, "right")) {
+    return true;
+  }
+
+  return false;
 }
 
 function completeWorkAction(action) {
   const poi = state.pois.find((entry) => entry.id === action.poiId);
-  const amount = poi?.yield ?? action.yield;
-  const resourceId = poi?.resourceId ?? action.resourceId;
+  if (!getPoiWorkstation(poi) || getTargetedWorkstation()?.id !== poi.id) return;
+  state.player.resources[poi.resourceId] += poi.yield;
 
-  if (resourceId === "gold") {
-    state.player.gold += amount;
-  } else {
-    state.player.resources[resourceId] += amount;
-  }
-
-  state.player.renown += 1;
+  state.player.prowess = (state.player.prowess || 0) + (1);
   markPersistenceDirty();
   refreshUi();
 }
@@ -7026,7 +10326,7 @@ function getOutpostPveTargets() {
     return [];
   }
 
-  return world.outdoorMonsters.filter((monster) => monster.mesh.visible && !monster.dead && !monster.removed);
+  return world.outdoorMonsters.filter((monster) => !monster.raidInteriorId && monster.mesh.visible && !monster.dead && !monster.removed);
 }
 
 function getOutpostEnemyPlayerTargets(structure) {
@@ -7077,6 +10377,7 @@ function areFactionsEnemies(sourceFactionId, targetFactionId) {
 function getLocalPlayerCombatTarget() {
   return {
     id: state.player.id,
+    connectionId,
     name: state.player.name,
     isLocalPlayer: true,
     mesh: world.playerMesh,
@@ -7122,10 +10423,8 @@ function getCombatTargetAimPoint(target) {
   return position;
 }
 
-function getNextSlashDirection(hand) {
-  const direction = world.attackCycles[hand] % 2 === 0 ? -1 : 1;
-  world.attackCycles[hand] += 1;
-  return direction;
+function getSlashDirectionForCycle(attackCycle) {
+  return attackCycle % 2 === 0 ? -1 : 1;
 }
 
 function getEffectiveAttackRange(item, stats, chargePower = 0) {
@@ -7173,6 +10472,7 @@ function updateOutpostTower(deltaSeconds) {
   state.player.position.x = structure.position.x;
   state.player.position.z = structure.position.z;
   world.outpostTower.position = { ...structure.position };
+  updateOutpostTowerAimFromAngles();
   world.towerBowView.visible = true;
   document.body.dataset.outpostTower = structure.id;
 }
@@ -7182,53 +10482,83 @@ function updateWorld(deltaSeconds) {
   const playerElevation = getPlayerWorldElevation();
   world.playerMesh.position.set(state.player.position.x, playerElevation, state.player.position.z);
   world.playerMesh.visible = !world.outpostTower.active;
-  document.body.dataset.playerX = state.player.position.x.toFixed(2);
-  document.body.dataset.playerZ = state.player.position.z.toFixed(2);
-  document.body.dataset.sceneMode = world.sceneMode;
-  document.body.dataset.playerElevation = playerElevation.toFixed(2);
-  updatePlayerHealthBar();
+  updateCastleRegeneration(deltaSeconds);
   updatePlayerRespawnStatus();
   updateMultiplayer(deltaSeconds);
   applyAimFacing();
   updatePlayerAnimation(deltaSeconds);
   updateRemotePlayers(deltaSeconds);
-  updateCamera(deltaSeconds);
-  updateLockedThirdPersonAim();
-  updateHeldItemVisuals();
-  updatePlayerArmorVisuals();
+  world.weaponTrails ??= new CombatTrails(world.scene);
+  world.weaponTrails.update(deltaSeconds);
   updateAttackAnimations(deltaSeconds);
   updateCombatFeedback(deltaSeconds);
   updateWorkAction(deltaSeconds);
   updateBaseEntryAction(deltaSeconds);
-  updateLocationPrompt();
+  updateDungeonLifecycle(deltaSeconds);
   updatePveEnemies(deltaSeconds);
   updateOutdoorDungeonMonsters(deltaSeconds);
   updateOutpostDefenses(deltaSeconds);
   updateProjectiles(deltaSeconds);
+}
+
+// Presentation runs after all collision-safe substeps, using their summed delta.
+// Player/mob attack poses stay in updateWorld: their transforms drive hit tests.
+function updateFrameVisuals(deltaSeconds) {
+  const playerElevation = getPlayerWorldElevation();
+  world.playerMesh.position.set(state.player.position.x, playerElevation, state.player.position.z);
+  updateDayNightLighting(deltaSeconds);
+  document.body.dataset.playerX = state.player.position.x.toFixed(2);
+  document.body.dataset.playerZ = state.player.position.z.toFixed(2);
+  document.body.dataset.sceneMode = world.sceneMode;
+  document.body.dataset.playerElevation = playerElevation.toFixed(2);
+  updatePlayerHealthBar();
+  updateCamera(deltaSeconds);
+  world.camera.updateMatrixWorld();
+  updateLockedThirdPersonAim();
+  updatePlayerArmorVisuals();
+  updateLocationPrompt();
   updateDroppedItems(deltaSeconds);
   updateBloodSplats(deltaSeconds);
+  updateWaterSplashEffects(deltaSeconds);
   updatePoiFlags();
   updateStructures();
+  updateCampLights(world.campLights, world.campModels, state.player.position, state.elapsed, world.sceneMode === "outdoor");
+  for (const chest of world.campChests) updateCampChest(chest, state.player);
+  updateStreetLampLightingSystem();
   updatePlacementPreview();
   updateCouriers();
   updateEventMesh();
-  updateEntityStatusVisibility();
+}
+
+function showDeathScreen() {
+  if (!ui.deathScreen.classList.contains("is-hidden")) return;
+  ui.respawnName.value = randomPlayerFirstName(state.player.firstName);
+  const faction = getFaction(state, state.selectedFactionId);
+  ui.respawnLocation.textContent = faction
+    ? `Return to ${faction.name}'s castle with full health.`
+    : "Return to the starting area with full health.";
+  ui.deathScreen.classList.remove("is-hidden");
+  ui.deathScreen.setAttribute("aria-hidden", "false");
+  world.keys.clear();
+  world.pointer.buttons = 0;
+  world.attacks.left = null;
+  world.attacks.right = null;
+  world.flailCharge = null;
+  world.weaveQueue = null;
+  world.guard.hand = null;
+  stopWorkAction();
+  stopBaseEntryAction();
+  releaseLockedCameraForMenu();
+  if (document.pointerLockElement) document.exitPointerLock();
+  ui.respawnName.focus();
 }
 
 function updatePlayerRespawnStatus() {
-  if (!state.player.dead || !world.multiplayer.respawnAt || Date.now() < world.multiplayer.respawnAt) {
-    return;
-  }
-
-  state.player.dead = false;
-  state.player.hp = state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
-  beginNewPlayerLife(state);
-  markPlayerPersistenceDue();
-  world.multiplayer.localDefeated = false;
-  world.multiplayer.respawnAt = 0;
-  flash(`You respawned as ${state.player.name}.`);
-  updatePlayerHealthBar();
-  refreshUi();
+  if (!state.player.dead) return;
+  showDeathScreen();
+  const remaining = Math.max(0, Math.ceil((world.multiplayer.respawnAt - Date.now()) / 1000));
+  ui.respawnButton.disabled = remaining > 0;
+  ui.respawnButton.textContent = remaining ? `Respawn in ${remaining}s` : "Respawn";
 }
 
 function getPlayerWorldElevation() {
@@ -7242,16 +10572,12 @@ function getPlayerWorldElevation() {
 }
 
 function updateMultiplayer(deltaSeconds) {
-  if (!world.multiplayer.enabled) {
+  if (!state.player.firstName || !world.multiplayer.enabled) {
     return;
   }
 
   world.multiplayer.sendTimer -= deltaSeconds;
   world.multiplayer.pollTimer -= deltaSeconds;
-
-  if (state.player.dead && world.multiplayer.respawnAt && Date.now() >= world.multiplayer.respawnAt) {
-    publishLocalPlayer(true);
-  }
 
   if (world.multiplayer.sendTimer <= 0) {
     world.multiplayer.sendTimer = MULTIPLAYER_SEND_INTERVAL;
@@ -7268,20 +10594,28 @@ function updateMultiplayer(deltaSeconds) {
 }
 
 function publishLocalPlayer(force = false) {
-  if (!force && world.multiplayer.publishInFlight) {
+  if (!state.player.firstName || world.multiplayer.publishInFlight) {
     return;
   }
 
   world.multiplayer.publishInFlight = true;
+  const inputSequence = world.multiplayer.nextInputSequence;
+  world.multiplayer.nextInputSequence += 1;
+  const requestStartedAt = Date.now();
 
-  fetch("/api/multiplayer/player", {
+  return fetch("/api/multiplayer/player", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildLocalPlayerPayload())
+    body: JSON.stringify(buildLocalPlayerPayload(inputSequence))
   })
     .then((response) => response.ok ? response.json() : Promise.reject(new Error("Multiplayer publish failed.")))
     .then((data) => {
       world.multiplayer.failed = false;
+      observeServerClock(world.serverClock, data.serverTime, requestStartedAt, Date.now());
+      world.multiplayer.lastAckedInputSequence = Math.max(
+        world.multiplayer.lastAckedInputSequence,
+        Number(data.acceptedInputSequence) || 0
+      );
       if (data.player) {
         syncLocalPlayerHealth(data.player);
       }
@@ -7300,12 +10634,21 @@ function pollMultiplayerState() {
   }
 
   world.multiplayer.pollInFlight = true;
+  const requestStartedAt = Date.now();
 
   fetch("/api/multiplayer/state")
     .then((response) => response.ok ? response.json() : Promise.reject(new Error("Multiplayer poll failed.")))
     .then((data) => {
       world.multiplayer.failed = false;
-      syncMultiplayerPlayers(Array.isArray(data.players) ? data.players : []);
+      observeServerClock(world.serverClock, data.serverTime, requestStartedAt, Date.now());
+      const snapshotSequence = Math.max(0, Math.floor(Number(data.snapshotSequence) || 0));
+      if (snapshotSequence > 0 && snapshotSequence <= world.multiplayer.lastSnapshotSequence) {
+        return;
+      }
+      if (snapshotSequence > 0) {
+        world.multiplayer.lastSnapshotSequence = snapshotSequence;
+      }
+      syncMultiplayerPlayers(Array.isArray(data.players) ? data.players : [], data.serverTime);
     })
     .catch(() => {
       world.multiplayer.failed = true;
@@ -7315,12 +10658,14 @@ function pollMultiplayerState() {
     });
 }
 
-function buildLocalPlayerPayload() {
+function buildLocalPlayerPayload(inputSequence) {
   const leftHandItem = getEquippedItem(state, "left");
   const rightHandItem = getEquippedItem(state, "right");
 
   return {
     id: state.player.id,
+    connectionId,
+    inputSequence,
     name: state.player.name,
     houseName: state.player.houseName,
     firstName: state.player.firstName,
@@ -7341,15 +10686,24 @@ function buildLocalPlayerPayload() {
     leftHandName: leftHandItem?.name ?? null,
     rightHandType: rightHandItem?.type ?? null,
     rightHandName: rightHandItem?.name ?? null,
+    combatAttacks: ['left','right'].flatMap(hand => {
+      const a = world.attacks[hand], charge=world.flailCharge?.hand===hand ? world.flailCharge : null;
+      if (charge) return [{hand,id:'charge',itemType:'Flail',charging:true,elapsed:charge.elapsed%100,chargePower:flailChargePower(charge.elapsed),flailReleaseAngle:charge.angle%(Math.PI*2),duration:5,direction:{x:world.aimDirection.x,z:world.aimDirection.z}}];
+      return a ? [{ hand, id: a.id, itemType: a.itemType, comboStep: a.comboStep, elapsed: a.elapsed, duration: a.duration, chargePower:a.chargePower, flailReleaseAngle:a.flailReleaseAngle%(Math.PI*2), direction: { x: a.direction.x, z: a.direction.z } }] : [];
+    }),
+    guardHand: world.guard.hand,
+    guardStamina: world.guard.stamina,
     armorItems: getEquippedArmorItems().map(createNetworkArmorItem),
     hp: state.player.hp ?? MULTIPLAYER_MAX_HEALTH,
     maxHp: state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH,
     dead: Boolean(state.player.dead),
+    carriedInventory: state.player.dead ? world.multiplayer.deathInventory ?? state.player.inventory : state.player.inventory,
+    deathLocation: state.player.dead ? world.multiplayer.deathLocation : null,
     respawnAt: world.multiplayer.respawnAt ?? 0
   };
 }
 
-function syncMultiplayerPlayers(players) {
+function syncMultiplayerPlayers(players, serverTimeMs) {
   const seenRemoteIds = new Set();
 
   for (const player of players) {
@@ -7363,7 +10717,7 @@ function syncMultiplayerPlayers(players) {
     }
 
     seenRemoteIds.add(player.id);
-    syncRemotePlayer(player);
+    syncRemotePlayer(player, serverTimeMs);
   }
 
   for (const [id, remote] of world.remotePlayers) {
@@ -7374,13 +10728,42 @@ function syncMultiplayerPlayers(players) {
   }
 }
 
+function loseCarriedResources() {
+  world.multiplayer.deathLocation = { position: { ...state.player.position }, elevation: world.playerMesh.position.y,
+    sceneMode: world.sceneMode, interiorFactionId: world.interiorFactionId, activePoiInteriorId: world.activePoiInteriorId };
+  world.multiplayer.deathInventory = structuredClone(state.player.inventory);
+  if (!world.multiplayer.enabled) {
+    state.deathDrops ??= [];
+    state.deathDrops.push(...createDeathDrops(state.player, world.multiplayer.deathLocation, createId("life")));
+    syncDeathDropMeshes();
+  } else clearPlayerInventory(state.player);
+  clearPlayerResources(state.player);
+  markPlayerPersistenceDue();
+  refreshUi();
+}
+
 function syncLocalPlayerHealth(player) {
+  if ((player.lastSeen ?? 0) < (world.multiplayer.healthSnapshotTime ?? 0)) return;
+  world.multiplayer.healthSnapshotTime = player.lastSeen ?? 0;
+  // Delayed snapshots must not undo a local death or a newly chosen life.
+  if ((player.lifeNumber ?? 0) < (state.player.lifeNumber ?? 0)) return;
+  if (state.player.dead && !player.dead) return;
+  if ((player.lastBlockedAt ?? 0) > (world.guard.lastServerBlock ?? 0)) {
+    world.guard.lastServerBlock = player.lastBlockedAt;
+    world.guard.stamina = Math.min(world.guard.stamina, player.guardStamina);
+    if (player.guardStamina <= 0) { world.guard.brokenUntil = state.elapsed + 1.4; world.guard.hand = null; }
+    const shield = ['left','right'].map(h => getEquippedItem(state,h)).find(item => isShield(item?.type));
+    if (shield) { damageInventoryItem(state, shield, 1); markPlayerPersistenceDue(); }
+    flash(player.guardStamina <= 0 ? 'Guard broken!' : 'Blocked');
+  }
   const previousHp = state.player.hp ?? MULTIPLAYER_MAX_HEALTH;
-  const wasDead = Boolean(state.player.dead);
   state.player.maxHp = player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
-  state.player.hp = player.hp ?? state.player.maxHp;
+  state.player.hp = reconcileHealth({ ...state.player, factionId: state.selectedFactionId,
+    sceneMode: world.sceneMode, interiorFactionId: world.interiorFactionId }, player,
+    world.multiplayer.damageInputSequence ?? 0);
   state.player.dead = Boolean(player.dead);
   world.multiplayer.respawnAt = player.respawnAt ?? 0;
+  if (state.player.hp !== previousHp) markPlayerPersistenceDue();
 
   if (state.player.hp < previousHp && !state.player.dead && !isBloodlessDamageSource(player.lastDamageSource)) {
     spawnBloodSplat({ mesh: world.playerMesh, radius: 1.15, hitMinY: 0.8, hitMaxY: 5.4 }, null, previousHp - state.player.hp);
@@ -7388,28 +10771,32 @@ function syncLocalPlayerHealth(player) {
 
   if (state.player.dead && !world.multiplayer.localDefeated) {
     const attacker = player.lastDamagedByName ? ` by ${player.lastDamagedByName}` : "";
+    loseCarriedResources();
     world.multiplayer.localDefeated = true;
-    placePlayerAtRespawnPoint();
+    showDeathScreen();
     flash(`You were defeated${attacker}.`);
-  } else if (!state.player.dead && (wasDead || world.multiplayer.localDefeated)) {
-    world.multiplayer.localDefeated = false;
-    state.player.hp = state.player.maxHp;
-    beginNewPlayerLife(state);
-    markPlayerPersistenceDue();
-    flash(`You respawned as ${state.player.name}.`);
   }
 }
 
 function placePlayerAtRespawnPoint() {
+  exitOutpostTower();
+  leaveCurrentInterior();
+  leaveRulerSeat();
+  world.keys.clear();
+  world.playerMotion.verticalOffset = 0;
+  world.playerMotion.verticalVelocity = 0;
+  world.playerMotion.knockbackVelocity.set(0, 0, 0);
+  world.hasAim = false;
   const faction = state.selectedFactionId ? FACTION_LOOKUP[state.selectedFactionId] : null;
   state.player.position.x = faction ? faction.position.x : 0;
-  state.player.position.z = faction ? faction.position.z + faction.safeRadius * 0.55 : 0;
+  state.player.position.z = faction ? faction.position.z + CASTLE_GATE_Z + 5 : 0;
   world.playerMotion.moving = false;
   world.playerMotion.speed = 0;
+  world.playerMesh.position.set(state.player.position.x, getPlayerWorldElevation(), state.player.position.z);
   clearProjectiles();
 }
 
-function syncRemotePlayer(player) {
+function syncRemotePlayer(player, serverTimeMs) {
   let remote = world.remotePlayers.get(player.id);
   const isNewRemote = !remote;
 
@@ -7422,20 +10809,36 @@ function syncRemotePlayer(player) {
   const previousRemoteHp = remote.hp ?? player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   remote.name = player.name;
   remote.snapshot = player;
+  remote.combatReceivedAt = performance.now();
   remote.hp = player.hp ?? MULTIPLAYER_MAX_HEALTH;
   remote.maxHp = player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   remote.dead = Boolean(player.dead);
   const remoteY = Number.isFinite(Number(player.elevation))
     ? Number(player.elevation)
     : getTerrainHeightAt(player.position.x, player.position.z);
+  const snapshotResult = appendRemoteSnapshot(remote.snapshots, {
+    ...player,
+    elevation: remoteY
+  }, serverTimeMs, {
+    teleportDistance: REMOTE_TELEPORT_DISTANCE
+  });
   remote.targetPosition.set(player.position.x, remoteY, player.position.z);
   remote.targetRotation = player.rotation ?? 0;
   remote.targetHeadRotation = player.headRotation ?? 0;
 
+  if (snapshotResult.reset || isNewRemote) {
+    remote.group.position.set(
+      snapshotResult.sample?.position.x ?? player.position.x,
+      snapshotResult.sample?.position.y ?? remoteY,
+      snapshotResult.sample?.position.z ?? player.position.z
+    );
+    remote.group.rotation.y = snapshotResult.sample?.rotation ?? player.rotation ?? 0;
+  }
+
   if (!isNewRemote && player.lastDamagedAt && player.lastDamagedAt !== remote.lastDamagedAt) {
     remote.lastDamagedAt = player.lastDamagedAt;
     remote.group.scale.set(1.08, 1.08, 1.08);
-    if (!isBloodlessDamageSource(player.lastDamageSource)) {
+    if (previousRemoteHp > remote.hp && !isBloodlessDamageSource(player.lastDamageSource)) {
       spawnBloodSplat(remote, null, Math.max(1, previousRemoteHp - remote.hp));
     }
   }
@@ -7447,6 +10850,8 @@ function syncRemotePlayer(player) {
 }
 
 function updateRemotePlayers(deltaSeconds) {
+  const serverTimeMs = estimateServerTime(world.serverClock);
+
   for (const remote of world.remotePlayers.values()) {
     const visible = isRemotePlayerInCurrentScene(remote.snapshot) && !remote.dead;
     remote.group.visible = visible;
@@ -7455,9 +10860,17 @@ function updateRemotePlayers(deltaSeconds) {
       continue;
     }
 
-    const blend = Math.min(1, deltaSeconds * 10);
-    remote.group.position.lerp(remote.targetPosition, blend);
-    remote.group.rotation.y = lerpAngle(remote.group.rotation.y, remote.targetRotation, blend);
+    const renderSample = sampleRemoteSnapshots(remote.snapshots, serverTimeMs, {
+      interpolationDelayMs: REMOTE_INTERPOLATION_DELAY_MS,
+      maxExtrapolationMs: REMOTE_MAX_EXTRAPOLATION_MS
+    });
+    if (renderSample) {
+      remote.group.position.set(renderSample.position.x, renderSample.position.y, renderSample.position.z);
+      remote.group.rotation.y = renderSample.rotation;
+      remote.renderState.moving = renderSample.moving;
+      remote.renderState.speed = renderSample.speed;
+      remote.renderState.headRotation = renderSample.headRotation;
+    }
     remote.group.scale.lerp(new THREE.Vector3(1, 1, 1), Math.min(1, deltaSeconds * 7));
     animateRemotePlayer(remote, deltaSeconds);
   }
@@ -7467,8 +10880,12 @@ function updateRemotePlayers(deltaSeconds) {
 
 function animateRemotePlayer(remote, deltaSeconds) {
   const rig = remote.rig;
-  const moving = Boolean(remote.snapshot.moving);
-  const speed = remote.snapshot.speed ?? 0;
+  rig.visualRoot ??= remote.group;
+  if (!rig.crown) { rig.crown = createPlayerCrown(); rig.headGroup.add(rig.crown); }
+  rig.crown.visible = isFactionRuler(state, remote.snapshot?.factionId, remote.snapshot?.id);
+  updateRoyalCape(rig, remote.snapshot?.factionId, rig.crown.visible, deltaSeconds, { speed: remote.renderState?.speed ?? 0, heading: remote.group.rotation.y });
+  const moving = Boolean(remote.renderState?.moving);
+  const speed = remote.renderState?.speed ?? 0;
   const blendSpeed = Math.min(1, deltaSeconds * 8);
   remote.motion.amount = THREE.MathUtils.lerp(remote.motion.amount ?? 0, moving ? 1 : 0, blendSpeed);
   remote.motion.gait += deltaSeconds * (moving ? Math.max(4.5, speed * 0.32) : 2.2);
@@ -7482,7 +10899,7 @@ function animateRemotePlayer(remote, deltaSeconds) {
   rig.chest.position.y = 3.65 + bob;
   rig.chest.rotation.set(0, 0, sway);
   rig.headGroup.position.set(0, 5.2 + bob * 0.65, 0.16);
-  rig.headGroup.rotation.y = remote.targetHeadRotation;
+  rig.headGroup.rotation.y = remote.renderState?.headRotation ?? remote.targetHeadRotation;
   rig.leftLeg.position.set(HAND_CONFIG.left.side * 0.42, 2.05, 0);
   rig.rightLeg.position.set(HAND_CONFIG.right.side * 0.42, 2.05, 0);
   rig.leftLeg.rotation.x = stride * 0.72;
@@ -7491,13 +10908,86 @@ function animateRemotePlayer(remote, deltaSeconds) {
   setLegJointPose(rig.rightLeg, (0.12 + Math.max(0, stride) * 0.58 + Math.abs(stride) * 0.12) * remote.motion.amount, -0.08 * remote.motion.amount);
   setRemoteArmWalkPose(remote, "left", -stride * 0.46);
   setRemoteArmWalkPose(remote, "right", stride * 0.46);
+  animateRemoteCombat(remote);
+}
+
+function animateRemoteCombat(remote) {
+  const now=performance.now();
+  const age = (now - (remote.combatReceivedAt ?? now)) / 1000;
+  const dt=Math.min(.1,(now-(remote.flailUpdatedAt??now))/1000);remote.flailUpdatedAt=now;
+  for (const hand of ['left','right']) {
+    const held = remote.heldItems[hand].mesh;
+    if (!held) continue;
+    held.quaternion.copy(held.userData.restQuaternion);
+    held.position.copy(held.userData.restPosition);
+    updateFlailModel(held);
+    const arm = remote.rig[`${hand}Arm`], side = HAND_CONFIG[hand].side;
+    const a = remote.snapshot.combatAttacks?.find(a => a.hand === hand);
+    if (a?.itemType==='Flail' && (a.charging ? age<.75 : a.elapsed+age<a.duration)) {
+      const profile=getCombatProfile('Flail'),p=a.charging?0:clamp((a.elapsed+age)/a.duration,0,1);
+      const drop=a.charging?0:easeInOut((p-profile.windup)/profile.strike);
+      const recover=a.charging?0:easeInOut((p-profile.windup-profile.strike)/profile.recovery);
+      const idle=arm.quaternion.clone(),elbow=arm.userData.forearm.quaternion.clone();
+      reachHand(arm,remote.group.localToWorld(new THREE.Vector3(side*(.85+drop*.35),5.8-drop*1.9,.3+drop*1.1)));
+      const blend=Math.max(a.charging?1-easeInOut(a.elapsed/.5):0,recover);
+      arm.quaternion.slerp(idle,blend);arm.userData.forearm.quaternion.slerp(elbow,blend);
+      const forward=new THREE.Vector3(a.direction.x,0,a.direction.z).normalize();
+      const direction=new THREE.Vector3(forward.z*side,.25,-forward.x*side).lerp(forward,drop).normalize();
+      const rest=held.quaternion.clone();
+      setObjectWorldPoseAlongDirection(held,held.parent.getWorldPosition(new THREE.Vector3()),direction);
+      held.quaternion.slerp(rest,blend);seatWeaponInHand(held,arm.userData.hand);
+      const angle=a.charging ? a.flailReleaseAngle+side*(2+8*a.chargePower)*age : getFlailReleaseAngle({...a,profile},p,side);
+      const previous=held.userData.flailAngle??angle;
+      // Network angles wrap; choose the nearby equivalent of the old angle.
+      const from=angle+Math.atan2(Math.sin(previous-angle),Math.cos(previous-angle));
+      simulateFlailModel(held,dt,{fromAngle:from,toAngle:angle,tilt:.7*(1-drop),side,yaw:Math.atan2(a.direction.x,a.direction.z),tension:a.charging?Math.min(1,(a.elapsed+age)/.55):1});
+      held.userData.flailAngle=angle;
+      continue;
+    }
+    if (a && a.elapsed + age < a.duration) {
+      const step = getCombatComboTiming(a.itemType, a.comboStep);
+      const profile = { ...getCombatProfile(a.itemType), kind: step.kind ?? getCombatKind(a.itemType), comboName: step.name };
+      const p = clamp((a.elapsed + age) / a.duration, 0, 1);
+      const direction = (step.slashDirection || 1)*(hand==='left'?-1:1);
+      const pose = sampleMeleeMotion(profile, p, direction);
+      arm.rotation.set(pose.shoulderX, pose.shoulderY, side * .16 + pose.shoulderZ);
+      setArmJointPose(arm, pose.elbow, -.03, 0);
+      remote.rig.body.rotation.y = remote.rig.chest.rotation.y = pose.chest;
+      remote.rig.body.rotation.x = -pose.lean * .4;
+      remote.rig.chest.rotation.x = -pose.lean;
+      const lead = remote.rig[`${hand}Leg`]; lead.position.z += pose.step;
+      setLegJointPose(lead, pose.knee * 1.5, -pose.knee * .4);
+      const forward = new THREE.Vector3(a.direction?.x ?? Math.sin(remote.group.rotation.y), 0, a.direction?.z ?? Math.cos(remote.group.rotation.y));
+      if (!isProjectileWeapon(a.itemType)) {
+        const angles = profile.kind === 'thrust' ? {yaw:0,pitch:0,recovery:pose.recover} : focusedSwingAngles(profile,p,direction);
+        const right = new THREE.Vector3(forward.z,0,-forward.x);
+        forward.applyAxisAngle(new THREE.Vector3(0,1,0),angles.yaw).applyAxisAngle(right,-angles.pitch);
+        const rest = held.quaternion.clone();
+        setObjectWorldPoseAlongDirection(held,held.parent.getWorldPosition(new THREE.Vector3()),forward);
+        if (a.itemType === 'Axe') held.rotateY(direction * (Math.PI * .5 + .3));
+        else if (step.name === 'overheadFinish') held.rotateY(Math.PI / 2);
+        held.quaternion.slerp(rest, Math.max(1-easeInOut(p/profile.windup),angles.recovery));
+        seatWeaponInHand(held, arm.userData.hand);
+      }
+      updateFlailModel(held,p,a.itemType==='Flail',direction);
+    } else if (held.getObjectByName('flailChain')) {
+      simulateFlailModel(held,dt);delete held.userData.flailAngle;
+    } else if (remote.snapshot.guardHand === hand && age < .75) {
+      arm.rotation.set(-1.04, side*.16, -side*.22);
+      setArmJointPose(arm,.85,0,0);
+      const forward = new THREE.Vector3(Math.sin(remote.group.rotation.y)*side,0,Math.cos(remote.group.rotation.y)*side);
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1,0,0),forward);
+      held.quaternion.copy(held.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(q));
+      held.position.set(0,0,0);
+    }
+  }
 }
 
 function setRemoteArmWalkPose(remote, hand, swing) {
   const arm = hand === "left" ? remote.rig.leftArm : remote.rig.rightArm;
   const side = HAND_CONFIG[hand].side;
 
-  arm.position.set(side * 1.08, 4.35, 0.22);
+  arm.position.set(side * 0.92, 4.35, 0.02);
   arm.rotation.set(swing, 0, side * 0.16);
   setArmJointPose(arm, 0.12 + Math.abs(swing) * 0.36, -0.03, 0);
 }
@@ -7520,6 +11010,8 @@ function syncRemoteHeldItem(remote, hand, item) {
   held.mesh = item ? createHeldItemMesh(item, hand) : null;
 
   if (held.mesh) {
+    held.mesh.userData.restQuaternion = held.mesh.quaternion.clone();
+    held.mesh.userData.restPosition = held.mesh.position.clone();
     tagEntityStatusTarget(held.mesh, getRemotePlayerStatusKey(remote.id));
     mount.add(held.mesh);
   }
@@ -7600,6 +11092,7 @@ function resetPlayerRootLean() {
 
   if (world.playerVisualRoot) {
     world.playerVisualRoot.rotation.set(0, 0, 0);
+    world.playerVisualRoot.position.set(0, 0, 0);
   }
 }
 
@@ -7612,7 +11105,7 @@ function setArmJointPose(arm, elbowX = 0, wristX = 0, wristZ = 0) {
   const hand = arm.userData?.hand;
 
   if (forearm) {
-    forearm.rotation.set(elbowX, 0, 0);
+    forearm.rotation.set(-THREE.MathUtils.clamp(elbowX, 0, 2.35), 0, 0);
   }
 
   if (hand) {
@@ -7645,28 +11138,39 @@ function updatePlayerAnimation(deltaSeconds) {
   }
 
   rig.crown.visible = state.selectedFactionId ? isFactionRuler(state, state.selectedFactionId) : false;
+  updateRoyalCape(rig, state.selectedFactionId, rig.crown.visible, deltaSeconds, { speed: world.playerMotion.moving ? world.playerMotion.speed : world.playerMotion.jumping ? world.playerMotion.airborneSpeed : 0, heading: world.playerMesh.rotation.y, seated: world.seatedOnThrone, airborne: world.playerMotion.jumping || world.playerMotion.rolling });
 
   if (world.seatedOnThrone) {
+    world.playerMotion.jumpAnimation = undefined;
+    rig.visualRoot.position.y = 0;
     applySeatedPose();
     return;
   }
 
   const motion = world.playerMotion;
 
-  if (motion.diving) {
-    applyDivePose(motion.diveElapsed / DIVE_DURATION);
+  if (motion.rolling) {
+    motion.jumpAnimation = undefined;
+    rig.visualRoot.position.y = 0;
+    applyRollPose(motion.rollElapsed / ROLL_DURATION);
     return;
   }
 
   resetPlayerRootLean();
 
-  const blendSpeed = Math.min(1, deltaSeconds * 8);
-  motion.amount = THREE.MathUtils.lerp(motion.amount ?? 0, motion.moving ? 1 : 0, blendSpeed);
-  motion.gait += deltaSeconds * (motion.moving ? Math.max(4.5, motion.speed * 0.32) : 2.2);
+  const airborne = motion.jumping || isPlayerAirborne(motion);
+  const travelling = motion.moving || (airborne && motion.airborneDirection.lengthSq() > 0.001);
+  const gaitSpeed = airborne ? motion.airborneSpeed : motion.speed;
+  const blendSpeed = 1 - Math.exp(-deltaSeconds * 8);
+  motion.amount = THREE.MathUtils.lerp(motion.amount ?? 0, travelling ? 1 : 0, blendSpeed);
+  motion.gait += deltaSeconds * (travelling ? Math.max(4.5, gaitSpeed * 0.32) : 2.2);
+  motion.jumpAnimation = stepJumpAnimation(motion.jumpAnimation, {
+    airborne, verticalVelocity: motion.verticalVelocity
+  }, deltaSeconds);
 
   const stride = Math.sin(motion.gait) * motion.amount;
   const strideOpposite = -stride;
-  const bob = Math.abs(Math.sin(motion.gait)) * 0.11 * motion.amount;
+  const bob = Math.abs(Math.sin(motion.gait)) * 0.11 * motion.amount * (1 - motion.jumpAnimation.weight);
   const sway = Math.sin(motion.gait * 0.5) * 0.04 * motion.amount;
 
   rig.body.position.y = 3.15 + bob;
@@ -7680,6 +11184,8 @@ function updatePlayerAnimation(deltaSeconds) {
     rig.headGroup.rotation.y = 0;
   }
 
+  rig.leftLeg.position.set(HAND_CONFIG.left.side * .42, 2.05, 0);
+  rig.rightLeg.position.set(HAND_CONFIG.right.side * .42, 2.05, 0);
   rig.leftLeg.rotation.x = stride * 0.72;
   rig.rightLeg.rotation.x = strideOpposite * 0.72;
   rig.leftLeg.rotation.z = HAND_CONFIG.left.side * 0.04 * motion.amount;
@@ -7689,24 +11195,35 @@ function updatePlayerAnimation(deltaSeconds) {
 
   setArmWalkPose("left", -stride * 0.46);
   setArmWalkPose("right", stride * 0.46);
+  applyJumpAnimation(rig, motion.jumpAnimation);
 }
 
 function ensureDungeonPveEnemyRoster() {
-  const targetCount = Math.min(DUNGEON_ENEMY_SPAWNS.length, getPveMobCap());
-  const dungeonGroup = world.meshes.poiInteriors.get("ebon-hollow");
-
-  if (!dungeonGroup || world.pveEnemies.length >= targetCount) {
+  if (world.dungeon.status !== "active" && world.dungeon.status !== "collapsing") {
     return;
   }
 
-  for (const spawn of DUNGEON_ENEMY_SPAWNS.slice(world.pveEnemies.length, targetCount)) {
-    dungeonGroup.add(createPveEnemy(spawn));
+  if (world.pveEnemies.length || !world.dungeon.layout || !world.dungeon.contentRoot || !GAME_FLAGS.pve) {
+    return;
   }
+
+  for (const spawn of createDungeonEnemySpawns(world.dungeon.layout)) {
+    world.dungeon.contentRoot.add(createPveEnemy(spawn));
+  }
+}
+
+function getPveEnemyAttackRange(enemy) {
+  const range = enemy.attackRange ?? 2.4;
+  if (isProjectileWeapon(enemy.weapon?.type ?? "Empty Hand")) return range;
+
+  // Melee must be able to start at the separation enforced by body collisions.
+  const contactDistance = (enemy.radius ?? 1.1) + PLAYER_COLLISION_RADIUS + ACTOR_COLLISION_PADDING;
+  return Math.max(range, contactDistance + 0.05);
 }
 
 function startPveEnemyAttack(enemy, targetPosition) {
   const itemType = enemy.weapon?.type ?? "Empty Hand";
-  const stats = enemy.weapon?.weapon ?? WEAPON_STATS["Empty Hand"];
+  const stats = getPveEnemyAttackStats(enemy);
   const kind = getAttackKind(itemType);
   const direction = new THREE.Vector3(
     targetPosition.x - enemy.mesh.position.x,
@@ -7723,10 +11240,17 @@ function startPveEnemyAttack(enemy, targetPosition) {
   enemy.attackAnimation = {
     kind,
     itemType,
+    itemName: enemy.weapon?.name ?? itemType,
     direction,
     elapsed: 0,
     profile: getCombatProfile(itemType),
     duration: getPveEnemyAttackDuration(itemType, stats),
+    range: getPveEnemyAttackRange(enemy),
+    damage: Math.max(1, Math.round(Number(stats.damage) || 8)),
+    penetration: Number(stats.penetration) || 0,
+    knockback: Number(stats.knockback) || 0,
+    speed: Number(stats.speed) || 1,
+    projectileSpawned: false,
     hitResolved: false,
     lungeApplied: 0
   };
@@ -7752,7 +11276,12 @@ function updatePveEnemyAttack(enemy, deltaSeconds, targetPosition, options = {})
   animatePveEnemyAttack(enemy, attack, progress);
   movePveEnemyDuringAttack(enemy, attack, progress, hitMoment, deltaSeconds, options);
 
-  if (!attack.hitResolved && progress >= hitMoment) {
+  const projectileAttack = isProjectileWeapon(attack.itemType);
+  if (projectileAttack && !attack.projectileSpawned && progress >= getCombatReleaseMoment(attack.itemType, 0)) {
+    spawnPveEnemyProjectile(enemy, attack, targetPosition);
+  }
+
+  if (!projectileAttack && !attack.hitResolved && progress >= hitMoment) {
     attack.hitResolved = true;
     if (canPveEnemyHitPlayer(enemy, targetPosition)) {
       applyPveEnemyHitToPlayer(enemy);
@@ -7779,6 +11308,7 @@ function getAttackPhase(profile, progress) {
   const trailEnd = Math.max(trailStart + 0.01, trail.end ?? strikeEnd);
 
   return {
+    progress,
     windupEnd,
     strikeEnd,
     anticipation: progress < windupEnd ? easeOut(progress / windupEnd) : 1,
@@ -7791,7 +11321,7 @@ function getAttackPhase(profile, progress) {
 
 function getAttackRangeScale(attack, profile) {
   return profile.kind === "thrust"
-    ? Math.min(1.9, attack.range / 2.8)
+    ? Math.min(1.35, Math.max(0.9, attack.range / 4.8))
     : Math.min(1.42, attack.range / 3);
 }
 
@@ -7838,30 +11368,42 @@ function applyProfiledWeaponPose(container, attack, progress, options = {}) {
       poseSupportArm(options.hand, profile, phase, recoil);
     }
   } else if (profile.kind === "thrust") {
-    const thrust = phase.followThrough;
-    container.position.z += (phase.commit * (pose.reach ?? 1.5) - phase.anticipation * 0.22 - phase.recover * 0.28) * rangeScale;
-    container.position.x += attackSide * (pose.lateral ?? 0.14) * (phase.commit - phase.recover) * 0.24;
-    container.position.y += phase.anticipation * (pose.lift ?? 0.08) - phase.commit * 0.05;
-    container.rotation.x += (pose.windupX ?? -0.24) * phase.anticipation + (pose.strikeX ?? -0.62) * thrust * 0.28;
-    container.rotation.y += attackSide * ((pose.windupY ?? -0.1) * phase.anticipation + (pose.strikeY ?? 0.08) * phase.commit);
-    container.rotation.z += attackSide * ((pose.windupZ ?? -0.1) * phase.anticipation + (pose.strikeZ ?? 0.08) * phase.commit);
+    const thrust = phase.commit * (1 - phase.recover);
+    const retract = (pose.retract ?? 0.58) * phase.anticipation * (1 - phase.commit);
+    const extension = (pose.reach ?? 1.7) * thrust;
+    container.position.z += (extension - retract) * rangeScale;
+    container.position.x += attackSide * (pose.lateral ?? 0.05) * thrust;
+    container.position.y += phase.anticipation * (pose.lift ?? 0.04) - thrust * 0.025;
+    container.rotation.x += (pose.windupX ?? -0.06) * phase.anticipation + (pose.strikeX ?? 0.08) * thrust + (pose.recoverX ?? -0.02) * phase.recover;
+    container.rotation.y += attackSide * ((pose.windupY ?? -0.025) * phase.anticipation + (pose.strikeY ?? 0.015) * thrust);
+    container.rotation.z += attackSide * ((pose.windupZ ?? -0.03) * phase.anticipation + (pose.strikeZ ?? 0.02) * thrust);
 
     if (!options.mob) {
-      poseAttackArm(options.hand, -0.28 - thrust * 0.42, side * 0.14, attackSide * 0.06 * phase.commit, 0.18 + thrust * 0.24, -0.05 * thrust);
+      poseAttackArm(options.hand, -0.44 - thrust * 0.68, side * (0.1 - thrust * 0.04), attackSide * 0.025 * thrust, 0.3 - thrust * 0.08, -0.03 * thrust);
       poseSupportArm(options.hand, profile, phase, thrust);
     }
   } else if (profile.kind === "chop") {
-    const chop = phase.commit;
+    const windup = phase.anticipation * (1 - phase.commit);
+    const chop = phase.commit * (1 - phase.recover);
     const sweep = phase.followThrough;
-    container.position.z += sweep * (pose.reach ?? 1) * rangeScale;
-    container.position.x += attackSide * (-0.48 * phase.anticipation + (pose.lateral ?? 1) * chop * 0.9);
-    container.position.y += (pose.lift ?? 0.8) * phase.anticipation - chop * 0.5 + sweep * 0.12;
-    container.rotation.x += (pose.windupX ?? -1.1) * phase.anticipation + (pose.strikeX ?? 0.62) * chop + (pose.recoverX ?? -0.16) * phase.recover;
-    container.rotation.y += attackSide * ((pose.windupY ?? -0.2) * phase.anticipation + (pose.strikeY ?? 0.32) * chop);
-    container.rotation.z += attackSide * ((pose.windupZ ?? -0.7) * phase.anticipation + (pose.strikeZ ?? 1.35) * chop + 0.26 * sweep);
+    const recoverySway = Math.sin(phase.recover * Math.PI);
+    container.position.z += ((pose.reach ?? 1) * sweep - windup * 0.32) * rangeScale;
+    container.position.x += attackSide * (-0.78 * windup + (pose.lateral ?? 1) * chop);
+    container.position.y += (pose.lift ?? 0.5) * windup - chop * 0.16 + sweep * 0.1;
+    container.rotation.x += (pose.windupX ?? -0.5) * windup + (pose.strikeX ?? -0.16) * chop - recoverySway * 0.08;
+    container.rotation.y += attackSide * ((pose.windupY ?? -0.4) * windup + (pose.strikeY ?? 0.62) * chop);
+    container.rotation.z += attackSide * ((pose.windupZ ?? -1.35) * windup + (pose.strikeZ ?? 2.6) * chop + 0.18 * sweep);
 
     if (!options.mob) {
-      poseAttackArm(options.hand, -1.1 + chop * 1.5, side * (0.2 + attackSide * side * sweep * 0.22), -attackSide * (phase.anticipation * 0.22 - chop * 0.34), 0.5 + phase.anticipation * 0.28 - chop * 0.16, -0.07 * sweep, side * attackSide * 0.06 * chop);
+      poseAttackArm(
+        options.hand,
+        -0.62 - windup * 0.42 - sweep * 0.38 + recoverySway * 0.12,
+        attackSide * (-0.5 * windup + 0.72 * chop),
+        -attackSide * (0.44 * windup - 0.58 * chop),
+        (pose.elbowBase ?? 0.7) + windup * 0.18 - chop * 0.26,
+        (pose.wristStrike ?? -0.09) * sweep,
+        side * attackSide * 0.09 * chop
+      );
     }
   } else if (profile.kind === "unarmed") {
     const chamber = phase.anticipation * (1 - phase.commit * 0.82);
@@ -7902,7 +11444,13 @@ function applyProfiledWeaponPose(container, attack, progress, options = {}) {
     container.rotation.z += attackSide * ((pose.windupZ ?? -1.1) * phase.anticipation + (pose.strikeZ ?? 2.05) * cut + (pose.recoverZ ?? -0.5) * phase.recover);
 
     if (!options.mob) {
-      poseAttackArm(options.hand, -0.5 - swoop * 0.4 + phase.recover * 0.12, attackSide * (0.16 + cut * 0.46 - phase.recover * 0.16), -attackSide * (phase.anticipation * 0.32 - cut * 0.48), (pose.elbowBase ?? 0.38) + swoop * 0.2, -0.04 * swoop, side * attackSide * 0.05 * cut);
+      const armRotationZ = pose.armWindupZ == null
+        ? attackSide * (0.16 + cut * 0.46 - phase.recover * 0.16)
+        : attackSide * (pose.armWindupZ * phase.anticipation + (pose.armStrikeZ ?? 0.46) * cut + (pose.armRecoverZ ?? -0.16) * phase.recover);
+      const armRotationY = pose.armWindupY == null
+        ? -attackSide * (phase.anticipation * 0.32 - cut * 0.48)
+        : attackSide * (pose.armWindupY * phase.anticipation + (pose.armStrikeY ?? 0.48) * cut + (pose.armRecoverY ?? -0.08) * phase.recover);
+      poseAttackArm(options.hand, -0.5 - swoop * 0.4 + phase.recover * 0.12, armRotationZ, armRotationY, (pose.elbowBase ?? 0.38) + swoop * 0.2, -0.04 * swoop, side * attackSide * 0.05 * cut);
       poseSupportArm(options.hand, profile, phase, swoop);
     }
   }
@@ -7944,26 +11492,31 @@ function poseSupportArm(activeHand, profile, phase, intensity = 1) {
 
 function applyPlayerBodyAttackPose(hand, profile, phase, attackSide, weight) {
   const rig = world.playerRig;
-
-  if (!rig || !world.playerVisualRoot) {
-    return;
+  if (!rig || !world.playerVisualRoot) return;
+  const progress = phase.progress ?? 0;
+  const motion = sampleMeleeMotion(profile, progress, attackSide);
+  rig.chest.rotation.y += motion.chest;
+  rig.chest.rotation.x -= motion.lean;
+  rig.body.rotation.y += motion.chest;
+  rig.body.rotation.x -= motion.lean * .4;
+  rig.headGroup.rotation.y -= motion.chest * .35;
+  const lead = hand === 'left' ? rig.leftLeg : rig.rightLeg;
+  const back = hand === 'left' ? rig.rightLeg : rig.leftLeg;
+  const grounded = !world.playerMotion?.jumping && !world.playerMotion?.rolling;
+  if (lead && back && grounded) {
+    lead.position.z += motion.step;
+    back.position.z -= motion.step * .5;
+    lead.rotation.x -= motion.knee;
+    back.rotation.x += motion.knee * .6;
+    setLegJointPose(lead, motion.knee * 1.5, -motion.knee * .4);
+    setLegJointPose(back, motion.knee * .5, 0);
   }
-
-  const pose = profile.pose ?? {};
-  const plant = (pose.footPlant ?? 0.08) * weight;
-  const twist = (pose.torsoTwist ?? 0.12) * (phase.anticipation * 0.35 - phase.commit * 0.85 + phase.recover * 0.25);
-  const lean = (pose.torsoLean ?? 0.04) * (phase.commit * 0.8 - phase.recover * 0.4);
-  rig.chest.rotation.z += attackSide * twist;
-  rig.chest.rotation.x -= lean;
-  rig.body.rotation.z += attackSide * twist * 0.42;
-  rig.body.rotation.x -= lean * 0.5;
-  world.playerVisualRoot.rotation.z += attackSide * twist * 0.18;
-
-  const leadLeg = hand === "left" ? rig.leftLeg : rig.rightLeg;
-  const backLeg = hand === "left" ? rig.rightLeg : rig.leftLeg;
-  if (leadLeg && backLeg) {
-    leadLeg.position.z += plant * (phase.commit - phase.recover * 0.4);
-    backLeg.position.z -= plant * 0.45 * phase.anticipation;
+  // Arms are siblings of the chest in the articulated rig: orbit their shoulder
+  // anchors with the chest so the tunic and shoulders turn together.
+  for (const [name, sign] of [['leftArm',1],['rightArm',-1]]) {
+    const arm = rig[name];
+    arm.position.x = sign * .92 * Math.cos(motion.chest) + .02 * Math.sin(motion.chest);
+    arm.position.z = .02 * Math.cos(motion.chest) - sign * .92 * Math.sin(motion.chest);
   }
 }
 
@@ -7980,43 +11533,22 @@ function getWeaponVisualRoot(container) {
 }
 
 function updateWeaponTrailVisual(container, profile, pulse, attackSide = 1) {
-  const trailProfile = profile.trail;
+  // The old rectangular plane read as a box around the weapon. Contact flashes
+  // and hit reactions provide feedback without covering the actual blade.
   const root = getWeaponVisualRoot(container);
-
-  if (!root || !trailProfile?.enabled) {
-    removeTaggedHandVisuals(container, "attackTraceVisual");
-    return;
-  }
-
-  let trail = root.getObjectByName("weaponAttackTrail");
-
-  if (!trail) {
-    const geometry = new THREE.PlaneGeometry(trailProfile.width ?? 0.28, trailProfile.length ?? 2.2);
-    const material = new THREE.MeshBasicMaterial({
-      color: trailProfile.color ?? "#dbeaff",
-      transparent: true,
-      opacity: 0,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    trail = new THREE.Mesh(geometry, material);
-    trail.name = "weaponAttackTrail";
-    trail.userData.attackTraceVisual = true;
-    trail.position.y = (trailProfile.length ?? 2.2) * 0.36;
-    trail.position.z = 0.02;
-    trail.rotation.z = attackSide * 0.12;
-    root.add(trail);
-  }
-
-  trail.visible = pulse > 0.01;
-  trail.material.opacity = (trailProfile.opacity ?? 0.28) * pulse;
-  trail.rotation.z = attackSide * (0.1 + pulse * 0.18);
+  const trail = root?.getObjectByName('weaponAttackTrail');
+  if (trail) { trail.removeFromParent(); trail.geometry.dispose(); trail.material.dispose(); }
 }
 
 function updateHeldRangedModelState(container, itemType, draw, projectileLoaded = true) {
   const root = getWeaponVisualRoot(container);
 
   if (!root) {
+    return;
+  }
+
+  if (root.getObjectByName("bowString")?.isLine) {
+    updateBowString(root, draw, projectileLoaded);
     return;
   }
 
@@ -8042,13 +11574,74 @@ function updateHeldRangedModelState(container, itemType, draw, projectileLoaded 
 
 function animatePveEnemyAttack(enemy, attack, progress) {
   const weapon = enemy.mesh.getObjectByName("pveWeaponVisual");
+  if (weapon) {
+    resetPveEnemyWeaponPose(enemy);
+    applyProfiledWeaponPose(weapon, attack, progress, { mob: true, side: -1, trailRoot: weapon });
+    weapon.position.set(...weapon.userData.basePosition);
+    updateFlailModel(weapon.children[0], progress, attack.itemType === "Flail", -1);
+  }
 
-  if (!weapon) {
+  const rig = enemy.rig;
+  if (!rig) {
     return;
   }
 
-  resetPveEnemyWeaponPose(enemy);
-  applyProfiledWeaponPose(weapon, attack, progress, { mob: true, side: -1, trailRoot: weapon });
+  const windup = Math.sin(clamp(progress, 0, 1) * Math.PI);
+  if (rig.kind === "creature") {
+    rig.body.rotation.x = Math.PI * 0.42 - windup * 0.18;
+    rig.headGroup.rotation.x = -0.2 + windup * 0.32;
+    rig.leftArm.rotation.x = -0.18 - windup * 1.45;
+    rig.rightArm.rotation.x = 0.08 - windup * 1.7;
+    rig.leftArm.rotation.z = 0.22 + windup * 0.2;
+    rig.rightArm.rotation.z = -0.22 - windup * 0.2;
+    setArmJointPose(rig.leftArm, 0.32 + windup * 0.5, -windup * 0.18, 0);
+    setArmJointPose(rig.rightArm, 0.24 + windup * 0.62, -windup * 0.22, 0);
+  } else {
+    rig.rightArm.rotation.x = -windup * 1.1;
+    rig.rightArm.rotation.z = -0.16 - windup * 0.2;
+    rig.leftArm.rotation.x = windup * 0.28;
+    setArmJointPose(rig.rightArm, 0.16 + windup * 0.48, -windup * 0.12, 0);
+  }
+}
+
+function updatePveMobAnimation(enemy, deltaSeconds, moving, attackActive) {
+  const rig = enemy.rig;
+  if (!rig || attackActive) {
+    return;
+  }
+
+  const blend = Math.min(1, deltaSeconds * 8);
+  rig.moveAmount = THREE.MathUtils.lerp(rig.moveAmount ?? 0, moving ? 1 : 0, blend);
+  rig.animationTime = (rig.animationTime ?? 0) + deltaSeconds * (moving ? Math.max(4.5, enemy.speed * 0.82) : 2);
+  const stride = Math.sin(rig.animationTime) * rig.moveAmount;
+  const bob = Math.abs(Math.sin(rig.animationTime)) * 0.1 * rig.moveAmount;
+
+  if (rig.kind === "creature") {
+    rig.body.position.y = 3.18 + bob;
+    rig.body.rotation.x = Math.PI * 0.42 + stride * 0.035;
+    rig.headGroup.position.y = 3.72 + bob * 0.55;
+    rig.headGroup.rotation.x = -0.2 - Math.abs(stride) * 0.06;
+    rig.leftLeg.rotation.set(stride * 0.65, 0, 0.04);
+    rig.rightLeg.rotation.set(-stride * 0.65, 0, -0.04);
+    rig.leftArm.rotation.set(-stride * 0.72 - 0.18, 0, 0.22);
+    rig.rightArm.rotation.set(stride * 0.72 - 0.18, 0, -0.22);
+    setLegJointPose(rig.leftLeg, Math.max(0, -stride) * 0.55 + 0.16, -0.08);
+    setLegJointPose(rig.rightLeg, Math.max(0, stride) * 0.55 + 0.16, -0.08);
+    setArmJointPose(rig.leftArm, 0.26 + Math.max(0, stride) * 0.35, -0.06, 0);
+    setArmJointPose(rig.rightArm, 0.26 + Math.max(0, -stride) * 0.35, -0.06, 0);
+    return;
+  }
+
+  rig.body.position.y = 3.15 + bob;
+  rig.headGroup.position.y = 5.15 + bob * 0.65;
+  rig.leftLeg.rotation.set(stride * 0.72, 0, 0.04);
+  rig.rightLeg.rotation.set(-stride * 0.72, 0, -0.04);
+  rig.leftArm.rotation.set(-stride * 0.48, 0, 0.16);
+  rig.rightArm.rotation.set(stride * 0.48, 0, -0.16);
+  setLegJointPose(rig.leftLeg, (0.12 + Math.max(0, -stride) * 0.58) * rig.moveAmount, -0.08 * rig.moveAmount);
+  setLegJointPose(rig.rightLeg, (0.12 + Math.max(0, stride) * 0.58) * rig.moveAmount, -0.08 * rig.moveAmount);
+  setArmJointPose(rig.leftArm, 0.12 + Math.abs(stride) * 0.3, -0.03, 0);
+  setArmJointPose(rig.rightArm, 0.12 + Math.abs(stride) * 0.3, -0.03, 0);
 }
 
 function movePveEnemyDuringAttack(enemy, attack, progress, hitMoment, deltaSeconds, options) {
@@ -8081,7 +11674,7 @@ function movePveEnemyDuringAttack(enemy, attack, progress, hitMoment, deltaSecon
 }
 
 function isPveMeleeWeaponAttack(itemType) {
-  return Boolean(itemType && itemType !== "Empty Hand" && !isProjectileWeapon(itemType));
+  return Boolean(itemType && !isProjectileWeapon(itemType));
 }
 
 function canPveEnemyHitPlayer(enemy, targetPosition) {
@@ -8093,7 +11686,7 @@ function canPveEnemyHitPlayer(enemy, targetPosition) {
     targetPosition.x - enemy.mesh.position.x,
     targetPosition.z - enemy.mesh.position.z
   );
-  return distance <= (enemy.attackRange ?? 2.4) + 0.85;
+  return distance <= getPveEnemyAttackRange(enemy) + 0.85;
 }
 
 function updatePveEnemies(deltaSeconds) {
@@ -8102,7 +11695,7 @@ function updatePveEnemies(deltaSeconds) {
     return;
   }
 
-  if (world.sceneMode !== "poiInterior" || world.activePoiInteriorId !== "ebon-hollow") {
+  if (world.sceneMode !== "poiInterior" || getActivePoiInterior()?.type !== "Dungeon") {
     return;
   }
 
@@ -8121,6 +11714,7 @@ function updatePveEnemies(deltaSeconds) {
     }
 
     enemy.mesh.scale.lerp(new THREE.Vector3(1, 1, 1), Math.min(1, deltaSeconds * 6));
+    enemy.shoveStaggerTimer = Math.max(0, (enemy.shoveStaggerTimer ?? 0) - deltaSeconds);
     const toPlayer = new THREE.Vector3(player.x - enemy.mesh.position.x, 0, player.z - enemy.mesh.position.z);
     const distance = toPlayer.length();
 
@@ -8129,102 +11723,288 @@ function updatePveEnemies(deltaSeconds) {
     }
 
     enemy.attackTimer = Math.max(0, enemy.attackTimer - deltaSeconds);
+    if (isDungeonEntranceSafe(player)) {
+      resetPveEnemyAttackState(enemy);
+      enemy.spells?.clear();
+      const home = new THREE.Vector3(enemy.spawn.x - enemy.mesh.position.x, 0, enemy.spawn.z - enemy.mesh.position.z);
+      const step = Math.min(home.length(), enemy.speed * deltaSeconds);
+      home.normalize();
+      movePveEntityTo(enemy, { x: enemy.mesh.position.x + home.x * step, z: enemy.mesh.position.z + home.z * step }, { outdoor: false });
+      updatePveMobAnimation(enemy, deltaSeconds, step > 0.01, false);
+      continue;
+    }
+    if (enemy.bossElement) {
+      updateDungeonSorcerer(enemy, deltaSeconds, player, distance);
+      continue;
+    }
     const attackActive = updatePveEnemyAttack(enemy, deltaSeconds, player, { outdoor: false });
+    let moving = false;
 
-    if (!attackActive && distance > enemy.attackRange && distance < 34) {
+    const chaseRange = world.dungeon.status === "collapsing" ? 86 : 64;
+    const attackRange = getPveEnemyAttackRange(enemy);
+    if (!attackActive && enemy.shoveStaggerTimer <= 0 && distance > attackRange && distance < chaseRange) {
       toPlayer.normalize();
       movePveEntityTo(enemy, {
         x: enemy.mesh.position.x + toPlayer.x * enemy.speed * deltaSeconds,
         z: enemy.mesh.position.z + toPlayer.z * enemy.speed * deltaSeconds
       }, { outdoor: false });
+      moving = true;
     }
 
     applyPveEntityKnockbackMotion(enemy, deltaSeconds, { outdoor: false });
     updateCombatHitReaction(enemy, deltaSeconds);
+    updatePveMobAnimation(enemy, deltaSeconds, moving, attackActive);
 
-    if (!attackActive && distance <= enemy.attackRange && enemy.attackTimer <= 0) {
+    if (!attackActive && enemy.shoveStaggerTimer <= 0 && distance <= attackRange && enemy.attackTimer <= 0) {
       startPveEnemyAttack(enemy, player);
     }
   }
 
   resolvePveMobCollisions(world.pveEnemies, { outdoor: false });
   resolvePveMobPlayerCollisions(world.pveEnemies, { outdoor: false });
-  document.body.dataset.pveEnemiesAlive = String(world.pveEnemies.filter((enemy) => !enemy.dead).length);
+  const aliveEnemies = world.pveEnemies.filter((enemy) => !enemy.dead);
+  document.body.dataset.pveEnemiesAlive = String(aliveEnemies.length);
+  document.body.dataset.pveCreatureCount = String(aliveEnemies.filter((enemy) => enemy.mobClass === "creature").length);
+  document.body.dataset.pveRaiderCount = String(aliveEnemies.filter((enemy) => enemy.mobClass === "raider").length);
 }
 
-function updateOutdoorDungeonMonsters(deltaSeconds) {
-  if (!GAME_FLAGS.pve) {
-    document.body.dataset.outdoorMonstersAlive = "0";
-    return;
+function updateDungeonSorcerer(enemy, dt, player, distance) {
+  const room = world.dungeon.layout.endRoom;
+  const engaged = !state.player.dead && Math.abs(player.x - room.x) < room.width / 2 + 3 && Math.abs(player.z - room.z) < room.depth / 2 + 3;
+  if (!engaged) { enemy.spells.clear(); return; }
+  revealHealthBarSprite(enemy.healthBar, { persistent: true });
+  enemy.sorcererVisual.position.y = Math.sin(state.elapsed * 2) * 0.18;
+  enemy.spells.root = world.dungeon.contentRoot;
+  enemy.spells.update(dt, player, (damage, spell) => damageLocalPlayerTarget(
+    { mesh: world.playerMesh }, damage, "elemental magic", { sourceName: enemy.name,
+      previousPosition: { x: spell.x, z: spell.z }, knockback: enemy.bossElement === "air" ? 12 : 3 }));
+  if (enemy.attackTimer <= 0 && distance < 65) {
+    enemy.spells.cast(enemy.mesh.position, player, enemy.castTurn++);
+    enemy.attackTimer = SORCERERS[enemy.bossElement].cooldown;
   }
+  applyPveEntityKnockbackMotion(enemy, dt, { outdoor: false });
+  enemy.mesh.position.x = clamp(enemy.mesh.position.x, room.x - room.width / 2 + 3, room.x + room.width / 2 - 3);
+  enemy.mesh.position.z = clamp(enemy.mesh.position.z, room.z - room.depth / 2 + 3, room.z + room.depth / 2 - 3);
+  updateCombatHitReaction(enemy, dt);
+}
 
-  if (world.sceneMode !== "outdoor" || !state.selectedFactionId) {
-    document.body.dataset.outdoorMonstersAlive = String(world.outdoorMonsters.filter((monster) => !monster.dead).length);
-    return;
+function getRaidEntrancePosition(target) {
+  return target.type === "Castle" ? castleEntrance(target) : getPoiEntrancePosition(target);
+}
+
+function getRaidWaypoint(monster, destination, dt) {
+  const planner = world.raidRoutePlanner ??= createRoutePlanner();
+  monster.routeTimer = (monster.routeTimer ?? 0) - dt;
+  if (monster.routeGoal !== monster.raidTargetId) {
+    planner.cancel(monster);
+    monster.route = [];
+    monster.routeGoal = monster.raidTargetId;
+    monster.routeTimer = 0;
   }
+  const position = monster.mesh.position;
+  const travelled = Math.hypot(position.x - (monster.routeLastX ?? position.x), position.z - (monster.routeLastZ ?? position.z));
+  monster.routeStall = travelled > 0.01 ? 0 : (monster.routeStall ?? 0) + dt;
+  monster.routeLastX = position.x;
+  monster.routeLastZ = position.z;
+  while (monster.route?.length && distance2D(position, monster.route[0]) < 2) monster.route.shift();
+  if (distance2D(position, destination) < 11) {
+    planner.cancel(monster);
+    return destination;
+  }
+  if (monster.routeTimer <= 0 && (!monster.route?.length || monster.routeStall > 2) && !planner.has(monster)) {
+    // Hold position while replanning, so a finished search never sends a moving
+    // raider backwards to the start captured several frames earlier.
+    monster.route = [];
+    monster.routeTimer = 12 + Math.random() * 3;
+    planner.request(monster, monster.mesh.position, destination, position => {
+      if (getInlandLakeDistance(position.x, position.z) < 1.08) return false;
+      return distance2D(resolveOutdoorSceneryCollision(position, monster.radius ?? 1.1), position) < 0.1;
+    }, { step: 12, arrival: 10, limit: 22000 }, route => {
+      monster.route = route.slice(1);
+      monster.routeStall = 0;
+      monster.routeTimer = 12 + Math.random() * 3;
+    });
+  }
+  return monster.route?.[0] ?? (distance2D(monster.mesh.position, destination) < 11 ? destination : monster.mesh.position);
+}
 
+function updateOutdoorDungeonMonsters(frameDeltaSeconds) {
+  let deltaSeconds = frameDeltaSeconds;
+  if (!GAME_FLAGS.pve || !state.player.firstName) return;
+  const updatedMobs = new Set();
+  const night = getNightAmount(state.elapsed) > 0.62;
+  const cap = night ? NIGHT_CAMP_CAP : 3;
+  const sources = raidSpawnSources(MOB_CAMPS, CASTLES, state.factions, night);
+  const targets = raidTargets(state.pois, CASTLES, state.factions);
+  if (!world.campsInitialized || (night && !world.wasRaidNight)) {
+    world.raidPopulationPending = true;
+    world.campsInitialized = true;
+    if (night && targets.length) flash("Night falls. Raiders are marching on claimed POIs and castles!");
+  }
+  if (world.raidPopulationPending) {
+    let spawnBudget = 2;
+    world.raidPopulationPending = false;
+    for (const camp of sources) {
+      const count = world.outdoorMonsters.filter(mob => !mob.dead && mob.campId === camp.id).length;
+      for (let i = count; i < (night ? cap : 2); i++) {
+        if (spawnBudget <= 0) { world.raidPopulationPending = true; break; }
+        spawnOutdoorDungeonMonster(camp);
+        spawnBudget--;
+      }
+    }
+  }
+  if (!night) world.raidRoutePlanner?.clear();
+  world.wasRaidNight = night;
   world.outdoorMonsterSpawnTimer -= deltaSeconds;
-
-  if (world.outdoorMonsterSpawnTimer <= 0 && getAlivePveMobCount() < getPveMobCap()) {
+  if (world.outdoorMonsterSpawnTimer <= 0) {
     spawnOutdoorDungeonMonster();
-    world.outdoorMonsterSpawnTimer = OUTDOOR_DUNGEON_MONSTER_SPAWN_INTERVAL + Math.random() * 2.5;
+    world.outdoorMonsterSpawnTimer = night ? 3.25 : OUTDOOR_DUNGEON_MONSTER_SPAWN_INTERVAL + Math.random() * 2.5;
   }
-
-  const player = state.player.position;
-
   for (const monster of world.outdoorMonsters) {
+    // Scene changes and nearby combat wake immediately. Distant noncombat AI
+    // runs at 10 Hz; retain all elapsed time for movement and raid capture.
+    deltaSeconds = frameDeltaSeconds;
     if (monster.dead) {
+      world.raidRoutePlanner?.cancel(monster);
       monster.deathTimer += deltaSeconds;
       monster.mesh.scale.lerp(new THREE.Vector3(1, 0.08, 1), Math.min(1, deltaSeconds * 5));
-      if (monster.deathTimer > 0.75) {
-        removeFromParent(monster.mesh);
-        monster.removed = true;
+      if (monster.deathTimer > 0.75) { removeFromParent(monster.mesh); monster.removed = true; }
+      continue;
+    }
+    if (monster.sourceCastleId && (!night || state.factions?.[monster.sourceCastleId])) {
+      world.raidRoutePlanner?.cancel(monster);
+      removeFromParent(monster.mesh);
+      monster.removed = true;
+      continue;
+    }
+    const inPlayerScene = !monster.raidInteriorId ? world.sceneMode === "outdoor"
+      : monster.raidInteriorType === "Castle"
+        ? world.sceneMode === "interior" && world.interiorFactionId === monster.raidInteriorId
+        : world.sceneMode === "poiInterior" && world.activePoiInteriorId === monster.raidInteriorId;
+    const nearby = inPlayerScene && distance2D(state.player.position, monster.mesh.position) < 250;
+    const sceneKey = `${world.sceneMode}:${world.interiorFactionId}:${world.activePoiInteriorId}`;
+    const immediate = nearby || monster.aggro || monster.tentExit || monster.attackAnimation
+      || monster.shoveStaggerTimer > 0 || monster.knockbackVelocity?.lengthSq() > .0025
+      || monster.simulationScene !== sceneKey || monster.simulationNight !== night;
+    monster.simulationScene = sceneKey;
+    monster.simulationNight = night;
+    deltaSeconds = takeMobUpdate(monster, frameDeltaSeconds, immediate);
+    if (!deltaSeconds) continue;
+    updatedMobs.add(monster);
+    if (monster.tentExit) {
+      monster.shoveStaggerTimer = Math.max(0, (monster.shoveStaggerTimer ?? 0) - deltaSeconds);
+      const step = stepTentExit(monster.mesh.position, monster.tentExit,
+        monster.shoveStaggerTimer > 0 ? 0 : monster.speed * .65, deltaSeconds);
+      if (step.moving) {
+        monster.mesh.rotation.y = step.facing;
+        movePveEntityTo(monster, step, { outdoor: true });
+      }
+      applyPveEntityKnockbackMotion(monster, deltaSeconds, { outdoor: true });
+      updateCombatHitReaction(monster, deltaSeconds);
+      updatePveMobAnimation(monster, deltaSeconds, step.moving, false);
+      if (distance2D(monster.mesh.position, monster.tentExit) <= .15) {
+        monster.spawn = { x: monster.tentExit.x, z: monster.tentExit.z };
+        monster.tentExit = null;
       }
       continue;
     }
-
-    monster.mesh.scale.lerp(new THREE.Vector3(1, 1, 1), Math.min(1, deltaSeconds * 6));
-    const toPlayer = new THREE.Vector3(player.x - monster.mesh.position.x, 0, player.z - monster.mesh.position.z);
-    const distance = toPlayer.length();
-    monster.aggro = monster.aggro || distance < 105;
-
-    let direction;
-
-    if (monster.aggro) {
-      direction = distance > 0.05
-        ? toPlayer.normalize()
-        : new THREE.Vector3(0, 0, 0);
-    } else {
-      monster.roamAngle += deltaSeconds * 0.28;
-      direction = new THREE.Vector3(Math.cos(monster.roamAngle), 0, Math.sin(monster.roamAngle));
+    let poi = targets.find(target => target.id === monster.raidTargetId);
+    if (!night || !poi?.ownerFactionId) {
+      if (monster.raidInteriorId) {
+        const entrance = getRaidEntrancePosition(state.pois.find(poi => poi.id === monster.raidInteriorId) ?? { ...CASTLES.find(castle => castle.id === monster.raidInteriorId), type: "Castle" });
+        world.outdoorRoot.add(monster.mesh);
+        monster.mesh.position.set(entrance.x, getTerrainHeightAt(entrance.x, entrance.z), entrance.z);
+        monster.raidInteriorId = null;
+        monster.raidInteriorType = null;
+        monster.mesh.visible = true;
+      }
+      const origin = poi ? monster.mesh.position : sources.find(camp => camp.id === monster.campId)?.position ?? monster.spawn;
+      poi = night ? nearestRaidTarget(targets, origin, monster.sourceCastleId) : null;
+      monster.raidTargetId = poi?.id ?? null;
+      monster.captureProgress = 0;
     }
-
-    if (direction.lengthSq() > 0.001) {
-      monster.mesh.rotation.y = Math.atan2(direction.x, direction.z);
+    const outdoor = !monster.raidInteriorId;
+    const sameScene = outdoor ? world.sceneMode === "outdoor"
+      : monster.raidInteriorType === "Castle"
+        ? world.sceneMode === "interior" && world.interiorFactionId === monster.raidInteriorId
+        : world.sceneMode === "poiInterior" && world.activePoiInteriorId === monster.raidInteriorId;
+    monster.mesh.visible = outdoor || monster.raidInteriorType !== "Castle" || sameScene;
+    const player = state.player.position;
+    const distance = sameScene ? distance2D(player, monster.mesh.position) : Infinity;
+    const vulnerable = sameScene && !state.player.dead && (!outdoor || (Math.hypot(player.x, player.z) > 145
+      && (night || !FACTIONS.some(faction => distance2D(player, faction.position) < faction.safeRadius + 15))));
+    monster.aggro = vulnerable && (night
+      ? distance < (poi ? 24 : OUTDOOR_DUNGEON_MONSTER_TRACK_RANGE) || monster.aggro
+      : distance2D(player, monster.spawn) < 135 && (monster.aggro || distance < OUTDOOR_DUNGEON_MONSTER_TRACK_RANGE));
+    if (monster.aggro || !outdoor || !poi) {
+      world.raidRoutePlanner?.cancel(monster);
+      monster.route = [];
+      monster.routeTimer = 0;
+      monster.routeGoal = null;
     }
-
+    monster.shoveStaggerTimer = Math.max(0, (monster.shoveStaggerTimer ?? 0) - deltaSeconds);
     monster.attackTimer = Math.max(0, monster.attackTimer - deltaSeconds);
-    const attackActive = updatePveEnemyAttack(monster, deltaSeconds, player, { outdoor: true });
-
-    if (!attackActive && distance > monster.attackRange) {
-      movePveEntityTo(monster, {
-        x: monster.mesh.position.x + direction.x * monster.speed * deltaSeconds,
-        z: monster.mesh.position.z + direction.z * monster.speed * deltaSeconds
-      }, { outdoor: true });
+    if (!monster.aggro) resetPveEnemyAttackState(monster);
+    const attackActive = monster.aggro && updatePveEnemyAttack(monster, deltaSeconds, player, { outdoor });
+    let destination;
+    if (monster.aggro) destination = player;
+    else if (poi) destination = outdoor ? getRaidWaypoint(monster, getRaidEntrancePosition(poi), deltaSeconds) : poi.type === "Castle" ? { x: 0, z: -14 } : POI_FLAG_POSITION;
+    else {
+      monster.roamAngle += deltaSeconds * 0.28;
+      destination = { x: monster.spawn.x + Math.cos(monster.roamAngle) * 16, z: monster.spawn.z + Math.sin(monster.roamAngle) * 16 };
     }
-
-    applyPveEntityKnockbackMotion(monster, deltaSeconds, { outdoor: true });
+    const direction = new THREE.Vector3(destination.x - monster.mesh.position.x, 0, destination.z - monster.mesh.position.z);
+    const remaining = direction.length();
+    direction.normalize();
+    let moving = false;
+    const attackRange = getPveEnemyAttackRange(monster);
+    if (!attackActive && monster.shoveStaggerTimer <= 0 && remaining > (monster.aggro ? attackRange : 0.8)) {
+      monster.mesh.rotation.y = Math.atan2(direction.x, direction.z);
+      const step = Math.min(remaining, monster.speed * deltaSeconds);
+      moveMobInSteps(monster, { x: monster.mesh.position.x + direction.x * step, z: monster.mesh.position.z + direction.z * step }, movePveEntityTo, { outdoor }, deltaSeconds);
+      moving = true;
+    }
+    applyPveEntityKnockbackMotion(monster, deltaSeconds, { outdoor });
     updateCombatHitReaction(monster, deltaSeconds);
-
-    if (!attackActive && monster.aggro && distance <= monster.attackRange && monster.attackTimer <= 0) {
-      startPveEnemyAttack(monster, player);
+    // Simulation and capture still tick everywhere; only distant visual poses
+    // run less often. Nearby combat retains full-rate animation and hit timing.
+    monster.animationElapsed = sameScene ? (monster.animationElapsed ?? 0) + deltaSeconds : 0;
+    if (sameScene && (distance < 250 || attackActive || monster.animationElapsed >= 0.1)) {
+      updatePveMobAnimation(monster, monster.animationElapsed, moving, attackActive);
+      monster.animationElapsed = 0;
+    }
+    if (!attackActive && monster.shoveStaggerTimer <= 0 && monster.aggro && distance <= attackRange && monster.attackTimer <= 0) startPveEnemyAttack(monster, player);
+    if (poi && outdoor && !monster.aggro && distance2D(monster.mesh.position, getRaidEntrancePosition(poi)) < 4) {
+      monster.raidInteriorId = poi.id;
+      monster.raidInteriorType = poi.type;
+      (poi.type === "Castle" ? world.interiorRoot : world.meshes.poiInteriors.get(poi.id)).add(monster.mesh);
+      monster.mesh.visible = poi.type !== "Castle" || (world.sceneMode === "interior" && world.interiorFactionId === poi.id);
+      monster.mesh.position.set(0, 0, poi.type === "Castle" ? CASTLE_INTERIOR.spawnZ : 17);
+      resetPveEnemyAttackState(monster);
+      flash(`${poi.name} has been breached! Defend ${poi.type === "Castle" ? "the keep" : "its flag"}!`);
+    }
+    const holding = poi?.type !== "Castle" && night && monster.raidInteriorId && !monster.aggro && monster.shoveStaggerTimer <= 0
+      && distance2D(monster.mesh.position, POI_FLAG_POSITION) < 3;
+    if (advanceRaidCapture(monster, poi, deltaSeconds, holding) && reclaimPoiForWilderness(state, poi)) {
+      markPersistenceDirty();
+      refreshUi();
+      flash(`${poi.name} has fallen to the wilderness!`);
     }
   }
-
-  resolvePveMobCollisions(world.outdoorMonsters, { outdoor: true });
-  resolvePveMobPlayerCollisions(world.outdoorMonsters, { outdoor: true });
-  world.outdoorMonsters = world.outdoorMonsters.filter((monster) => !monster.removed);
-  document.body.dataset.outdoorMonstersAlive = String(world.outdoorMonsters.filter((monster) => !monster.dead).length);
+  world.raidRoutePlanner?.step();
+  const outside = world.outdoorMonsters.filter(mob => !mob.raidInteriorId);
+  resolvePveMobCollisions(outside, { outdoor: true, updatedMobs });
+  if (world.sceneMode === "outdoor") resolvePveMobPlayerCollisions(outside, { outdoor: true });
+  for (const poi of [...state.pois, ...CASTLES.map(castle => ({ ...castle, type: "Castle" }))]) {
+    const inside = world.outdoorMonsters.filter(mob => mob.raidInteriorId === poi.id);
+    resolvePveMobCollisions(inside, { outdoor: false, updatedMobs });
+    if ((poi.type === "Castle" ? world.sceneMode === "interior" && world.interiorFactionId === poi.id : world.sceneMode === "poiInterior" && world.activePoiInteriorId === poi.id)) resolvePveMobPlayerCollisions(inside, { outdoor: false });
+  }
+  world.outdoorMonsters = world.outdoorMonsters.filter(monster => !monster.removed);
+  const aliveMonsters = world.outdoorMonsters.filter(monster => !monster.dead);
+  document.body.dataset.outdoorMonstersAlive = String(aliveMonsters.length);
+  document.body.dataset.outdoorCreatureCount = String(aliveMonsters.filter(monster => monster.mobClass === "creature").length);
+  document.body.dataset.outdoorRaiderCount = String(aliveMonsters.filter(monster => monster.mobClass === "raider").length);
 }
 
 function applySeatedPose() {
@@ -8259,67 +12039,208 @@ function applySeatedPose() {
   setArmJointPose(rig.rightArm, 0.5, -0.08, 0);
 }
 
-function applyDivePose(progress) {
+// Takeoff and recovery remain vulnerable; only the tucked tumble evades hits.
+function isPlayerDodging(motion = world.playerMotion) {
+  return Boolean(motion.rolling && motion.rollElapsed >= 0.09 && motion.rollElapsed < 0.48);
+}
+
+function applyRollPose(progress) {
   const rig = world.playerRig;
-
-  if (!rig) {
-    return;
-  }
-
+  if (!rig) return;
   const t = clamp(progress, 0, 1);
-  const diveIn = easeInOut(t / 0.36);
-  const diveOut = 1 - easeInOut((t - 0.72) / 0.28);
-  const dive = diveIn * diveOut;
-  const reach = easeInOut(clamp((t - 0.08) / 0.24, 0, 1)) * dive;
-  const legStream = easeInOut(clamp((t - 0.12) / 0.34, 0, 1)) * dive;
-  const landingCrouch = Math.sin(clamp((t - 0.72) / 0.28, 0, 1) * Math.PI) * 0.18;
-  const sideSway = Math.sin(t * Math.PI * 2) * 0.035 * dive;
-  const diveDirection = world.playerMotion.diveDirection;
-
-  if (diveDirection.lengthSq() > 0.001) {
-    world.playerMesh.rotation.y = Math.atan2(diveDirection.x, diveDirection.z);
-  }
-
+  const smooth = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
+  // Reach into a long, nearly horizontal dive, then whip through a compact tumble.
+  const reach = smooth(t / 0.16) * (1 - smooth((t - 0.3) / 0.18));
+  const tuck = smooth((t - 0.29) / 0.19) * (1 - smooth((t - 0.72) / 0.28));
+  const angle = t < 0.3 ? 1.28 * smooth(t / 0.22)
+    : t < 0.76 ? THREE.MathUtils.lerp(1.28, 5.65, smooth((t - 0.3) / 0.46))
+    : THREE.MathUtils.lerp(5.65, Math.PI * 2, smooth((t - 0.76) / 0.24));
+  const direction = world.playerMotion.rollDirection;
+  world.playerMesh.rotation.y = Math.atan2(direction.x, direction.z);
   resetPlayerRootLean();
-  world.playerVisualRoot.rotation.x = 1.38 * dive - landingCrouch * 0.18;
-  world.playerVisualRoot.rotation.z = sideSway;
-
-  rig.body.position.y = THREE.MathUtils.lerp(3.15, 3.12, dive) - landingCrouch * 0.45;
-  rig.body.rotation.set(-0.08 * dive - landingCrouch * 0.35, 0, sideSway * 0.25);
-  rig.chest.position.y = THREE.MathUtils.lerp(3.65, 3.62, dive) - landingCrouch * 0.35;
-  rig.chest.rotation.set(-0.05 * dive, 0, sideSway * 0.2);
-  rig.headGroup.position.set(0, THREE.MathUtils.lerp(5.2, 5.1, dive), THREE.MathUtils.lerp(0.16, 0.36, dive));
-  rig.headGroup.rotation.set(0.1 * dive, 0, -sideSway * 0.18);
-
-  rig.leftLeg.position.set(HAND_CONFIG.left.side * THREE.MathUtils.lerp(0.42, 0.46, dive), THREE.MathUtils.lerp(2.05, 2.14, dive), THREE.MathUtils.lerp(0, -0.18, dive));
-  rig.rightLeg.position.set(HAND_CONFIG.right.side * THREE.MathUtils.lerp(0.42, 0.46, dive), THREE.MathUtils.lerp(2.05, 2.14, dive), THREE.MathUtils.lerp(0, -0.18, dive));
-  rig.leftLeg.rotation.set(0.68 * legStream - landingCrouch * 1.1, 0, HAND_CONFIG.left.side * (0.04 + 0.06 * dive));
-  rig.rightLeg.rotation.set(0.62 * legStream - landingCrouch * 1.1, 0, HAND_CONFIG.right.side * (0.04 + 0.06 * dive));
-  setLegJointPose(rig.leftLeg, 0.2 * dive + landingCrouch * 1.45, -0.12 * dive - landingCrouch * 0.34);
-  setLegJointPose(rig.rightLeg, 0.32 * dive + landingCrouch * 1.35, -0.12 * dive - landingCrouch * 0.32);
-
-  rig.leftArm.position.set(HAND_CONFIG.left.side * THREE.MathUtils.lerp(1.08, 0.56, reach), THREE.MathUtils.lerp(4.35, 4.78, reach), THREE.MathUtils.lerp(0.22, 1.22, reach));
-  rig.rightArm.position.set(HAND_CONFIG.right.side * THREE.MathUtils.lerp(1.08, 0.56, reach), THREE.MathUtils.lerp(4.35, 4.78, reach), THREE.MathUtils.lerp(0.22, 1.22, reach));
-  rig.leftArm.rotation.set(-1.48 * reach - landingCrouch * 0.42, 0, HAND_CONFIG.left.side * (0.16 - 0.1 * reach));
-  rig.rightArm.rotation.set(-1.48 * reach - landingCrouch * 0.42, 0, HAND_CONFIG.right.side * (0.16 - 0.1 * reach));
-  setArmJointPose(rig.leftArm, 0.16 + reach * 0.42 + landingCrouch * 0.28, -0.08 * reach, HAND_CONFIG.left.side * 0.04 * reach);
-  setArmJointPose(rig.rightArm, 0.16 + reach * 0.42 + landingCrouch * 0.28, -0.08 * reach, HAND_CONFIG.right.side * 0.04 * reach);
+  // Rotate about the hips rather than the feet to keep the tucked body above ground.
+  const pivot = 2.6;
+  rig.visualRoot.rotation.x = angle;
+  rig.visualRoot.rotation.z = -0.14 * tuck;
+  rig.visualRoot.position.set(0, pivot * (1 - Math.cos(angle)) - 0.7 * tuck + 0.35 * reach, -pivot * Math.sin(angle) + 0.65 * reach);
+  rig.body.position.y = 3.15 - 0.35 * tuck;
+  rig.body.rotation.set(0.25 * tuck, 0, 0);
+  rig.chest.position.y = 3.65 - 0.45 * tuck;
+  rig.chest.rotation.set(0.35 * tuck, 0, 0);
+  rig.headGroup.position.set(0, 5.2 - 0.95 * tuck, 0.16 + 0.35 * tuck);
+  rig.headGroup.rotation.set(0.6 * tuck - 0.25 * reach, 0, 0);
+  for (const hand of ['left', 'right']) {
+    const side = HAND_CONFIG[hand].side;
+    const leg = rig[hand + 'Leg'];
+    const arm = rig[hand + 'Arm'];
+    leg.position.set(side * 0.42, 2.05 + 0.25 * tuck, 0.15 * tuck);
+    leg.rotation.set(-1.65 * tuck + (hand === 'left' ? 0.22 : 0.4) * reach, 0, side * 0.08 * tuck);
+    setLegJointPose(leg, 2.15 * tuck + 0.12 * reach, -0.35 * tuck - 0.28 * reach);
+    arm.position.set(side * (0.92 - 0.25 * tuck), 4.35 - 0.45 * tuck, 0.02 + 0.3 * tuck);
+    arm.rotation.set(-2.65 * reach - 0.65 * tuck, 0, side * (0.16 + 0.12 * tuck));
+    setArmJointPose(arm, 0.12 + 1.65 * tuck, -0.15 * tuck, 0);
+  }
+  // Preserve the actual takeoff pose for the handoff, including an interrupted stride.
+  const blend = 1 - smooth(t / 0.15);
+  if (blend > 0) for (const { node, position, rotation } of world.playerMotion.rollBlendFrom ?? []) {
+    node.position.lerp(position, blend);
+    node.quaternion.slerp(rotation, blend);
+  }
 }
 
 function setArmWalkPose(hand, swing) {
   const arm = hand === "left" ? world.playerRig.leftArm : world.playerRig.rightArm;
   const side = HAND_CONFIG[hand].side;
 
-  arm.position.set(side * 1.08, 4.35, 0.22);
+  arm.position.set(side * 0.92, 4.35, 0.02);
   arm.rotation.set(swing, 0, side * 0.16);
   setArmJointPose(arm, 0.12 + Math.abs(swing) * 0.36, -0.03, 0);
   const leg = hand === "left" ? world.playerRig.leftLeg : world.playerRig.rightLeg;
   leg.position.set(side * 0.42, 2.05, 0);
 }
 
+function updateShieldGuard(deltaSeconds) {
+  const guard = world.guard;
+  const available = !isPlayerRolling() && !world.flailCharge && !state.player.dead && !isCameraMenuOpen() && !world.outpostTower.active &&
+    !world.attacks.left && !world.attacks.right && state.elapsed >= guard.brokenUntil;
+  const hand = available ? ['left','right'].find(h =>
+    (world.pointer.buttons & (h === 'left' ? 1 : 2)) &&
+    isShield(getEquippedItem(state, h)?.type) && getEquippedItem(state, h).durability > 0) : null;
+  if (hand && hand !== guard.hand) guard.raisedAt = state.elapsed;
+  guard.hand = hand ?? null;
+  if (!hand && state.elapsed >= guard.brokenUntil) guard.stamina = Math.min(100, guard.stamina + deltaSeconds * 24);
+  let meter = document.querySelector('#combat-guard');
+  if (!meter) {
+    meter = document.createElement('div'); meter.id = 'combat-guard';
+    meter.setAttribute('role', 'status'); meter.setAttribute('aria-live', 'polite');
+    document.body.append(meter);
+  }
+  const equipped = ['left','right'].some(h => isShield(getEquippedItem(state,h)?.type));
+  meter.hidden = !equipped;
+  const label = state.elapsed < guard.brokenUntil ? 'Guard broken' : hand ? 'Blocking' : 'Hold shield button to defend';
+  const text = `${label} · Guard ${Math.ceil(guard.stamina)}`;
+  if (meter.textContent !== text) meter.textContent = text;
+  meter.style.setProperty('--guard', `${guard.stamina}%`);
+}
+
+function applyShieldPose(hand) {
+  const held = world.heldItems[hand].mesh;
+  if (!held) return;
+  const side = HAND_CONFIG[hand].side;
+  facePlayerTowardAttack({ direction: world.aimDirection });
+  poseAttackArm(hand, -1.04, -side * .38, side * .16, .85, 0, 0);
+  world.playerMesh.updateWorldMatrix(true, false);
+  // Shield face is local X; align it with the character's forward direction.
+  const forward = world.aimDirection.clone().setY(0).normalize().multiplyScalar(side);
+  const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1,0,0), forward);
+  held.quaternion.copy(held.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(rotation));
+  held.position.set(0,0,0);
+  world.playerRig.chest.rotation.x -= .08;
+}
+
+function blockLocalDamage(amount, sourcePosition, knockback = 0) {
+  const guard = world.guard;
+  const item = guard.hand ? getEquippedItem(state, guard.hand) : null;
+  const result = resolveShieldBlock({ type: item?.type, raised: Boolean(guard.hand), stamina: guard.stamina,
+    age: state.elapsed - guard.raisedAt, facing: { x: Math.sin(world.playerMesh.rotation.y), z: Math.cos(world.playerMesh.rotation.y) },
+    position: state.player.position, source: sourcePosition, damage: amount, knockback });
+  if (result.blocked) {
+    guard.stamina = result.stamina;
+    if (result.broken) { guard.brokenUntil = state.elapsed + 1.4; guard.hand = null; }
+    const wear = damageInventoryItem(state, item, result.parried ? 1 : Math.max(1, Math.round(amount / 12)));
+    if (wear.broken) guard.hand = null;
+    markPlayerPersistenceDue();
+    flash(result.broken ? 'Guard broken!' : result.parried ? 'Perfect block!' : 'Blocked');
+    world.combatFeedback.cameraImpulse = Math.max(world.combatFeedback.cameraImpulse ?? 0, .014);
+  }
+  return result;
+}
+
 function updateAttackAnimations(deltaSeconds) {
+  updateJumpSmashEffects(deltaSeconds);
+  if (state.player.dead || isCameraMenuOpen() || isPlayerRolling()) {
+    world.attacks = { left: null, right: null };
+    world.comboChains = { left: null, right: null };
+    world.weaveQueue = null;
+    world.flailCharge = null;
+    world.weaponTrails?.clear();
+  }
+  if (world.flailCharge && getEquippedItem(state,world.flailCharge.hand)?.id !== world.flailCharge.itemId) world.flailCharge = null;
+  updateShieldGuard(deltaSeconds);
+  let chargeMeter = document.querySelector('#combat-charge');
+  if (world.flailCharge && !chargeMeter) {
+    chargeMeter=document.createElement('div');chargeMeter.id='combat-charge';document.body.append(chargeMeter);
+  }
+  if (chargeMeter) {
+    chargeMeter.hidden=!world.flailCharge;
+    if (world.flailCharge) chargeMeter.textContent='Flail '+Math.round(flailChargePower(world.flailCharge.elapsed)*100)+'% · Release to strike';
+  }
+  // Expire before posing so a stale combo cannot hold the recovery animation.
+  for (const chain of Object.values(world.comboChains)) {
+    if (chain?.queued && state.elapsed > chain.inputExpiresAt) chain.queued = false;
+  }
   animateHandAttack("left", world.leftHandMount, deltaSeconds);
   animateHandAttack("right", world.rightHandMount, deltaSeconds);
+  const queued = world.weaveQueue;
+  if (queued) {
+    if (state.player.dead || isCameraMenuOpen() || state.elapsed > queued.expiresAt || getEquippedItem(state, queued.hand)?.id !== queued.itemId) world.weaveQueue = null;
+    else if (state.elapsed >= (queued.readyAt ?? 0) && canWeaveAttack(world.attacks[queued.hand === 'left' ? 'right' : 'left'])) {
+      const outgoing = world.attacks[queued.hand === 'left' ? 'right' : 'left'];
+      world.weaveQueue = null;
+      if (tryAttackFromPointer(queued.hand, queued.chargePower ?? 0, queued.expiresAt) && world.attacks[queued.hand]?.elapsed === 0) {
+        if (outgoing?.frameBase) restoreCombatTransforms(outgoing.frameBase);
+        animateHandAttack(queued.hand, queued.hand === 'left' ? world.leftHandMount : world.rightHandMount, 0);
+      }
+    }
+  }
+  for (const hand of ["left", "right"]) {
+    const chain = world.comboChains[hand];
+    if (!chain) continue;
+    const item = getEquippedItem(state, hand);
+    if (state.player.dead || chain.itemId !== item?.id || isCameraMenuOpen()) {
+      world.comboChains[hand] = null;
+      continue;
+    }
+    if (!chain.queued || state.elapsed < chain.readyAt) continue;
+    const active = world.attacks[hand];
+    if (active && (!active.hitResolved || active.elapsed < active.duration * (active.comboChainPoint ?? 1))) continue;
+    chain.queued = false;
+    if (tryAttackFromPointer(hand, chain.chargePower ?? 0, chain.inputExpiresAt)) {
+      // Evaluate the new pose now, avoiding an idle frame between linked strokes.
+      if (active?.frameBase) restoreCombatTransforms(active.frameBase);
+      animateHandAttack(hand, hand === "left" ? world.leftHandMount : world.rightHandMount, 0);
+    }
+  }
+}
+
+function captureComboPose(hand) {
+  const arm = hand === "left" ? world.playerRig.leftArm : world.playerRig.rightArm;
+  return {
+    transforms: captureCombatTransforms().filter(entry => entry.node !== world.playerMesh && entry.node !== world.playerVisualRoot),
+    weapon: world.heldItems[hand].mesh?.quaternion.clone(),
+    arm: arm.quaternion.clone(),
+    forearm: arm.userData.forearm.quaternion.clone(),
+    wrist: arm.userData.hand.quaternion.clone()
+  };
+}
+
+function blendComboPose(hand, attack, progress) {
+  const from = attack.comboBlendFrom;
+  if (!from) return;
+  const weight = 1 - easeInOut(progress / Math.max(.01, attack.profile.windup));
+  if (weight <= 0) return;
+  if (from.transforms) {
+    for (const {node,position,rotation} of from.transforms) {
+      node.position.lerp(position,weight);node.quaternion.slerp(rotation,weight);
+    }
+    return;
+  }
+  const arm = hand === "left" ? world.playerRig.leftArm : world.playerRig.rightArm;
+  const held = world.heldItems[hand].mesh;
+  if (held && from.weapon) held.quaternion.slerp(from.weapon, weight);
+  arm.quaternion.slerp(from.arm, weight);
+  arm.userData.forearm.quaternion.slerp(from.forearm, weight);
+  arm.userData.hand.quaternion.slerp(from.wrist, weight);
 }
 
 function animateHandAttack(hand, mount, deltaSeconds) {
@@ -8329,32 +12250,505 @@ function animateHandAttack(hand, mount, deltaSeconds) {
 
   mount.position.copy(base.position);
   mount.rotation.copy(base.rotation);
+  resetHeldItemPose(hand);
+
+  updateHeldRangedModelState(mount, getEquippedItem(state, hand)?.type, 0, true);
 
   if (!attack) {
+    if (world.guard.hand === hand) { applyShieldPose(hand); return; }
+    if (getEquippedItem(state,hand)?.type === 'Flail') {
+      if (world.flailCharge?.hand === hand) {
+        const charge=world.flailCharge,previous=charge.elapsed;
+        charge.elapsed += deltaSeconds;
+        charge.angle = flailSpinAngle(charge.elapsed,side);
+        applyFlailPose(hand, {chargePower:flailChargePower(charge.elapsed)}, 0, true);
+        simulateFlailModel(world.heldItems[hand].mesh,deltaSeconds,{fromAngle:flailSpinAngle(previous,side),toAngle:charge.angle,tilt:.7,side,yaw:world.playerMesh.rotation.y,tension:Math.min(1,charge.elapsed/.55)});
+        document.body.dataset.flailCharge = String(Math.round(flailChargePower(charge.elapsed)*100));
+      } else simulateFlailModel(world.heldItems[hand].mesh,deltaSeconds);
+    }
+    updateFlailModel(world.heldItems[hand].mesh);
     animateRangedDraw(hand, mount, side);
     return;
   }
 
-  attack.elapsed += deltaSeconds * (world.combatFeedback.hitstop > 0 ? 0.12 : 1);
+  attack.elapsed += deltaSeconds * (world.combatFeedback.hitstop > 0 ? 0.55 : 1);
+  if (world.comboChains[hand]?.queued && attack.comboChainPoint < 1) {
+    attack.elapsed = Math.min(attack.elapsed, attack.duration * attack.comboChainPoint);
+  }
+  if (attack.jumpAttack === 'smash') {
+    const motion = world.playerMotion;
+    if (motion.verticalOffset - motion.supportOffset > .15) attack.elapsed = Math.min(attack.elapsed, attack.duration * .55);
+  }
   const progress = Math.min(1, attack.elapsed / attack.duration);
   const profile = attack.profile ?? getCombatProfile(attack.itemType);
-  applyProfiledWeaponPose(mount, attack, progress, {
-    hand,
-    side,
-    trailRoot: world.heldItems?.[hand]?.mesh ?? mount
-  });
+  attack.frameBase = captureCombatTransforms();
+  if (attack.jumpAttack) {
+    applyJumpAttackPose(hand, attack, progress, deltaSeconds);
+  } else if (attack.itemType === "Flail") {
+    applyFlailPose(hand,attack,progress);
+  } else if (attack.itemType === "Spear") {
+    applyCursorDirectedSpearAttack(hand, attack, progress);
+  } else if (attack.kind === "thrust") {
+    applyCursorDirectedDaggerStab(hand, attack, progress);
+  } else if (profile.kind === "slash" || profile.kind === "chop") {
+    applyFocusedMeleePose(hand, attack, progress);
+  } else if (profile.family === "bow" || profile.family === "crossbow") {
+    const release = getCombatReleaseMoment(attack.itemType, attack.chargePower ?? 0);
+    const power = (attack.chargePower ?? 0) > .08 ? .28 + attack.chargePower * .72 : .52;
+    const draw = progress < release ? power * (attack.chargePower > .08 ? 1 : easeOut(progress / release))
+      : power * (1 - easeOut((progress - release) / .08));
+    applyAimedRangedPose(hand, draw, progress < release, attack);
+  } else {
+    facePlayerTowardAttack(attack);
+    applyProfiledWeaponPose(mount, attack, progress, {
+      hand,
+      side,
+      trailRoot: world.heldItems?.[hand]?.mesh ?? mount
+    });
+    // The arm supplies all grip translation. Mount offsets would detach the weapon.
+    mount.position.copy(base.position);
+  }
 
   if ((profile.kind === "bow" || profile.kind === "crossbow") && !attack.projectileSpawned && progress >= getCombatReleaseMoment(attack.itemType, attack.chargePower)) {
     spawnProjectile(hand, attack);
   }
 
+  updateFlailModel(world.heldItems[hand].mesh, progress, attack.itemType === "Flail", attack.slashDirection);
+  blendComboPose(hand, attack, progress);
+  // Return every joint to this frame's locomotion pose, including support arms
+  // and wrist rotations introduced by aiming. No neutral-pose snap on walking.
+  const recoverAt = attack.jumpAttack === 'flurry' ? .94 : profile.windup + profile.strike;
+  const recovery = easeInOut((progress - recoverAt) / Math.max(.01, 1 - recoverAt));
+  if (recovery > 0) for (const {node, position, rotation} of attack.frameBase) {
+    if (node === world.playerMesh || node === world.playerVisualRoot) continue;
+    node.position.lerp(position, recovery);
+    node.quaternion.slerp(rotation, recovery);
+  }
+  if (attack.itemType === 'Flail' && !attack.jumpAttack) {
+    const oldProgress=attack.flailProgress ?? 0;
+    const elapsed=(progress-oldProgress)*attack.duration;
+    attack.flailSegments=simulateFlailModel(world.heldItems[hand].mesh,elapsed,{
+      fromAngle:getFlailReleaseAngle(attack,oldProgress,side),toAngle:getFlailReleaseAngle(attack,progress,side),tilt:.7*(1-easeInOut((progress-attack.profile.windup)/attack.profile.strike)),side,yaw:Math.atan2(attack.direction.x,attack.direction.z),tension:1
+    }).filter(segment=>{const p=oldProgress+(progress-oldProgress)*segment.t;return p>=attack.profile.windup && p<=attack.profile.windup+attack.profile.strike;});
+    attack.flailProgress=progress;
+  }
   resolveMeleeHitAtSwingMoment(attack, progress);
 
   if (progress >= 1) {
     world.attacks[hand] = null;
     mount.position.copy(base.position);
     mount.rotation.copy(base.rotation);
+    resetHeldItemPose(hand);
   }
+}
+
+function applyJumpAttackPose(hand, attack, progress, dt) {
+  if (attack.jumpAttack === 'flurry') {
+    applyCursorDirectedDaggerStab(hand, attack, (progress * 3) % 1);
+    return;
+  }
+  const held = world.heldItems[hand].mesh;
+  if (!held) return;
+  facePlayerTowardAttack(attack);
+  const stroke = easeInOut((progress - .12) / .43);
+  const side = HAND_CONFIG[hand].side;
+  poseAttackArm(hand, -2.6 + stroke * 2.3, side * .15, 0, .25 + stroke * .4, 0);
+  world.playerRig.chest.rotation.x += stroke * .3;
+  world.playerMesh.updateWorldMatrix(true, false);
+  const grip = held.parent.getWorldPosition(new THREE.Vector3());
+  const angle = -.45 + stroke * 2.9;
+  const direction = attack.direction.clone().multiplyScalar(Math.sin(angle));
+  direction.y = Math.cos(angle);
+  if (attack.jumpAttack === 'plant') direction.copy(attack.direction).multiplyScalar(.22).setY(-1).normalize();
+  setObjectWorldPoseAlongDirection(held, grip, direction.normalize());
+  if (attack.itemType === 'Axe') held.rotateY(Math.PI / 2);
+  seatWeaponInHand(held, world.playerRig[hand + 'Arm'].userData.hand);
+  if (attack.jumpAttack === 'plant') {
+    // Slide the palm toward the butt, leaving most of the shaft below it.
+    // Local +Y points toward the spearhead (downward during the plant).
+    const shaftLength = attack.profile?.modelProfile?.shaftLength ?? 5.45;
+    const gripSlide = Math.max(0, shaftLength * .5 - 1.32 - .22);
+    held.translateY(gripSlide * easeInOut(progress / .18));
+  }
+  if (attack.itemType === 'Flail') simulateFlailModel(held, dt);
+}
+
+function resolveJumpAttackHit(attack, progress) {
+  if (attack.jumpAttack === 'plant') applySpearVaultLift(attack, world.playerMotion);
+  if (attack.hitResolved) return;
+  if (attack.jumpAttack === 'flurry') {
+    // Each stab has its own hit set and server swing ID, with a small aerial hop.
+    const pulse = Math.min(2, Math.floor(progress * 3));
+    if (!consumeDaggerAirStrike(attack, world.playerMotion, pulse)) {
+      attack.hitResolved = true;
+      return;
+    }
+    if (pulse !== attack.jumpPulse) {
+      attack.jumpPulse = pulse;
+      attack.hitTargets.clear();
+      attack.id = createId('air-stab');
+      if (world.playerMotion.jumping) world.playerMotion.verticalVelocity = Math.max(world.playerMotion.verticalVelocity, 6);
+    }
+    if ((progress * 3) % 1 >= .18) damagePveEnemyFromMelee(attack);
+    if (progress >= 1) attack.hitResolved = true;
+    return;
+  }
+  if (progress >= .18 && progress <= .72) damagePveEnemyFromMelee(attack);
+  if (attack.jumpAttack === 'smash' && !attack.groundImpact &&
+      world.playerMotion.verticalOffset - world.playerMotion.supportOffset <= .15) {
+    attack.groundImpact = true;
+    const center = world.playerMesh.position.clone().addScaledVector(attack.direction, 1.5);
+    const radius = GROUND_SMASH_RADIUS;
+    spawnJumpSmashEffect(center, radius);
+    for (const target of getActiveCombatTargets()) {
+      const key = target.id ?? target.mesh?.uuid;
+      const position = getCombatTargetBaseWorldPosition(target);
+      if (target.dead || attack.hitTargets.has(key) || !isGroundSmashTarget(center, position, radius, target.radius)) continue;
+      attack.hitTargets.add(key);
+      wearWeaponOnHit(attack);
+      const radialAttack = { ...attack, range: Math.max(attack.range, radius + 1.5),
+        direction: position.clone().sub(world.playerMesh.position).setY(0).normalize(), impactPosition: position };
+      triggerCombatImpactFeedback(target, radialAttack, position);
+      damageCombatTarget(target, attack.damage, attack.itemName, radialAttack);
+    }
+  }
+  if (progress >= .72) attack.hitResolved = true;
+}
+
+function spawnJumpSmashEffect(center, radius) {
+  const effect = createGroundSmashEffect(center, radius);
+  world.playerMesh.parent.add(effect.group);
+  world.jumpSmashEffects ??= [];
+  world.jumpSmashEffects.push(effect);
+  world.combatFeedback.cameraImpulse = Math.max(world.combatFeedback.cameraImpulse ?? 0, .06);
+}
+
+function updateJumpSmashEffects(dt) {
+  world.jumpSmashEffects = (world.jumpSmashEffects ?? []).filter(effect => updateGroundSmashEffect(effect, dt));
+}
+
+function startFlailCharge(hand) {
+  const item = getEquippedItem(state, hand);
+  if (item?.type !== 'Flail' || item.durability <= 0 || isPlayerRolling() || state.player.dead || isCameraMenuOpen() || world.flailCharge) return false;
+  if (world.attacks[hand] || !canWeaveAttack(world.attacks[hand === 'left' ? 'right' : 'left'])) return false;
+  world.attacks[hand === 'left' ? 'right' : 'left'] = null;
+  world.flailCharge = { hand, itemId: item.id, elapsed: 0, angle: 0 };
+  world.weaveQueue = null;
+  world.comboChains = {left:null,right:null};
+  return true;
+}
+
+function applyFlailPose(hand, attack, progress, charging = false) {
+  const held=world.heldItems[hand].mesh;
+  if (!held) return;
+  const side=HAND_CONFIG[hand].side, arm=world.playerRig[hand+'Arm'];
+  const aim=attack.direction ? attack : {direction:world.aimDirection.clone()};
+  facePlayerTowardAttack(aim);
+  const profile=attack.profile ?? getCombatProfile('Flail');
+  const rise=charging ? easeInOut((attack.chargePower ?? 0)*2/.5) : 1;
+  const drop=charging ? 0 : easeInOut((progress-profile.windup)/profile.strike);
+  const recover=charging ? 0 : easeInOut((progress-profile.windup-profile.strike)/profile.recovery);
+  const idle=arm.quaternion.clone(), elbow=arm.userData.forearm.quaternion.clone(), rest=held.quaternion.clone();
+  if (!charging) applyPlayerBodyAttackPose(hand,profile,getAttackPhase(profile,progress),side,.85);
+  const orbit=charging ? (world.flailCharge?.angle ?? flailSpinAngle((attack.chargePower ?? 0)*2,side)) : 0;
+  const circle=charging ? rise : 0;
+  const sweepYaw=side*(1.35-drop*3);
+  const target=world.playerMesh.localToWorld(charging
+    ? new THREE.Vector3(side*.85+Math.cos(orbit)*.1*circle,5.8+Math.sin(orbit)*.06*circle,.3+Math.sin(orbit)*.12*circle)
+    : new THREE.Vector3(arm.position.x+Math.sin(sweepYaw*.7)*1.7,4.35+.25*(1-drop),.2+Math.cos(sweepYaw*.7)*1.75));
+  if (charging) {world.playerRig.chest.rotation.y+=Math.sin(orbit)*.035*circle;world.playerRig.body.rotation.y+=Math.sin(orbit)*.018*circle;}
+  reachHand(arm,target);
+  arm.quaternion.slerp(idle,Math.max(1-rise,recover));
+  arm.userData.forearm.quaternion.slerp(elbow,Math.max(1-rise,recover));
+  world.playerMesh.updateWorldMatrix(true, false);
+  const grip=held.parent.getWorldPosition(new THREE.Vector3());
+  const forward=aim.direction.clone().setY(0).normalize();
+  const direction=charging ? new THREE.Vector3(forward.z*side,.25,-forward.x*side).normalize()
+    : forward.clone().applyAxisAngle(new THREE.Vector3(0,1,0),sweepYaw).setY(.12-.24*drop).normalize();
+  if (charging) direction.applyAxisAngle(new THREE.Vector3(0,1,0),Math.sin(orbit)*.14*circle);
+  setObjectWorldPoseAlongDirection(held,grip,direction);
+  held.quaternion.slerp(rest,Math.max(1-rise,recover));
+  seatWeaponInHand(held,arm.userData.hand);
+}
+
+function applyFocusedMeleePose(hand, attack, progress) {
+  const held = world.heldItems[hand].mesh;
+  if (!held) return;
+  facePlayerTowardAttack(attack);
+  const profile = attack.profile ?? getCombatProfile(attack.itemType);
+  const side = HAND_CONFIG[hand].side;
+  const angles = focusedSwingAngles(profile, progress, attack.slashDirection || side);
+  const phase = getAttackPhase(profile, progress);
+  const motion = sampleMeleeMotion(profile, progress, attack.slashDirection || side);
+  const lift = motion.envelope;
+  const activeArm = hand === 'left' ? world.playerRig.leftArm : world.playerRig.rightArm;
+  const walkArm = activeArm.quaternion.clone(), walkElbow = activeArm.userData.forearm.quaternion.clone();
+  const walkWrist = activeArm.userData.hand.quaternion.clone();
+  poseAttackArm(hand, motion.shoulderX, motion.shoulderZ, motion.shoulderY, motion.elbow, -.03, 0);
+  activeArm.quaternion.slerp(walkArm, 1 - lift);
+  activeArm.userData.forearm.quaternion.slerp(walkElbow, 1 - lift);
+  activeArm.userData.hand.quaternion.slerp(walkWrist, 1 - lift);
+  applyPlayerBodyAttackPose(hand, profile, phase, attack.slashDirection || side, .45);
+  {
+    const arm = hand === "left" ? world.playerRig.leftArm : world.playerRig.rightArm;
+    const overhead = attack.comboName === 'overheadFinish';
+    const target = world.playerMesh.localToWorld(new THREE.Vector3(
+      arm.position.x + Math.sin(angles.yaw*.65) * 1.65,
+      4.05 + (overhead ? (1-motion.stroke)*1.7 : Math.sin(angles.pitch)*.55),
+      .2 + Math.cos(angles.yaw*.65) * 1.75));
+    const idle = arm.quaternion.clone();
+    const elbowIdle = arm.userData.forearm.quaternion.clone();
+    reachHand(arm, target);
+    const blend = Math.max(1-easeInOut(progress / profile.windup), angles.recovery);
+    arm.quaternion.slerp(idle, blend);
+    arm.userData.forearm.quaternion.slerp(elbowIdle, blend);
+  }
+  world.playerMesh.updateWorldMatrix(true, false);
+  const grip = held.parent.getWorldPosition(new THREE.Vector3());
+  const direction = getCursorDirectedAttackVector(attack, grip);
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), direction).normalize();
+  direction.applyAxisAngle(new THREE.Vector3(0,1,0), angles.yaw).applyAxisAngle(right, -angles.pitch);
+  const rest = held.quaternion.clone();
+  setObjectWorldPoseAlongDirection(held, grip, direction);
+  if (attack.itemType === 'Axe') held.rotateY((attack.slashDirection || side) * (Math.PI * .5 + .3));
+  else if (attack.comboName === 'overheadFinish') held.rotateY(Math.PI / 2);
+  const entry = easeInOut(progress / Math.max(.01, profile.windup));
+  held.quaternion.slerp(rest, Math.max(1-entry, angles.recovery));
+  seatWeaponInHand(held, (hand === 'left' ? world.playerRig.leftArm : world.playerRig.rightArm).userData.hand);
+  if (attack.itemType === "Long Sword") supportWeaponGrip(hand, held, new THREE.Vector3(0,-.42,0), entry * (1-angles.recovery));
+  updateWeaponTrailVisual(held, profile, phase.trailPulse, side);
+}
+
+function supportWeaponGrip(hand, held, localPoint, weight = 1) {
+  const other = hand === "left" ? "right" : "left";
+  if (world.attacks[other] || getEquippedItem(state, other)) return;
+  held.updateWorldMatrix(true, false);
+  const arm = other === "left" ? world.playerRig.leftArm : world.playerRig.rightArm;
+  const rest = arm.quaternion.clone(), elbowRest = arm.userData.forearm.quaternion.clone();
+  reachHand(arm, held.localToWorld(localPoint));
+  arm.quaternion.slerp(rest, 1-weight);
+  arm.userData.forearm.quaternion.slerp(elbowRest, 1-weight);
+}
+
+function applyAimedRangedPose(hand, draw, loaded, attack = null) {
+  const held = world.heldItems[hand].mesh;
+  if (!held) return;
+  const type = attack?.itemType ?? getEquippedItem(state, hand)?.type;
+  const profile = getCombatProfile(type);
+  const side = HAND_CONFIG[hand].side;
+  const aim = attack ?? { direction: world.aimDirection.clone() };
+  facePlayerTowardAttack(aim);
+  poseAttackArm(hand, -1.35, -side*.16, 0, .12, 0, 0);
+  world.playerMesh.updateWorldMatrix(true, false);
+  const grip = held.parent.getWorldPosition(new THREE.Vector3());
+  const forward = getCursorDirectedAttackVector(aim, grip).normalize();
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), forward).normalize();
+  const up = new THREE.Vector3().crossVectors(forward, right).normalize();
+  const rotation = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right,up,forward));
+  held.position.set(0,0,0);
+  held.quaternion.copy(held.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(rotation));
+  updateHeldRangedModelState(held, type, draw, loaded);
+  const target = profile.family === "bow"
+    ? new THREE.Vector3(0,0,-profile.modelProfile.height*.12-clamp(draw,0,1)*.85)
+    : new THREE.Vector3(0,-.08,.55);
+  supportWeaponGrip(hand, held, target);
+}
+
+function applyCursorDirectedSpearAttack(hand, attack, progress) {
+  const held = world.heldItems?.[hand]?.mesh;
+  const profile = attack.profile ?? getCombatProfile("Spear");
+  const phase = getAttackPhase(profile, progress);
+  const initialDirection = getCursorDirectedAttackVector(attack);
+
+  if (!held || !held.parent || initialDirection.lengthSq() < 0.001) {
+    return;
+  }
+
+  const horizontal = initialDirection.clone().setY(0);
+  if (!world.seatedOnThrone && !isPlayerRolling() && horizontal.lengthSq() > 0.001) {
+    horizontal.normalize();
+    world.playerMesh.rotation.y = Math.atan2(horizontal.x, horizontal.z);
+  }
+
+  const arm = hand === 'left' ? world.playerRig.leftArm : world.playerRig.rightArm;
+  const idleArm = arm.quaternion.clone(), idleElbow = arm.userData.forearm.quaternion.clone(), idleHeld = held.quaternion.clone();
+  const envelope = sampleMeleeMotion(profile, progress).envelope;
+  poseCursorDirectedSpearArms(hand, phase);
+  arm.quaternion.slerp(idleArm, 1-envelope);
+  arm.userData.forearm.quaternion.slerp(idleElbow, 1-envelope);
+  applyPlayerBodyAttackPose(hand, profile, phase, HAND_CONFIG[hand].side, profile.impactProfile?.weight ?? 0.8);
+  world.playerMesh.updateWorldMatrix(true, false);
+
+  // Anchor the weapon to its actual hand mount after the arm pose has been
+  // applied. The spear still receives an independent world-space rotation, so
+  // the arm moves the grip without steering the point away from the cursor.
+  const handPosition = new THREE.Vector3();
+  held.parent.getWorldPosition(handPosition);
+  const direction = getCursorDirectedAttackVector(attack, handPosition);
+
+  setObjectWorldPoseAlongDirection(held, handPosition, direction);
+  held.quaternion.slerp(idleHeld, 1-envelope);
+  seatWeaponInHand(held, arm.userData.hand);
+  supportWeaponGrip(hand, held, new THREE.Vector3(0, .65, 0), envelope);
+  updateWeaponTrailVisual(held, profile, phase.trailPulse, HAND_CONFIG[hand].side);
+}
+
+function applyCursorDirectedDaggerStab(hand, attack, progress) {
+  const held = world.heldItems?.[hand]?.mesh;
+  const profile = attack.profile ?? getCombatProfile("Dagger");
+  const phase = getAttackPhase(profile, progress);
+  const initialDirection = getCursorDirectedAttackVector(attack);
+
+  if (!held || !held.parent || initialDirection.lengthSq() < 0.001) {
+    return;
+  }
+
+  facePlayerTowardAttack(attack);
+  const arm = hand === 'left' ? world.playerRig.leftArm : world.playerRig.rightArm;
+  const idleArm = arm.quaternion.clone(), idleElbow = arm.userData.forearm.quaternion.clone(), idleHeld = held.quaternion.clone();
+  const envelope = sampleMeleeMotion(profile, progress).envelope;
+  poseCursorDirectedDaggerArm(hand, phase);
+  arm.quaternion.slerp(idleArm, 1-envelope);
+  arm.userData.forearm.quaternion.slerp(idleElbow, 1-envelope);
+  applyPlayerBodyAttackPose(hand, profile, phase, HAND_CONFIG[hand].side, profile.impactProfile?.weight ?? 0.5);
+  world.playerMesh.updateWorldMatrix(true, false);
+
+  const handPosition = new THREE.Vector3();
+  held.parent.getWorldPosition(handPosition);
+  const direction = getCursorDirectedAttackVector(attack, handPosition);
+
+  setObjectWorldPoseAlongDirection(held, handPosition, direction);
+  held.quaternion.slerp(idleHeld, 1-envelope);
+  seatWeaponInHand(held, arm.userData.hand);
+  updateWeaponTrailVisual(held, profile, phase.trailPulse, HAND_CONFIG[hand].side);
+}
+
+function facePlayerTowardAttack(attack) {
+  if (world.seatedOnThrone || isPlayerRolling()) {
+    return;
+  }
+
+  const direction = attack?.direction?.clone?.() ?? world.aimDirection.clone();
+  direction.y = 0;
+  if (direction.lengthSq() > 0.001) {
+    direction.normalize();
+    world.playerMesh.rotation.y = Math.atan2(direction.x, direction.z);
+  }
+}
+
+function poseCursorDirectedDaggerArm(hand, phase) {
+  const arm = hand === "left" ? world.playerRig?.leftArm : world.playerRig?.rightArm;
+  const side = HAND_CONFIG[hand].side;
+
+  if (!arm) {
+    return;
+  }
+
+  const extension = phase.commit * (1 - phase.recover);
+  const retraction = phase.anticipation * (1 - phase.commit);
+  arm.position.set(side * 1.04, 4.3, 0.28);
+  arm.rotation.set(
+    -0.72 + retraction * 0.18 - extension * 0.62,
+    side * 0.03,
+    side * (0.14 - extension * 0.04)
+  );
+  setArmJointPose(
+    arm,
+    0.58 + retraction * 0.22 - extension * 0.48,
+    -0.04 - extension * 0.04,
+    side * 0.02
+  );
+}
+
+function getCursorDirectedAttackVector(attack, gripOrigin = null) {
+  const horizontal = attack?.direction?.clone?.() ?? world.aimDirection.clone();
+  horizontal.y = 0;
+
+  if (horizontal.lengthSq() < 0.001) {
+    horizontal.set(0, 0, 1);
+  } else {
+    horizontal.normalize();
+  }
+
+  const grip = gripOrigin?.clone?.() ?? new THREE.Vector3();
+  if (!gripOrigin) {
+    world.playerMesh.getWorldPosition(grip);
+    grip.y += attack?.profile?.pose?.gripHeight ?? 3.72;
+  }
+  const aimPoint = attack?.aimPoint;
+
+  if (!aimPoint) {
+    return horizontal;
+  }
+
+  const direction = aimPoint.clone().sub(grip);
+  // A close aim point can pass behind the moving hand. Keep a committed
+  // melee strike forward instead of flipping the blade through the wrist.
+  if (attack?.profile?.family !== 'bow' && attack?.profile?.family !== 'crossbow') {
+    const forward = direction.x * horizontal.x + direction.z * horizontal.z;
+    if (forward < .65) {
+      direction.x += horizontal.x * (.65 - forward);
+      direction.z += horizontal.z * (.65 - forward);
+    }
+  }
+  return direction.lengthSq() > 0.001 ? direction.normalize() : horizontal;
+}
+
+function poseCursorDirectedSpearArms(hand, phase) {
+  const activeArm = hand === "left" ? world.playerRig?.leftArm : world.playerRig?.rightArm;
+  const supportHand = hand === "left" ? "right" : "left";
+  const supportArm = supportHand === "left" ? world.playerRig?.leftArm : world.playerRig?.rightArm;
+  const activeSide = HAND_CONFIG[hand].side;
+  const supportSide = HAND_CONFIG[supportHand].side;
+  const extension = phase.commit * (1 - phase.recover);
+  const retraction = phase.anticipation * (1 - phase.commit);
+  const brace = phase.anticipation * (1 - phase.recover * 0.7);
+
+  if (activeArm) {
+    activeArm.position.set(activeSide * 1.02, 4.28, 0.3);
+    activeArm.rotation.set(
+      -0.82 + retraction * 0.24 - extension * 0.46,
+      activeSide * 0.035,
+      activeSide * 0.12
+    );
+    setArmJointPose(
+      activeArm,
+      0.42 + retraction * 0.32 - extension * 0.34,
+      -0.04,
+      activeSide * 0.025 * brace
+    );
+  }
+
+  if (supportArm && !world.attacks[supportHand] && !getEquippedItem(state, supportHand)) {
+    supportArm.position.set(supportSide * 0.82, 4.18, 0.42 + extension * 0.06);
+    supportArm.rotation.set(-0.86, supportSide * 0.06, supportSide * 0.2);
+    setArmJointPose(supportArm, 0.5 - extension * 0.08 + phase.recover * 0.06, -0.05, supportSide * 0.03 * brace);
+  }
+}
+
+function setObjectWorldPoseAlongDirection(object, worldPosition, direction) {
+  const parent = object?.parent;
+
+  if (!parent) {
+    return;
+  }
+
+  const spearAxis = direction.clone().normalize();
+  const rollUp = new THREE.Vector3(0, 1, 0).addScaledVector(spearAxis, -spearAxis.y);
+  if (rollUp.lengthSq() < 0.001) {
+    rollUp.set(0, 0, 1);
+  } else {
+    rollUp.normalize();
+  }
+  const right = new THREE.Vector3().crossVectors(spearAxis, rollUp).normalize();
+  const rotationMatrix = new THREE.Matrix4().makeBasis(right, spearAxis, rollUp);
+  const worldQuaternion = new THREE.Quaternion().setFromRotationMatrix(rotationMatrix);
+  const parentQuaternion = new THREE.Quaternion();
+
+  parent.updateWorldMatrix(true, false);
+  parent.getWorldQuaternion(parentQuaternion);
+  object.position.copy(parent.worldToLocal(worldPosition.clone()));
+  object.quaternion.copy(parentQuaternion.invert().multiply(worldQuaternion));
 }
 
 function animateRangedDraw(hand, mount, side) {
@@ -8365,42 +12759,78 @@ function animateRangedDraw(hand, mount, side) {
   }
 
   const draw = 0.28 + chargePower * 0.72;
-  mount.position.z -= draw * 0.62;
-  mount.position.x += side * draw * 0.18;
-  mount.rotation.x -= 0.25 + draw * 0.62;
-  mount.rotation.z += side * draw * 0.46;
-  poseAttackArm(hand, -1.0 + chargePower * 0.12, side * (0.38 - draw * 0.24), draw * 0.1, 0.36 + draw * 0.48, -0.08 * draw, side * 0.05 * draw);
-  updateHeldRangedModelState(world.heldItems?.[hand]?.mesh ?? mount, getEquippedItem(state, hand)?.type, draw, true);
+  applyAimedRangedPose(hand, draw, true);
   document.body.dataset.rangedCharge = chargePower.toFixed(2);
   document.body.dataset.rangedChargeHand = hand;
 }
 
 function resolveMeleeHitAtSwingMoment(attack, progress) {
-  if (attack.hitResolved || attack.kind === "bow" || attack.kind === "crossbow") {
+  if (attack.jumpAttack) { resolveJumpAttackHit(attack, progress); return; }
+  if (attack.hitResolved || isProjectileWeapon(attack.itemType)) return;
+  if (attack.itemType === 'Flail') {
+    damageCombatTargetFromWeaponSegments(getActiveCombatTargets(),attack,attack.flailSegments ?? []);
+    if (progress >= attack.profile.windup+attack.profile.strike) attack.hitResolved=true;
     return;
   }
-
-  const hitMoment = getCombatHitMoment(attack.itemType);
-
-  if (progress < hitMoment) {
+  if (attack.kind === 'unarmed') {
+    if (progress >= getCombatHitMoment(attack.itemType)) { attack.hitResolved = true; damagePveEnemyFromMelee(attack); }
     return;
   }
+  const window = getStrikeWindow(attack.profile);
+  const previous = attack.sampledProgress ?? 0;
+  const from = Math.max(window.start, previous), to = Math.min(window.end, progress);
+  if (to >= from && progress >= window.start) {
+    if (attack.itemType === 'Dagger' && !consumeDaggerAirStrike(attack, world.playerMotion)) {
+      attack.hitResolved = true;
+      return;
+    }
+    const finalPose = captureCombatTransforms();
+    const steps = Math.max(1, Math.ceil((to - from) / .025));
+    for (let i = 0; i <= steps; i++) {
+      restoreCombatTransforms(attack.frameBase);
+      const p = from + (to - from) * i / steps;
+      if (attack.previousFramePosition && progress > previous) {
+        world.playerMesh.position.lerpVectors(attack.previousFramePosition, finalPose.find(e => e.node === world.playerMesh).position,
+          clamp((p - previous) / (progress - previous), 0, 1));
+      }
+      attack.contactSampleAge = Math.max(0, (progress - p) * (attack.duration ?? 0));
+      if (attack.itemType === 'Spear') applyCursorDirectedSpearAttack(attack.hand, attack, p);
+      else if (attack.kind === 'thrust') applyCursorDirectedDaggerStab(attack.hand, attack, p);
+      else applyFocusedMeleePose(attack.hand, attack, p);
+      updateFlailModel(world.heldItems[attack.hand].mesh, p, attack.itemType === 'Flail', attack.slashDirection);
+      damagePveEnemyFromMelee(attack);
+    }
+    restoreCombatTransforms(finalPose);
+    updateFlailModel(world.heldItems[attack.hand].mesh, progress, attack.itemType === 'Flail', attack.slashDirection);
+  }
+  attack.sampledProgress = progress;
+  attack.previousFramePosition = world.playerMesh.position.clone();
+  attack.contactSampleAge = 0;
+  if (progress >= window.end) attack.hitResolved = true;
+}
 
-  attack.hitResolved = true;
-  damagePveEnemyFromMelee(attack);
+function captureCombatTransforms() {
+  const rig = world.playerRig;
+  const nodes = new Set([world.playerMesh, world.playerVisualRoot, ...Object.values(rig).filter(n => n?.isObject3D)]);
+  for (const arm of [rig.leftArm, rig.rightArm, rig.leftLeg, rig.rightLeg]) {
+    for (const node of Object.values(arm?.userData ?? {})) if (node?.isObject3D) nodes.add(node);
+  }
+  for (const hand of ['left','right']) if (world.heldItems[hand].mesh) nodes.add(world.heldItems[hand].mesh);
+  return [...nodes].filter(Boolean).map(node => ({ node, position: node.position.clone(), rotation: node.quaternion.clone() }));
+}
+
+function restoreCombatTransforms(snapshot) {
+  for (const {node, position, rotation} of snapshot) { node.position.copy(position); node.quaternion.copy(rotation); }
 }
 
 function spawnProjectile(hand, attack) {
-  const mount = hand === "left" ? world.leftHandMount : world.rightHandMount;
-  const start = new THREE.Vector3();
   const direction = getHorizontalProjectileDirection(attack);
   const horizontalSpeed = getProjectileHorizontalSpeed(attack);
   const adjustedHorizontalSpeed = horizontalSpeed;
   const chargePower = attack.chargePower ?? 0;
-  const gravity = attack.kind === "crossbow" ? 15 : 24 + chargePower * 8;
+  const gravity = attack.kind === "crossbow" ? 15 : 20 + chargePower * 6;
 
-  mount.getWorldPosition(start);
-  start.addScaledVector(direction, attack.kind === "crossbow" ? 1.2 : 0.85);
+  const start = getRangedProjectileSpawnPoint(hand, attack, direction);
   const velocity = getProjectileLaunchVelocity(start, attack, direction, adjustedHorizontalSpeed, gravity);
   const velocityDirection = velocity.clone();
   velocityDirection.y = 0;
@@ -8419,6 +12849,7 @@ function spawnProjectile(hand, attack) {
     damage: attack.damage,
     penetration: attack.penetration ?? 0,
     knockback: attack.knockback ?? 0,
+    weaponItem: attack.weaponItem,
     itemName: attack.itemName,
     itemType: attack.itemType,
     profile: attack.profile ?? getCombatProfile(attack.itemType),
@@ -8434,6 +12865,96 @@ function spawnProjectile(hand, attack) {
   document.body.dataset.projectilesFired = String(world.projectilesFired);
   document.body.dataset.projectilesActive = String(world.projectiles.length);
   attack.projectileSpawned = true;
+}
+
+function spawnPveEnemyProjectile(enemy, attack, targetPosition) {
+  const weapon = enemy?.mesh?.getObjectByName("pveWeaponVisual");
+  const start = new THREE.Vector3();
+
+  enemy.mesh.updateWorldMatrix(true, true);
+  if (weapon) {
+    weapon.getWorldPosition(start);
+  } else {
+    enemy.mesh.getWorldPosition(start);
+    start.y += 3.25;
+  }
+
+  const aimPoint = new THREE.Vector3(
+    targetPosition.x,
+    getPlayerWorldElevation() + 3.15,
+    targetPosition.z
+  );
+  const direction = aimPoint.clone().sub(start);
+  direction.y = 0;
+  if (direction.lengthSq() < 0.001) {
+    direction.copy(attack.direction ?? new THREE.Vector3(0, 0, 1));
+  }
+  direction.normalize();
+  start.addScaledVector(direction, attack.kind === "crossbow" ? 1 : 0.75);
+
+  const horizontalSpeed = getProjectileHorizontalSpeed(attack);
+  const gravity = attack.kind === "crossbow" ? 15 : 20;
+  const launchAttack = { ...attack, aimPoint };
+  const velocity = getProjectileLaunchVelocity(start, launchAttack, direction, horizontalSpeed, gravity);
+  const projectile = {
+    mesh: createProjectileMesh(attack.kind, 0.55),
+    direction,
+    velocity,
+    gravity,
+    age: 0,
+    travelled: 0,
+    range: attack.range,
+    damage: attack.damage,
+    penetration: attack.penetration,
+    knockback: attack.knockback,
+    itemName: attack.itemName,
+    itemType: attack.itemType,
+    profile: attack.profile,
+    speed: horizontalSpeed,
+    previousPosition: start.clone(),
+    sourceType: "pve",
+    sourceEnemyId: enemy.id,
+    sourceName: enemy.name
+  };
+
+  projectile.mesh.position.copy(start);
+  orientProjectileMesh(projectile);
+  world.scene.add(projectile.mesh);
+  world.projectiles.push(projectile);
+  world.projectilesFired += 1;
+  document.body.dataset.projectilesFired = String(world.projectilesFired);
+  document.body.dataset.projectilesActive = String(world.projectiles.length);
+  attack.projectileSpawned = true;
+  attack.hitResolved = true;
+}
+
+function getRangedProjectileSpawnPoint(hand, attack, direction) {
+  const held = world.heldItems?.[hand]?.mesh;
+  const arrow = held?.getObjectByName(attack.kind === "crossbow" ? "crossbowBolt" : "bowArrow");
+  if (arrow) {
+    arrow.updateWorldMatrix(true, false);
+    return arrow.getWorldPosition(new THREE.Vector3());
+  }
+  const mount = hand === "left" ? world.leftHandMount : world.rightHandMount;
+  const start = new THREE.Vector3();
+
+  mount.getWorldPosition(start);
+
+  if (attack.kind === "crossbow") {
+    return start.addScaledVector(direction, 1.2);
+  }
+
+  const side = HAND_CONFIG[hand]?.side ?? 1;
+  const right = new THREE.Vector3(direction.z, 0, -direction.x);
+  if (right.lengthSq() > 0.001) {
+    right.normalize();
+  }
+
+  const playerElevation = getPlayerWorldElevation();
+  start.set(state.player.position.x, Math.max(start.y, playerElevation + 3.15), state.player.position.z);
+  start.addScaledVector(direction, 1.25);
+  start.addScaledVector(right, side * 0.38);
+  return start;
 }
 
 function getHorizontalProjectileDirection(attack) {
@@ -8502,15 +13023,45 @@ function getProjectileAimPoint(start, attack) {
     return aimPoint;
   }
 
-  const rayDirection = attack?.aimRayDirection?.clone?.() ?? world.aimRayDirection.clone();
-  const verticalSlope = rayDirection.lengthSq() > 0.001 ? rayDirection.normalize().y : 0;
-  const cappedDirection = horizontalOffset.normalize();
+  const rayPoint = getPointOnAimRayAtDistance(start, attack, maxDistance);
+  if (rayPoint) {
+    return rayPoint;
+  }
 
+  const cappedDirection = horizontalOffset.normalize();
   return new THREE.Vector3(
     start.x + cappedDirection.x * maxDistance,
-    start.y + verticalSlope * maxDistance,
+    start.y,
     start.z + cappedDirection.z * maxDistance
   );
+}
+
+function getPointOnAimRayAtDistance(start, attack, distance) {
+  const rayOrigin = attack?.aimRayOrigin?.clone?.() ?? world.aimRayOrigin.clone();
+  const rayDirection = attack?.aimRayDirection?.clone?.() ?? world.aimRayDirection.clone();
+
+  if (rayDirection.lengthSq() < 0.001) {
+    return null;
+  }
+
+  rayDirection.normalize();
+  const originToStart = rayOrigin.clone().sub(start);
+  const b = 2 * originToStart.dot(rayDirection);
+  const c = originToStart.lengthSq() - distance * distance;
+  const discriminant = b * b - 4 * c;
+
+  if (discriminant < 0) {
+    return null;
+  }
+
+  const root = Math.sqrt(discriminant);
+  const t = Math.max((-b - root) / 2, (-b + root) / 2);
+
+  if (!Number.isFinite(t) || t <= 0) {
+    return null;
+  }
+
+  return rayOrigin.addScaledVector(rayDirection, t);
 }
 
 function spawnTowerProjectile(drawPower) {
@@ -8538,7 +13089,8 @@ function spawnTowerProjectile(drawPower) {
     damage: 18 + drawPower * 14,
     knockback: 2 + drawPower * 2.5,
     speed,
-    previousPosition: start.clone()
+    previousPosition: start.clone(),
+    sourceStructureId: world.outpostTower.structureId
   };
 
   projectile.mesh.position.copy(start);
@@ -8683,6 +13235,7 @@ function updateProjectiles(deltaSeconds) {
     orientProjectileMesh(projectile);
 
     if (getProjectileSceneryHit(projectile)) {
+      wearWeaponOnHit(projectile);
       projectile.travelled = projectile.range;
       continue;
     }
@@ -8690,6 +13243,7 @@ function updateProjectiles(deltaSeconds) {
     const hit = getProjectileEnemyHit(projectile);
 
     if (hit) {
+      wearWeaponOnHit(projectile);
       projectile.impactPosition = projectile.mesh.position.clone();
       triggerCombatImpactFeedback(hit, projectile, projectile.impactPosition);
       damageCombatTarget(hit, projectile.damage, projectile.sourceType === "outpost" ? "outpost" : "projectile", projectile);
@@ -8725,6 +13279,7 @@ function isProjectileExpired(projectile) {
 
 function updateDroppedItems(deltaSeconds) {
   for (const drop of world.droppedItems) {
+    drop.mesh.visible = drop.shared ? sameLootScene(world, drop) : world.sceneMode === "outdoor";
     drop.mesh.rotation.y += deltaSeconds * 0.75;
     drop.mesh.position.y = drop.baseY + Math.sin(state.elapsed * 2.4 + drop.phase) * 0.08;
   }
@@ -8761,11 +13316,26 @@ function getProjectileEnemyHit(projectile) {
 }
 
 function getProjectileCombatTargets(projectile) {
-  if (projectile.sourceType !== "outpost") {
-    return getActiveCombatTargets();
+  if (projectile.sourceType === "pve" && world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon" && isDungeonEntranceSafe()) return [];
+  const targets = projectile.sourceType === "outpost"
+    ? getOutpostProjectileTargets(projectile)
+    : projectile.sourceType === "pve"
+      ? getPveProjectileTargets()
+      : getActiveCombatTargets();
+
+  if (!projectile.sourceStructureId) {
+    return targets;
   }
 
-  return getOutpostProjectileTargets(projectile);
+  return targets.filter((target) => !target.isStructure || target.structure?.id !== projectile.sourceStructureId);
+}
+
+function getPveProjectileTargets() {
+  if (state.player.dead || world.outpostTower.active) {
+    return [];
+  }
+
+  return [getLocalPlayerCombatTarget()];
 }
 
 function getOutpostProjectileTargets(projectile) {
@@ -8782,12 +13352,20 @@ function getActiveCombatEnemies() {
     return [];
   }
 
-  if (world.sceneMode === "poiInterior" && world.activePoiInteriorId === "ebon-hollow") {
+  if (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon") {
     return world.pveEnemies;
   }
 
+  if (world.sceneMode === "interior") {
+    return world.outdoorMonsters.filter(mob => mob.raidInteriorType === "Castle" && mob.raidInteriorId === world.interiorFactionId);
+  }
+
+  if (world.sceneMode === "poiInterior") {
+    return world.outdoorMonsters.filter(mob => mob.raidInteriorId === world.activePoiInteriorId);
+  }
+
   if (world.sceneMode === "outdoor") {
-    return world.outdoorMonsters;
+    return world.outdoorMonsters.filter(mob => !mob.raidInteriorId);
   }
 
   return [];
@@ -8811,8 +13389,22 @@ function getAttackableStructures() {
     .filter((structure) => structure.hp > 0)
     .map((structure) => {
       const mesh = world.meshes.structures.get(structure.id);
-      const radius = structure.type === "wall" ? 6.4 : structure.type === "depot" ? 5.5 : 4.6;
-      const hitMaxY = structure.type === "outpost" ? 17 : structure.type === "wall" ? 5.5 : 10.5;
+      const radius =
+        structure.type === "wall"
+          ? 6.4
+          : structure.type === "depot"
+            ? 5.5
+            : structure.type === "street-lamp"
+              ? 2.2
+              : 4.6;
+      const hitMaxY =
+        structure.type === "outpost"
+          ? 17
+          : structure.type === "wall"
+            ? 5.5
+            : structure.type === "street-lamp"
+              ? 9.5
+              : 10.5;
 
       return {
         id: structure.id,
@@ -8914,7 +13506,7 @@ function getEntityStatusEntries() {
       });
   }
 
-  if (world.sceneMode === "poiInterior" && world.activePoiInteriorId === "ebon-hollow") {
+  if (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon") {
     for (const enemy of world.pveEnemies) {
       if (!enemy.mesh.visible) {
         continue;
@@ -8929,8 +13521,14 @@ function getEntityStatusEntries() {
     }
   }
 
+  if (world.sceneMode === "interior" || (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type !== "Dungeon")) {
+    for (const monster of getActiveCombatEnemies()) {
+      entries.push({ key: getPveStatusKey(monster.id), mesh: monster.mesh, sprite: monster.healthBar, dead: monster.dead });
+    }
+  }
+
   if (world.sceneMode === "outdoor") {
-    for (const monster of world.outdoorMonsters) {
+    for (const monster of world.outdoorMonsters.filter(mob => !mob.raidInteriorId)) {
       if (!monster.mesh.visible) {
         continue;
       }
@@ -8991,7 +13589,7 @@ function getHoveredStatusEntityKey(entries) {
   }
 
   world.raycaster.setFromCamera(ndc, world.camera);
-  const hits = world.raycaster.intersectObjects(entries.map((entry) => entry.mesh), true);
+  const hits = world.raycaster.intersectObjects(statusPickCandidates(entries, world.raycaster.ray), true);
 
   for (const hit of hits) {
     const key = findStatusEntityKey(hit.object);
@@ -9057,11 +13655,12 @@ function getCourierStatusKey(id) {
 }
 
 function getProjectileSceneryHit(projectile) {
+  if (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon" && crossesClosedDungeonGate(world.dungeon.gate, projectile.previousPosition, projectile.mesh.position)) return world.dungeon.gate;
   if (world.sceneMode !== "outdoor") {
     return null;
   }
 
-  for (const collider of world.sceneryColliders) {
+  for (const collider of world.sceneryGrid.query(Math.min(projectile.previousPosition.x, projectile.mesh.position.x)-0.12, Math.min(projectile.previousPosition.z, projectile.mesh.position.z)-0.12, Math.max(projectile.previousPosition.x, projectile.mesh.position.x)+0.12, Math.max(projectile.previousPosition.z, projectile.mesh.position.z)+0.12)) {
     const segmentHit = getHorizontalSegmentHit(
       projectile.previousPosition,
       projectile.mesh.position,
@@ -9095,23 +13694,26 @@ function getHorizontalSegmentHit(start, end, point) {
   };
 }
 
+function wearWeaponOnHit(attack) {
+  const item = attack.weaponItem;
+  if (attack.durabilityConsumed || !item?.id || !state.player.inventory.includes(item)) return;
+  attack.durabilityConsumed = true;
+  const result = damageInventoryItem(state, item, 1);
+  attack.broken = result.broken;
+  markPlayerPersistenceDue();
+  if (result.broken) {
+    flash(item.name + ' broke and was removed from your inventory.');
+    refreshUi();
+  }
+  // Ordinary wear is shown by the regular HUD refresh, not a full rebuild per hit.
+}
+
 function damagePveEnemyFromMelee(attack) {
   const enemies = getActiveCombatTargets();
-
-  if (!enemies.length) {
-    return;
-  }
-
-  const weaponSegments = getAttackWeaponHitSegments(attack);
-
-  if (weaponSegments.length) {
-    showCombatDebugSegments(weaponSegments);
-    if (damageCombatTargetFromWeaponSegments(enemies, attack, weaponSegments)) {
-      return;
-    }
-  }
-
-  damageCombatTargetFromAimProfile(enemies, attack);
+  if (attack.kind === 'unarmed') { damageCombatTargetFromAimProfile(enemies, attack); return; }
+  const segments = getAttackWeaponHitSegments(attack);
+  showCombatDebugSegments(segments);
+  damageCombatTargetFromWeaponSegments(enemies, attack, segments);
 }
 
 function getAttackWeaponHitSegments(attack) {
@@ -9120,17 +13722,20 @@ function getAttackWeaponHitSegments(attack) {
   }
 
   const held = world.heldItems?.[attack.hand]?.mesh;
-  const segments = held?.userData?.weaponHitSegments;
+  let segments = held?.userData?.weaponHitSegments;
+  if (attack.kind === 'thrust' && attack.itemType !== 'Spear' && segments?.length) {
+    segments = segments.map(s => ({ ...s, start: [s.end[0], s.end[1] - .6, s.end[2]], radius: .15 }));
+  }
 
   if (!held || !Array.isArray(segments) || !segments.length) {
     return [];
   }
 
-  held.updateWorldMatrix(true, true);
+  held.updateWorldMatrix(true, false);
   return segments
     .map((segment) => {
-      const start = held.localToWorld(new THREE.Vector3(...segment.start));
-      const end = held.localToWorld(new THREE.Vector3(...segment.end));
+      const start = new THREE.Vector3(...segment.start).applyMatrix4(held.matrixWorld);
+      const end = new THREE.Vector3(...segment.end).applyMatrix4(held.matrixWorld);
 
       return {
         start,
@@ -9142,56 +13747,56 @@ function getAttackWeaponHitSegments(attack) {
 }
 
 function damageCombatTargetFromWeaponSegments(enemies, attack, weaponSegments) {
-  let best = null;
-
+  world.weaponTrails?.sample(attack, weaponSegments, attack.contactSampleAge ?? 0);
+  attack.hitTargets ??= new Set();
+  const maxTargets = attack.jumpAttack === 'plant' ? 1 : attack.itemType === 'Spear' ? 5 : attack.kind === 'thrust' ? 1 : (attack.profile.maxTargets ?? 1);
+  const hits = [];
   for (const enemy of enemies) {
-    if (enemy.dead) {
-      continue;
-    }
-
+    const key = enemy.id ?? enemy.mesh?.uuid;
+    if (enemy.dead || attack.hitTargets.has(key)) continue;
     for (const segment of weaponSegments) {
       const hit = getWeaponSegmentTargetHit(segment, enemy);
-
-      if (!hit) {
-        continue;
-      }
-
-      const targetDistance = Math.hypot(
-        hit.targetPosition.x - state.player.position.x,
-        hit.targetPosition.z - state.player.position.z
-      );
-      const score = hit.distance + targetDistance * 0.035;
-
-      if (!best || score < best.score) {
-        best = { enemy, hit, score };
-      }
+      if (hit) { hits.push({ enemy, key, hit, distance: hit.point.distanceTo(world.playerMesh.position) }); break; }
     }
   }
-
-  if (!best) {
-    return false;
+  hits.sort((a,b) => a.distance - b.distance);
+  for (const {enemy, key, hit} of hits) {
+    if (attack.hitTargets.size >= maxTargets) break;
+    attack.hitTargets.add(key);
+    wearWeaponOnHit(attack);
+    attack.impactPosition = hit.point;
+    triggerCombatImpactFeedback(enemy, attack, hit.point);
+    damageCombatTarget(enemy, attack.damage, attack.itemName, attack);
   }
-
-  attack.impactPosition = best.hit.point;
-  triggerCombatImpactFeedback(best.enemy, attack, best.hit.point);
-  damageCombatTarget(best.enemy, attack.damage, attack.itemName, attack);
-  return true;
+  return hits.length > 0;
 }
 
 function getWeaponSegmentTargetHit(segment, target) {
   const targetPosition = getCombatTargetBaseWorldPosition(target);
   const targetRadius = target.radius ?? 1.1;
-  const segmentHit = getHorizontalSegmentHit(segment.start, segment.end, targetPosition);
   const baseY = targetPosition.y ?? 0;
   const minY = baseY + (target.hitMinY ?? 0.6);
   const maxY = baseY + (target.hitMaxY ?? 5.6);
   const verticalPadding = segment.radius + 0.18;
 
-  if (segmentHit.distance > targetRadius + segment.radius) {
-    return null;
+  // Clip to the target's vertical extent before finding horizontal distance.
+  // A descending cut can intersect the torso even when its nearest XZ point
+  // lies below the feet; testing only that point used to discard valid hits.
+  const dy = segment.end.y - segment.start.y;
+  let from = 0, to = 1;
+  if (Math.abs(dy) < 1e-8) {
+    if (segment.start.y < minY - verticalPadding || segment.start.y > maxY + verticalPadding) return null;
+  } else {
+    const a = (minY - verticalPadding - segment.start.y) / dy;
+    const b = (maxY + verticalPadding - segment.start.y) / dy;
+    from = Math.max(0, Math.min(a, b));
+    to = Math.min(1, Math.max(a, b));
+    if (from > to) return null;
   }
+  const segmentHit = getHorizontalSegmentHit(segment.start.clone().lerp(segment.end, from),
+    segment.start.clone().lerp(segment.end, to), targetPosition);
 
-  if (segmentHit.y < minY - verticalPadding || segmentHit.y > maxY + verticalPadding) {
+  if (segmentHit.distance > targetRadius + segment.radius) {
     return null;
   }
 
@@ -9220,12 +13825,17 @@ function damageCombatTargetFromAimProfile(enemies, attack) {
   direction.y = 0;
 
   if (direction.lengthSq() < 0.001) {
-    return;
+    return false;
   }
 
   direction.normalize();
   const right = new THREE.Vector3(direction.z, 0, -direction.x);
   const profile = getMeleeHitProfile(attack.itemType, attack.kind, attack.range);
+  if (attack.comboHitVolume) {
+    Object.assign(profile, attack.comboHitVolume);
+    profile.reach = Math.max(0.6, Number(attack.range) || 1.4) + profile.reachBonus;
+    profile.sweetSpot = Math.max(0.4, profile.reach * (attack.kind === "thrust" ? 0.72 : 0.58));
+  }
   let best = null;
 
   for (const enemy of enemies) {
@@ -9255,10 +13865,8 @@ function damageCombatTargetFromAimProfile(enemies, attack) {
       continue;
     }
 
-    const sweepSide = attack.slashDirection || 1;
-    const sweepBonus = attack.kind === "slash" ? Math.max(0, lateralDistance * sweepSide) * 0.12 : 0;
     const lateralPenalty = Math.max(0, Math.abs(lateralDistance) - profile.halfWidth * 0.55) * 0.75;
-    const score = Math.abs(forwardDistance - profile.sweetSpot) * 0.55 + lateralPenalty + distance * 0.1 - sweepBonus;
+    const score = Math.abs(forwardDistance - profile.sweetSpot) * 0.55 + lateralPenalty + distance * 0.1;
 
     if (!best || score < best.score) {
       best = { enemy, score };
@@ -9268,7 +13876,10 @@ function damageCombatTargetFromAimProfile(enemies, attack) {
   if (best) {
     triggerCombatImpactFeedback(best.enemy, attack, null);
     damageCombatTarget(best.enemy, attack.damage, attack.itemName, attack);
+    return true;
   }
+
+  return false;
 }
 
 function triggerCombatImpactFeedback(target, attack, impactPosition = null, options = {}) {
@@ -9276,12 +13887,17 @@ function triggerCombatImpactFeedback(target, attack, impactPosition = null, opti
   const impact = profile.impactProfile ?? {};
   const weight = impact.weight ?? 0.55;
 
-  if (options.hitstop !== false) {
-    world.combatFeedback.hitstop = Math.max(world.combatFeedback.hitstop, impact.hitstop ?? 0.035);
+  if (options.hitstop !== false && !attack?.impactPauseApplied) {
+    world.combatFeedback.hitstop = Math.max(world.combatFeedback.hitstop, Math.min(.025, impact.hitstop ?? .025));
+    if (attack) attack.impactPauseApplied = true;
   }
   world.combatFeedback.cameraImpulse = Math.max(world.combatFeedback.cameraImpulse, impact.camera ?? 0.014);
   world.combatFeedback.cameraPhase = 0;
   document.body.dataset.lastCombatImpact = `${profile.family}:${Math.round(weight * 100)}`;
+
+  if (attack?.hand) {
+    showCombatHitMarker(attack);
+  }
 
   if (impactPosition) {
     attack.impactPosition = impactPosition;
@@ -9296,6 +13912,22 @@ function triggerCombatImpactFeedback(target, attack, impactPosition = null, opti
       direction
     };
   }
+}
+
+function showCombatHitMarker(attack) {
+  const marker = ui.combatHitMarker;
+
+  if (!marker) {
+    return;
+  }
+
+  const screenX = Number.isFinite(attack.screenX) ? attack.screenX : window.innerWidth * 0.5;
+  const screenY = Number.isFinite(attack.screenY) ? attack.screenY : window.innerHeight * 0.5;
+  marker.style.left = `${screenX}px`;
+  marker.style.top = `${screenY}px`;
+  marker.classList.remove("is-active");
+  void marker.offsetWidth;
+  marker.classList.add("is-active");
 }
 
 function updateCombatHitReaction(entity, deltaSeconds) {
@@ -9358,13 +13990,17 @@ function updateCombatDebugVisuals() {
 }
 
 function applyPveEnemyHitToPlayer(enemy) {
+  if (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon" && isDungeonEntranceSafe()) return;
   if (!enemy || state.player.dead) {
     return;
   }
 
-  const stats = enemy.weapon?.weapon ?? {};
+  const stats = getPveEnemyAttackStats(enemy);
   const rawDamage = Math.max(1, Math.round(Number(stats.damage) || 8));
-  const damage = mitigateDamageWithArmor(rawDamage, Number(stats.penetration) || 0, getEquippedArmorItems(), { wear: true });
+  if (isPlayerDodging()) return;
+  const block = blockLocalDamage(rawDamage, enemy.mesh.position, stats.knockback ?? 0);
+  const damage = block.damage > 0 ? mitigateDamageWithArmor(block.damage, Number(stats.penetration) || 0, getEquippedArmorItems(), { wear: true }) : 0;
+  if (block.parried) { enemy.attackTimer = Math.max(enemy.attackTimer, .8); enemy.shoveStaggerTimer = .55; }
   const previousHp = state.player.hp ?? state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   const attackDirection = new THREE.Vector3(
     state.player.position.x - enemy.mesh.position.x,
@@ -9376,7 +14012,7 @@ function applyPveEnemyHitToPlayer(enemy) {
     attackDirection.normalize();
   }
 
-  applyKnockbackToLocalPlayer(enemy.mesh.position, stats.knockback ?? 0);
+  applyKnockbackToLocalPlayer(enemy.mesh.position, block.knockback);
   triggerCombatImpactFeedback(getLocalPlayerCombatTarget(), {
     itemType: enemy.weapon?.type ?? "Empty Hand",
     profile: getCombatProfile(enemy.weapon?.type ?? "Empty Hand"),
@@ -9384,7 +14020,9 @@ function applyPveEnemyHitToPlayer(enemy) {
   }, null, { hitstop: false });
   state.player.maxHp = state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   state.player.hp = Math.max(0, previousHp - damage);
-  spawnBloodSplat({ mesh: world.playerMesh, radius: 1.15, hitMinY: 0.8, hitMaxY: 5.4 }, null, damage);
+  world.multiplayer.damageInputSequence = world.multiplayer.nextInputSequence;
+  markPlayerPersistenceDue();
+  if (damage > 0) spawnBloodSplat({ mesh: world.playerMesh, radius: 1.15, hitMinY: 0.8, hitMaxY: 5.4 }, null, damage);
   updatePlayerHealthBar();
   refreshUi();
 
@@ -9393,9 +14031,10 @@ function applyPveEnemyHitToPlayer(enemy) {
   }
 
   state.player.dead = true;
+  loseCarriedResources();
   world.multiplayer.localDefeated = true;
   world.multiplayer.respawnAt = Date.now() + PLAYER_RESPAWN_DELAY_MS;
-  placePlayerAtRespawnPoint();
+  showDeathScreen();
   flash("You were defeated.");
 }
 
@@ -9450,7 +14089,12 @@ function wearArmorItems(armorItems, rawDamage) {
   const item = randomItem(wearable);
   const toughness = Math.max(1, Number(item.armor?.toughness) || 1);
   const wear = Math.max(1, Math.round(rawDamage / (toughness + 8)));
-  item.durability = Math.max(0, item.durability - wear);
+  const result = damageInventoryItem(state, item, wear);
+  markPlayerPersistenceDue();
+
+  if (result.broken) {
+    flash(`${item.name} broke and was removed from your inventory.`);
+  }
 }
 
 function damageCombatTarget(target, amount, source, attack) {
@@ -9586,6 +14230,7 @@ function sendPlayerAttack(target, amount, source, attack) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       attackerId: state.player.id,
+      attackId: attack?.id ?? null,
       targetId: target.id,
       damage: amount,
       penetration: attack?.penetration ?? 0,
@@ -9628,22 +14273,27 @@ function sendPlayerAttack(target, amount, source, attack) {
 }
 
 function damageLocalPlayerTarget(target, amount, source, attack = null) {
-  if (state.player.dead) {
+  if (state.player.dead || (!attack?.unavoidable && isPlayerDodging())) {
     return;
   }
 
   const rawDamage = Math.max(1, Math.round(Number(amount) || 1));
-  const damage = mitigateDamageWithArmor(rawDamage, Number(attack?.penetration) || 0, getEquippedArmorItems(), { wear: true });
+  const incoming = attack?.direction;
+  const shieldSource = incoming ? { x: state.player.position.x - incoming.x * 10, z: state.player.position.z - incoming.z * 10 } : attack?.previousPosition;
+  const block = attack?.unavoidable ? { damage: rawDamage, knockback: 0 } : blockLocalDamage(rawDamage, shieldSource, attack?.knockback ?? 0);
+  const damage = block.damage > 0 ? mitigateDamageWithArmor(block.damage, Number(attack?.penetration) || 0, getEquippedArmorItems(), { wear: true }) : 0;
   const previousHp = state.player.hp ?? state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   const sourcePosition = attack?.mesh?.position ?? attack?.previousPosition ?? null;
 
   if (sourcePosition) {
-    applyKnockbackToLocalPlayer(sourcePosition, attack?.knockback ?? 0);
+    applyKnockbackToLocalPlayer(sourcePosition, block.knockback);
   }
 
   state.player.maxHp = state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   state.player.hp = Math.max(0, previousHp - damage);
-  if (!isBloodlessAttack(attack, source)) {
+  world.multiplayer.damageInputSequence = world.multiplayer.nextInputSequence;
+  markPlayerPersistenceDue();
+  if (damage > 0 && !isBloodlessAttack(attack, source)) {
     spawnBloodSplat(target, attack, damage);
   }
   updatePlayerHealthBar();
@@ -9651,9 +14301,10 @@ function damageLocalPlayerTarget(target, amount, source, attack = null) {
 
   if (state.player.hp <= 0) {
     state.player.dead = true;
+    loseCarriedResources();
     world.multiplayer.localDefeated = true;
     world.multiplayer.respawnAt = Date.now() + PLAYER_RESPAWN_DELAY_MS;
-    placePlayerAtRespawnPoint();
+    showDeathScreen();
     flash(`You were defeated by ${attack?.sourceName ?? "an outpost"}.`);
   } else {
     flash(`${attack?.sourceName ?? "Outpost"} hit you for ${damage}.`);
@@ -9684,6 +14335,8 @@ function damagePveEnemy(enemy, amount, source, attack = null) {
   if (enemy.hp <= 0) {
     enemy.dead = true;
     enemy.deathTimer = 0;
+    enemy.spells?.clear();
+    if (enemy.bossElement) withDungeon(enemy.dungeonId, () => beginDungeonCollapse());
     resetPveEnemyAttackState(enemy);
     const droppedItems = getDroppedLootItems(enemy);
 
@@ -9696,18 +14349,24 @@ function damagePveEnemy(enemy, amount, source, attack = null) {
     }
 
     const renownGain = Math.max(1, Math.round(enemy.maxHp / 8));
+    const goldDrop = droppedItems.find((item) => item.goldAmount);
+    const equipmentDrops = droppedItems.filter((item) => !item.goldAmount);
 
-    if (droppedItems.length) {
-      state.player.inventory.push(...droppedItems);
-      state.player.selectedGearItemId = droppedItems[0].id;
+    if (equipmentDrops.length) {
+      state.player.inventory.push(...equipmentDrops);
+      state.player.selectedGearItemId = equipmentDrops[0].id;
     }
 
-    state.player.renown += renownGain;
+    if (goldDrop) {
+      state.player.gold += goldDrop.goldAmount;
+    }
+
+    state.player.prowess = (state.player.prowess || 0) + (renownGain);
     markPersistenceDirty();
     refreshUi();
     flash(droppedItems.length
-      ? `${enemy.name} defeated. Looted ${formatLootNames(droppedItems)} and gained ${renownGain} renown.`
-      : `${enemy.name} defeated. Gained ${renownGain} renown.`);
+      ? `${enemy.name} defeated. Looted ${formatLootNames(droppedItems)} and gained ${renownGain} prowess.${enemy.bossElement ? " Dungeon collapsing! Escape within 4 minutes!" : ""}`
+      : `${enemy.name} defeated. Gained ${renownGain} prowess.`);
   } else if (source !== "outpost") {
     flash(`${enemy.name} hit for ${Math.round(damage)}.`);
   }
@@ -9730,61 +14389,11 @@ function isBloodlessDamageSource(source = "") {
 }
 
 function spawnBloodSplat(target, attack = null, amount = 1) {
-  if (!target?.mesh) {
-    return;
-  }
-
+  if (!target?.mesh) return;
+  world.bloodEffects ??= new BloodEffects(world.scene, getBloodSplatTexture(), 24,
+    BLOOD_SPLAT_DROPLET_COUNT, BLOOD_SPLAT_LIFETIME);
   const impact = getBloodImpactPosition(target, attack);
-  const sprayDirection = getBloodSprayDirection(target, impact, attack);
-  const texture = getBloodSplatTexture();
-  const material = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    opacity: 0.95,
-    depthTest: false,
-    depthWrite: false
-  });
-  material.rotation = randomBetween(-Math.PI, Math.PI);
-
-  const sprite = new THREE.Sprite(material);
-  const scale = clamp(1.9 + Math.sqrt(Math.max(1, amount)) * 0.24, 2.1, 4.6);
-  sprite.position.copy(impact).addScaledVector(sprayDirection, 0.44);
-  sprite.renderOrder = 900;
-  sprite.scale.set(scale, scale * randomBetween(0.78, 1.16), 1);
-  world.scene.add(sprite);
-
-  const droplets = [];
-  for (let index = 0; index < BLOOD_SPLAT_DROPLET_COUNT; index += 1) {
-    const dropletMaterial = new THREE.MeshBasicMaterial({
-      color: index % 3 === 0 ? "#4a0505" : "#850909",
-      transparent: true,
-      opacity: 0.9,
-      depthTest: false,
-      depthWrite: false
-    });
-    const droplet = new THREE.Mesh(new THREE.SphereGeometry(randomBetween(0.055, 0.14), 6, 4), dropletMaterial);
-    const side = new THREE.Vector3(
-      randomBetween(-0.8, 0.8),
-      randomBetween(-0.1, 0.7),
-      randomBetween(-0.8, 0.8)
-    );
-    const velocity = sprayDirection.clone()
-      .multiplyScalar(randomBetween(3.2, 7.8))
-      .add(side)
-      .add(new THREE.Vector3(0, randomBetween(1.7, 5.1), 0));
-    droplet.position.copy(impact).addScaledVector(sprayDirection, 0.5);
-    droplet.renderOrder = 901;
-    world.scene.add(droplet);
-    droplets.push({ mesh: droplet, velocity });
-  }
-
-  world.bloodSplats.push({
-    sprite,
-    droplets,
-    age: 0,
-    lifetime: BLOOD_SPLAT_LIFETIME,
-    baseScale: sprite.scale.clone()
-  });
+  world.bloodEffects.spawn(impact, getBloodSprayDirection(target, impact, attack), amount);
 }
 
 function getBloodImpactPosition(target, attack) {
@@ -9832,46 +14441,10 @@ function getBloodSprayDirection(target, impact, attack) {
 }
 
 function updateBloodSplats(deltaSeconds) {
-  if (!world.bloodSplats.length) {
-    return;
-  }
-
-  const remaining = [];
-  for (const effect of world.bloodSplats) {
-    effect.age += deltaSeconds;
-    const progress = clamp(effect.age / effect.lifetime, 0, 1);
-    const fade = 1 - easeOut(progress);
-
-    effect.sprite.material.opacity = 0.95 * fade;
-    effect.sprite.scale.copy(effect.baseScale).multiplyScalar(1 + progress * 0.34);
-
-    for (const droplet of effect.droplets) {
-      droplet.velocity.y -= 9.5 * deltaSeconds;
-      droplet.mesh.position.addScaledVector(droplet.velocity, deltaSeconds);
-      droplet.mesh.material.opacity = 0.9 * fade;
-    }
-
-    if (progress < 1) {
-      remaining.push(effect);
-      continue;
-    }
-
-    disposeBloodSplat(effect);
-  }
-
-  world.bloodSplats = remaining;
+  world.bloodEffects?.update(deltaSeconds);
 }
 
-function disposeBloodSplat(effect) {
-  removeFromParent(effect.sprite);
-  effect.sprite.material.dispose();
 
-  for (const droplet of effect.droplets) {
-    removeFromParent(droplet.mesh);
-    droplet.mesh.geometry.dispose();
-    droplet.mesh.material.dispose();
-  }
-}
 
 function getBloodSplatTexture() {
   if (world.bloodSplatTexture) {
@@ -9933,9 +14506,35 @@ function applyKnockbackToPveEnemy(enemy, attack) {
     return;
   }
 
-  const direction = getKnockbackDirection(attack?.direction, state.player.position, enemy.mesh.position);
+  const isEmptyHandShove = attack?.itemType === "Empty Hand" || attack?.kind === "unarmed";
+  const isSpearThrust = attack?.itemType === "Spear" && attack?.kind === "thrust";
+  const direction = getKnockbackDirection(
+    isEmptyHandShove ? null : attack?.direction,
+    state.player.position,
+    enemy.mesh.position
+  );
   enemy.knockbackVelocity = enemy.knockbackVelocity ?? new THREE.Vector3(0, 0, 0);
-  addKnockbackImpulse(enemy.knockbackVelocity, direction, knockback, PVE_KNOCKBACK_IMPULSE_SCALE);
+  addKnockbackImpulse(
+    enemy.knockbackVelocity,
+    direction,
+    knockback,
+    isEmptyHandShove
+      ? PVE_SHOVE_KNOCKBACK_IMPULSE_SCALE
+      : isSpearThrust
+        ? SPEAR_KNOCKBACK_IMPULSE_SCALE
+        : PVE_KNOCKBACK_IMPULSE_SCALE,
+    isEmptyHandShove
+      ? PVE_SHOVE_KNOCKBACK_MAX_SPEED
+      : isSpearThrust
+        ? SPEAR_KNOCKBACK_MAX_SPEED
+        : KNOCKBACK_MAX_SPEED
+  );
+  if (isEmptyHandShove || isSpearThrust) {
+    const staggerDuration = isEmptyHandShove ? PVE_SHOVE_STAGGER_DURATION : SPEAR_HIT_STAGGER_DURATION;
+    enemy.shoveStaggerTimer = Math.max(enemy.shoveStaggerTimer ?? 0, staggerDuration);
+    enemy.attackTimer = Math.max(enemy.attackTimer ?? 0, staggerDuration);
+    resetPveEnemyAttackState(enemy);
+  }
 }
 
 function applyKnockbackToLocalPlayer(sourcePosition, knockback) {
@@ -9949,16 +14548,16 @@ function applyKnockbackToLocalPlayer(sourcePosition, knockback) {
   addKnockbackImpulse(world.playerMotion.knockbackVelocity, direction, amount, PLAYER_KNOCKBACK_IMPULSE_SCALE);
 }
 
-function addKnockbackImpulse(velocity, direction, amount, scale) {
+function addKnockbackImpulse(velocity, direction, amount, scale, maxSpeed = KNOCKBACK_MAX_SPEED) {
   if (!velocity || !direction || amount <= 0) {
     return;
   }
 
-  const impulse = clamp(amount * scale, 1.8, KNOCKBACK_MAX_SPEED);
+  const impulse = clamp(amount * scale, 1.8, maxSpeed);
   velocity.addScaledVector(direction, impulse);
 
-  if (velocity.length() > KNOCKBACK_MAX_SPEED) {
-    velocity.setLength(KNOCKBACK_MAX_SPEED);
+  if (velocity.length() > maxSpeed) {
+    velocity.setLength(maxSpeed);
   }
 }
 
@@ -9991,15 +14590,37 @@ function movePveEntityTo(entity, position, options = {}) {
   }
 
   if (options.outdoor) {
-    const resolved = resolveOutdoorSceneryCollision(
-      {
-        x: clamp(position.x, -248, 248),
-        z: clamp(position.z, -248, 248)
-      },
-      entity.radius ?? 1.1
-    );
+    const radius = entity.radius ?? 1.1;
+    const nextPosition = clampWorldPosition(position, 40);
+    const ringResolved = options.dungeonExterior
+      ? pushPositionOutsideOutdoorDungeonMonsterRing(nextPosition, getEbonHollowDungeon(), radius)
+      : nextPosition;
+    const sceneryResolved = resolveOutdoorSceneryCollision(ringResolved, radius);
+    const resolved = options.dungeonExterior
+      ? pushPositionOutsideOutdoorDungeonMonsterRing(sceneryResolved, getEbonHollowDungeon(), radius)
+      : sceneryResolved;
+
     entity.mesh.position.x = resolved.x;
     entity.mesh.position.y = getTerrainHeightAt(resolved.x, resolved.z);
+    entity.mesh.position.z = resolved.z;
+    return;
+  }
+
+  if (entity.raidInteriorType === "Castle") {
+    const resolved = resolveCastleInteriorMovementPosition(position);
+    entity.mesh.position.x = resolved.x;
+    entity.mesh.position.z = resolved.z;
+    return;
+  }
+
+  if (!entity.raidInteriorId && world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon") {
+    const bounds = getInteriorMovementBounds();
+    const resolved = resolveDungeonMovementPosition({
+      x: clamp(position.x, bounds.minX, bounds.maxX),
+      z: clamp(position.z, bounds.minZ, bounds.maxZ)
+    });
+    if (isDungeonEntranceSafe(resolved, (entity.radius ?? 1.2) + 1)) return;
+    entity.mesh.position.x = resolved.x;
     entity.mesh.position.z = resolved.z;
     return;
   }
@@ -10009,15 +14630,7 @@ function movePveEntityTo(entity, position, options = {}) {
 }
 
 function resolvePveMobCollisions(mobs, options = {}) {
-  const activeMobs = mobs.filter((mob) => mob?.mesh?.visible && !mob.dead && !mob.removed);
-
-  for (let pass = 0; pass < 2; pass += 1) {
-    for (let aIndex = 0; aIndex < activeMobs.length; aIndex += 1) {
-      for (let bIndex = aIndex + 1; bIndex < activeMobs.length; bIndex += 1) {
-        separatePveMobPair(activeMobs[aIndex], activeMobs[bIndex], options);
-      }
-    }
-  }
+  resolveNearbyMobPairs(mobs, (first, second) => separatePveMobPair(first, second, options), ACTOR_COLLISION_PADDING, 2, options.updatedMobs);
 }
 
 function resolveLocalPlayerActorCollisions(bounds) {
@@ -10155,13 +14768,14 @@ function separateRemotePlayerPair(first, second) {
 }
 
 function getCollisionSeparation(dx, dz, firstRadius = 1.1, secondRadius = 1.1, firstId = "", secondId = "") {
-  let distance = Math.hypot(dx, dz);
   const minimumDistance = firstRadius + secondRadius + ACTOR_COLLISION_PADDING;
+  const distanceSquared = dx * dx + dz * dz;
 
-  if (distance >= minimumDistance) {
+  if (distanceSquared >= minimumDistance * minimumDistance) {
     return null;
   }
 
+  const distance = Math.sqrt(distanceSquared);
   if (distance < 0.001) {
     const angle = getStableSeparationAngle(firstId, secondId);
     return {
@@ -10357,8 +14971,9 @@ function updateHeldItemVisuals() {
 
 function syncHeldItem(hand, mount, item) {
   const held = world.heldItems[hand];
+  if (!item && world.attacks[hand]?.broken && held.mesh) return;
 
-  if (held.itemId === item?.id) {
+  if ((held.itemId ?? null) === (item?.id ?? null)) {
     if (!item) {
       removeTaggedHandVisuals(mount, "heldItemVisual");
       if (world.attacks[hand] && world.attacks[hand].itemType !== "Empty Hand") {
@@ -10376,16 +14991,36 @@ function syncHeldItem(hand, mount, item) {
   if (held.mesh) {
     mount.remove(held.mesh);
   }
+  world.attacks[hand] = null;
+  world.comboChains[hand] = null;
 
   held.itemId = item?.id ?? null;
   held.mesh = item ? createHeldItemMesh(item, hand) : null;
 
   if (held.mesh) {
     held.mesh.userData.heldItemVisual = true;
+    held.mesh.userData.restPosition = held.mesh.position.clone();
+    held.mesh.userData.restQuaternion = held.mesh.quaternion.clone();
+    held.mesh.userData.restScale = held.mesh.scale.clone();
     mount.add(held.mesh);
   } else {
     removeTaggedHandVisuals(mount, "heldItemVisual");
   }
+}
+
+function resetHeldItemPose(hand) {
+  const mesh = world.heldItems?.[hand]?.mesh;
+  const restPosition = mesh?.userData?.restPosition;
+  const restQuaternion = mesh?.userData?.restQuaternion;
+  const restScale = mesh?.userData?.restScale;
+
+  if (!mesh || !restPosition || !restQuaternion || !restScale) {
+    return;
+  }
+
+  mesh.position.copy(restPosition);
+  mesh.quaternion.copy(restQuaternion);
+  mesh.scale.copy(restScale);
 }
 
 function clearHandVisuals(hand) {
@@ -10468,6 +15103,11 @@ function createRegisteredWeaponAsset(item, hand) {
 }
 
 function createHeldItemMesh(item, hand) {
+  if (item.type === "Flail") {
+    const flail=createFlailModel(), side=HAND_CONFIG[hand].side;
+    flail.rotation.set(1.17,side*.04,side*-.18);
+    return flail;
+  }
   const registered = createRegisteredWeaponAsset(item, hand);
 
   if (registered) {
@@ -10508,75 +15148,124 @@ function createHeldItemMesh(item, hand) {
     haft.castShadow = true;
     group.add(haft);
 
-    const head = new THREE.Mesh(new THREE.BoxGeometry(model.headWidth ?? 1.08, 0.46, 0.2), darkMetal);
-    head.position.set(side * 0.32, 1.9, 0);
-    head.castShadow = true;
-    group.add(head);
+    const headAssembly = new THREE.Group();
+    headAssembly.position.y = 1.9;
+    headAssembly.rotation.y = -Math.PI / 2;
+    group.add(headAssembly);
 
-    const upperBeard = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.72, 4), edgeMetal);
-    upperBeard.position.set(side * 0.78, 2.02, 0);
-    upperBeard.rotation.set(0, 0, side * -0.78);
-    upperBeard.scale.set(0.72, 1.05, 0.2);
-    upperBeard.castShadow = true;
-    group.add(upperBeard);
+    const headWidth = model.headWidth ?? 1.18;
+    const headHeight = model.headHeight ?? 0.76;
+    const headDepth = 0.22;
+    const bladeShape = new THREE.Shape();
+    bladeShape.moveTo(0.02, headHeight * 0.26);
+    bladeShape.lineTo(headWidth * 0.56, headHeight * 0.5);
+    bladeShape.lineTo(headWidth, headHeight * 0.38);
+    bladeShape.lineTo(headWidth * 1.06, -headHeight * 0.42);
+    bladeShape.lineTo(headWidth * 0.46, -headHeight * 0.58);
+    bladeShape.lineTo(headWidth * 0.1, -headHeight * 0.24);
+    bladeShape.closePath();
+    const bladeGeometry = new THREE.ExtrudeGeometry(bladeShape, {
+      depth: headDepth,
+      bevelEnabled: true,
+      bevelSegments: 1,
+      bevelSize: 0.035,
+      bevelThickness: 0.025,
+      curveSegments: 1
+    });
+    bladeGeometry.translate(0, 0, -headDepth * 0.5);
+    const blade = new THREE.Mesh(bladeGeometry, darkMetal);
+    blade.castShadow = true;
+    headAssembly.add(blade);
 
-    const lowerBeard = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.56, 4), edgeMetal);
-    lowerBeard.position.set(side * 0.72, 1.68, 0);
-    lowerBeard.rotation.set(0, 0, side * -2.28);
-    lowerBeard.scale.set(0.62, 0.9, 0.18);
-    lowerBeard.castShadow = true;
-    group.add(lowerBeard);
+    const cuttingEdge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.105, headHeight * 0.92, headDepth + 0.055),
+      edgeMetal
+    );
+    cuttingEdge.position.set(headWidth * 1.025, -headHeight * 0.03, 0);
+    cuttingEdge.rotation.z = -0.04;
+    cuttingEdge.castShadow = true;
+    headAssembly.add(cuttingEdge);
+
+    const eye = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.18, 0.48, 10), darkMetal);
+    eye.rotation.z = Math.PI * 0.5;
+    eye.position.x = 0.02;
+    eye.castShadow = true;
+    headAssembly.add(eye);
+
+    const poll = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.3, 0.25), darkMetal);
+    poll.position.x = -0.24;
+    poll.castShadow = true;
+    headAssembly.add(poll);
+
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.095, 0.34, 10), leather);
+    collar.position.y = 1.62;
+    collar.castShadow = true;
+    group.add(collar);
 
     const endCap = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), brass);
-    endCap.position.y = -1.02;
+    endCap.position.y = -1.08;
     endCap.scale.set(0.8, 0.8, 0.8);
     group.add(endCap);
 
     group.position.set(side * 0.04, -0.05, 0.12);
-    group.rotation.set(1.08, side * 0.035, side * -0.22);
+    group.rotation.set(1.17, side * .04, side * -.18);
   } else if (item.type === "Spear") {
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.068, model.shaftLength ?? 4.65, 10), wood);
-    shaft.position.y = 1.1;
+    const shaftLength = model.shaftLength ?? 5.45;
+    const tipLength = model.tipLength ?? 0.9;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.07, shaftLength, 10), wood);
+    shaft.position.y = 1.32;
     shaft.castShadow = true;
     group.add(shaft);
 
     const socket = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 0.34, 10), darkMetal);
-    socket.position.y = 3.4;
+    socket.position.y = shaft.position.y + shaftLength * 0.5;
     socket.castShadow = true;
     group.add(socket);
 
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.22, model.tipLength ?? 0.82, 12), edgeMetal);
-    tip.position.y = 3.84;
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.23, tipLength, 12), edgeMetal);
+    tip.position.y = socket.position.y + 0.17 + tipLength * 0.5;
     tip.castShadow = true;
     group.add(tip);
 
     const pennant = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.24), new THREE.MeshStandardMaterial({ color: "#9f3535", roughness: 0.7, side: THREE.DoubleSide }));
-    pennant.position.set(side * 0.24, 3.18, 0);
+    pennant.position.set(side * 0.24, socket.position.y - 0.22, 0);
     pennant.rotation.z = side * 0.24;
     group.add(pennant);
 
-    group.position.set(side * 0.03, -0.26, 0.16);
-    group.rotation.set(1.34, side * 0.03, side * -0.1);
+    group.position.set(side * 0.03, -0.42, 0.18);
+    group.rotation.set(1.49, side * 0.012, side * -0.025);
   } else if (item.type === "Bow" || item.type === "Long Bow") {
     const height = model.height ?? (item.type === "Long Bow" ? 3.5 : 2.7);
-    const bow = new THREE.Mesh(new THREE.TorusGeometry(height * 0.38, 0.035, 8, 32, Math.PI * 1.24), wood);
-    bow.name = "bowBody";
-    bow.scale.x = 0.42;
-    bow.rotation.z = Math.PI * 0.5;
-    bow.castShadow = true;
-    group.add(bow);
+    const limbOffset = -height * 0.12;
+    const upperLimb = createBowLimb(
+      [
+        new THREE.Vector3(0, 0.14, 0),
+        new THREE.Vector3(0, height * 0.24, limbOffset * 0.4),
+        new THREE.Vector3(0, height * 0.42, limbOffset * 0.88),
+        new THREE.Vector3(0, height * 0.5, limbOffset)
+      ],
+      wood
+    );
+    const lowerLimb = createBowLimb(
+      [
+        new THREE.Vector3(0, -0.14, 0),
+        new THREE.Vector3(0, -height * 0.24, limbOffset * 0.4),
+        new THREE.Vector3(0, -height * 0.42, limbOffset * 0.88),
+        new THREE.Vector3(0, -height * 0.5, limbOffset)
+      ],
+      wood
+    );
+    upperLimb.name = "bowUpperLimb";
+    lowerLimb.name = "bowLowerLimb";
+    group.add(upperLimb, lowerLimb);
 
-    const string = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, height * 0.84, 6), metal);
-    string.name = "bowString";
-    string.position.x = side * (model.stringOffset ?? 0.42);
-    string.rotation.z = 0;
-    string.userData.baseX = string.position.x;
-    string.userData.side = side;
+    const string = createBowString(height);
     group.add(string);
 
     const arrow = createArrowMesh(model.arrowLength ?? 1.5, edgeMetal, wood);
     arrow.name = "bowArrow";
-    arrow.position.set(side * 0.18, 0, -0.03);
+    arrow.userData.arrowLength = model.arrowLength ?? 1.5;
+    arrow.position.set(side * 0.12, 0, -0.1);
     arrow.rotation.x = Math.PI * 0.5;
     arrow.userData.baseX = arrow.position.x;
     arrow.userData.baseZ = arrow.position.z;
@@ -10584,12 +15273,20 @@ function createHeldItemMesh(item, hand) {
     group.add(arrow);
 
     const gripWrap = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.42, 8), leather);
-    gripWrap.rotation.z = Math.PI * 0.5;
+    gripWrap.rotation.z = 0;
     gripWrap.position.x = side * 0.02;
     group.add(gripWrap);
 
+    for (const tipY of [-1, 1]) {
+      const horn = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), brass);
+      horn.position.set(0, tipY * height * 0.5, limbOffset);
+      horn.scale.set(0.75, 1.35, 0.75);
+      horn.castShadow = true;
+      group.add(horn);
+    }
+
     group.position.set(side * 0.02, -0.05, 0.04);
-    group.rotation.set(0.08, side * 0.08, side * -0.08);
+    group.rotation.set(0.08, side * 0.08, side * -0.12);
   } else if (item.type === "Crossbow") {
     const stock = new THREE.Mesh(new THREE.BoxGeometry(0.28, model.stockLength ?? 1.7, 0.26), wood);
     stock.rotation.x = Math.PI * 0.5;
@@ -10601,7 +15298,8 @@ function createHeldItemMesh(item, hand) {
     limb.castShadow = true;
     group.add(limb);
 
-    const string = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, model.limbWidth ?? 1.9, 6), metal);
+    const string = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, model.limbWidth ?? 1.9, 6),
+      new THREE.MeshStandardMaterial({ color: "#a98b60", roughness: 1 }));
     string.name = "crossbowString";
     string.rotation.z = Math.PI * 0.5;
     string.position.z = 0.42;
@@ -10623,9 +15321,10 @@ function createHeldItemMesh(item, hand) {
   } else if (item.type === "Shield" || item.type === "Long Shield") {
     const isLong = item.type === "Long Shield";
     const shield = new THREE.Mesh(
-      new THREE.BoxGeometry(0.28, isLong ? 2.9 : 2.0, isLong ? 1.35 : 1.65),
+      isLong ? new THREE.BoxGeometry(.28, 2.9, 1.6) : new THREE.CylinderGeometry(1.08, 1.08, .24, 24),
       shieldFace
     );
+    if (!isLong) shield.rotation.z = Math.PI / 2;
     shield.position.set(side * 0.35, -0.25, 0);
     shield.castShadow = true;
     group.add(shield);
@@ -10640,6 +15339,11 @@ function createHeldItemMesh(item, hand) {
     group.rotation.set(0, side * 0.14, side * -0.08);
   }
 
+  if (item.category !== "Armor" && !item.type.includes("Shield")) {
+    group.position.set(0, 0, 0);
+    attachWeaponModel(group, model.assetKey);
+    updateHeldRangedModelState(group, item.type, 0, true);
+  }
   group.traverse((child) => {
     if (child.isMesh) {
       child.castShadow = true;
@@ -10653,7 +15357,7 @@ function createHeldItemMesh(item, hand) {
 function createTowerBowView() {
   const group = new THREE.Group();
   const wood = new THREE.MeshStandardMaterial({ color: "#7a4b2c", roughness: 0.78 });
-  const string = new THREE.MeshStandardMaterial({ color: "#f2ead7", roughness: 0.42 });
+  const string = new THREE.MeshStandardMaterial({ color: "#a98b60", roughness: 1 });
   const arrowMat = new THREE.MeshStandardMaterial({
     color: "#ffe18a",
     emissive: "#8a621d",
@@ -10745,6 +15449,13 @@ function addHandle(group, length, material, guardMaterial, options = {}) {
   group.add(pommel);
 }
 
+function createBowLimb(points, material) {
+  const curve = new THREE.CatmullRomCurve3(points);
+  const limb = new THREE.Mesh(new THREE.TubeGeometry(curve, 16, 0.035, 8, false), material);
+  limb.castShadow = true;
+  return limb;
+}
+
 function createArrowMesh(length, tipMaterial, shaftMaterial) {
   const group = new THREE.Group();
 
@@ -10782,14 +15493,16 @@ function getLockedThirdPersonCameraFrame(target, orbitDistance) {
     config.maxDistance
   );
   const { forward, right } = getLockedThirdPersonCameraVectors();
+  // Keep the established shoulder framing; further upward input tilts the view.
+  const framingPitch = Math.max(config.framingMinPitch, world.cameraPitch);
   const pitchFactor = clamp(
-    (world.cameraPitch - config.minPitch) / (config.maxPitch - config.minPitch),
+    (framingPitch - config.framingMinPitch) / (config.maxPitch - config.framingMinPitch),
     0,
     1
   );
   const cameraHeight = config.baseHeight + clamp(pitchFactor, 0, 1) * config.pitchHeight;
   const focusDistance = config.maxFocusDistance + (config.minFocusDistance - config.maxFocusDistance) * pitchFactor;
-  const focusHeight = config.focusHeight - (world.cameraPitch - 0.6) * config.pitchFocusOffset;
+  const focusHeight = config.focusHeight - (framingPitch - 0.6) * config.pitchFocusOffset;
   const cameraPosition = target.clone()
     .addScaledVector(forward, -distance)
     .addScaledVector(right, config.shoulderOffset);
@@ -10800,22 +15513,33 @@ function getLockedThirdPersonCameraFrame(target, orbitDistance) {
     .addScaledVector(right, config.shoulderOffset * 0.18);
   lookTarget.y += focusHeight;
 
+  if (world.cameraPitch < config.framingMinPitch) {
+    const horizontalDistance = Math.hypot(lookTarget.x - cameraPosition.x, lookTarget.z - cameraPosition.z);
+    const elevation = Math.atan2(lookTarget.y - cameraPosition.y, horizontalDistance)
+      + config.framingMinPitch - world.cameraPitch;
+    lookTarget.y = cameraPosition.y + Math.tan(elevation) * horizontalDistance;
+  }
+
   return { cameraPosition, lookTarget };
+}
+
+function getOutpostTowerCameraOrigin() {
+  return new THREE.Vector3(
+    world.outpostTower.position.x,
+    world.outpostTower.elevation + 0.85,
+    world.outpostTower.position.z
+  );
 }
 
 function updateCamera(deltaSeconds) {
   if (world.outpostTower.active) {
-    const origin = new THREE.Vector3(
-      world.outpostTower.position.x,
-      world.outpostTower.elevation + 0.85,
-      world.outpostTower.position.z
-    );
+    const origin = getOutpostTowerCameraOrigin();
     const direction = world.outpostTower.aimDirection.lengthSq() > 0.001
       ? world.outpostTower.aimDirection
-      : new THREE.Vector3(0, -0.12, 1);
+      : getOutpostTowerAimDirection();
     const lookTarget = origin.clone().addScaledVector(direction, 42);
 
-    world.camera.position.lerp(origin, Math.min(1, deltaSeconds * 12));
+    world.camera.position.lerp(origin, 1 - Math.exp(-deltaSeconds * 12));
     world.camera.lookAt(lookTarget);
     applyCombatCameraImpulse();
     document.body.dataset.cameraMode = "outpost";
@@ -10831,10 +15555,14 @@ function updateCamera(deltaSeconds) {
 
   if (isLockedThirdPersonCamera()) {
     const { cameraPosition, lookTarget } = getLockedThirdPersonCameraFrame(target, orbitDistance);
+    if (world.sceneMode === "outdoor") {
+      const clearance = Math.max(0, getTerrainHeightAt(cameraPosition.x, cameraPosition.z) + 2 - cameraPosition.y);
+      cameraPosition.y += clearance;
+      lookTarget.y += clearance;
+    }
     world.camera.position.copy(cameraPosition);
     world.camera.lookAt(lookTarget);
     applyCombatCameraImpulse();
-    updateLockedThirdPersonAim();
     document.body.dataset.cameraYaw = cameraYaw.toFixed(3);
     document.body.dataset.cameraPitch = world.cameraPitch.toFixed(3);
     document.body.dataset.cameraDistance = world.cameraDistance.toFixed(1);
@@ -10851,7 +15579,8 @@ function updateCamera(deltaSeconds) {
     target.z + Math.cos(cameraYaw) * horizontalDistance
   );
 
-  world.camera.position.lerp(cameraTarget, Math.min(1, deltaSeconds * 5));
+  if (world.sceneMode === "outdoor") cameraTarget.y = Math.max(cameraTarget.y, getTerrainHeightAt(cameraTarget.x, cameraTarget.z) + 2);
+  world.camera.position.lerp(cameraTarget, 1 - Math.exp(-deltaSeconds * 5));
   world.camera.lookAt(target.x, target.y + 4, target.z);
   applyCombatCameraImpulse();
   document.body.dataset.cameraYaw = cameraYaw.toFixed(3);
@@ -10876,14 +15605,22 @@ function applyCombatCameraImpulse() {
 }
 
 function updatePoiFlags() {
+  // Use the same eligibility as the hold-Space prompt, including range,
+  // scene, player state, and closed dungeon entrances.
+  const entranceAction = getAvailableLocationAction();
+  for (const [id, castle] of world.meshes.factions) {
+    const marker = castle.getObjectByName("castleDoorInteractionRing");
+    if (marker) marker.visible = entranceAction?.type === "enterCastle" && entranceAction.factionId === id;
+  }
   for (const poi of state.pois) {
     const mesh = world.meshes.pois.get(poi.id);
     const flag = mesh?.getObjectByName("flag");
-    const ring = mesh?.children[0];
+    const ring = mesh?.getObjectByName("poiDoorInteractionRing");
     const faction = poi.ownerFactionId ? FACTION_LOOKUP[poi.ownerFactionId] : null;
 
-    flag?.material.color.set(faction?.color ?? "#6f6a5f");
+    applyFlagMaterial(flag, faction?.flag);
     ring?.material.color.set(faction?.accent ?? "#d6a542");
+    if (ring) ring.visible = entranceAction?.type === "enterPoi" && entranceAction.poiId === poi.id;
     updateInteriorPoiFlag(poi, faction);
   }
 }
@@ -10923,7 +15660,7 @@ function updateInteriorPoiFlag(poi, faction) {
   }
 
   flag.position.y = lowerY + (raisedY - lowerY) * progress;
-  flag.material.color.set(flagFaction?.color ?? "#6f6a5f");
+  applyFlagMaterial(flag, flagFaction?.flag);
   flag.visible = progress > 0.03 || Boolean(action);
 
   if (ring) {
@@ -10947,87 +15684,327 @@ function updateStructures() {
 
     if (!mesh) {
       mesh = createStructureMesh(structure);
+      world.cameraOcclusion.register(mesh);
       world.meshes.structures.set(structure.id, mesh);
       addOutdoor(mesh);
     }
 
-    mesh.position.set(
-      structure.position.x,
-      getTerrainHeightAt(structure.position.x, structure.position.z),
-      structure.position.z
-    );
-    mesh.rotation.y = Number.isFinite(Number(structure.rotation)) ? structure.rotation : 0;
+    updateStructureTransform(mesh, structure, getTerrainHeightAt);
     mesh.visible = structure.hp > 0;
-    mesh.scale.set(1, 1, 1);
-    updateStructureHealthBar(structure);
+    const health = mesh.userData.structureHealth;
+    if (!health || health.hp !== structure.hp || health.maxHp !== structure.maxHp || health.type !== structure.type) {
+      updateStructureHealthBar(structure);
+      mesh.userData.structureHealth = { hp: structure.hp, maxHp: structure.maxHp, type: structure.type };
+    }
   }
 }
 
 function createStructureMesh(structure) {
   const group = new THREE.Group();
   const faction = FACTION_LOOKUP[structure.ownerFactionId];
-  const wood = new THREE.MeshStandardMaterial({ color: "#6f4427", roughness: 0.82 });
   const cloth = new THREE.MeshStandardMaterial({ color: faction?.color ?? "#d6a542", roughness: 0.7 });
-  const stone = new THREE.MeshStandardMaterial({ color: "#8c887c", roughness: 0.92 });
-
-  if (structure.type === "outpost") {
-    const tower = new THREE.Mesh(new THREE.BoxGeometry(6, 13, 6), wood);
-    tower.position.y = 6.5;
-    tower.castShadow = true;
-    tower.receiveShadow = true;
-    group.add(tower);
-
-    const top = new THREE.Mesh(new THREE.BoxGeometry(9, 2.2, 9), stone);
-    top.position.y = 14;
-    top.castShadow = true;
-    group.add(top);
-  } else if (structure.type === "wall") {
-    const wall = new THREE.Mesh(
-      new THREE.BoxGeometry(WALL_BODY_SIZE.width, WALL_BODY_SIZE.height, WALL_BODY_SIZE.depth),
-      stone
-    );
-    wall.position.y = WALL_BODY_SIZE.height / 2;
-    wall.castShadow = true;
-    wall.receiveShadow = true;
-    group.add(wall);
-
-    for (const x of [-5.5, -1.85, 1.85, 5.5]) {
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 2.8), stone);
-      cap.position.set(x, 5, 0);
-      cap.castShadow = true;
-      cap.receiveShadow = true;
-      group.add(cap);
-    }
+  if (structure.type === "street-lamp") {
+    group.add(createMedievalStreetLampMesh(structure.id === "placement-preview"));
   } else {
-    const base = new THREE.Mesh(new THREE.BoxGeometry(11, 5, 8), stone);
-    base.position.y = 2.5;
-    base.castShadow = true;
-    base.receiveShadow = true;
-    group.add(base);
-
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(8, 6, 4), cloth);
-    roof.position.y = 8;
-    roof.rotation.y = Math.PI * 0.25;
-    roof.castShadow = true;
-    group.add(roof);
+    group.add(createBuildableArchitecture(structure.type, WALL_BODY_SIZE));
   }
 
-  const flag = new THREE.Mesh(new THREE.BoxGeometry(3.3, 2, 0.18), cloth);
+  const flag = new THREE.Mesh(new THREE.BoxGeometry(3.3, 2, 0.18), cloth.clone());
+  flag.name = "factionBanner";
+  applyFlagMaterial(flag, faction?.flag);
   flag.position.set(3, structure.type === "wall" ? 6.4 : 12, -3);
-  if (structure.type !== "wall") {
+  if (structure.type !== "wall" && structure.type !== "street-lamp") {
     group.add(flag);
   }
 
   const structureName = BUILDING_LOOKUP[structure.type]?.name ?? capitalize(structure.type);
   const healthBar = createHealthBarSprite(structureName);
   healthBar.name = "healthBar";
-  healthBar.position.set(0, structure.type === "outpost" ? 17.4 : structure.type === "wall" ? 6.4 : 10.7, 0);
+  healthBar.position.set(0, getStructureHealthBarHeight(structure.type), 0);
   healthBar.visible = false;
   group.add(healthBar);
   updateHealthBarSprite(healthBar, structure.hp, structure.maxHp, structureName);
   tagEntityStatusTarget(group, getStructureStatusKey(structure.id));
+  updateStreetLampMeshState(group, structure);
 
   return group;
+}
+
+function createMedievalStreetLampMesh(isPreview = false) {
+  const group = new THREE.Group();
+  const wood = surface("wood", "#795537");
+  const darkWood = surface("wood", "#443025");
+  const stone = surface("stone", "#b0a38b");
+  const iron = new THREE.MeshStandardMaterial({ color: "#242424", roughness: 0.58, metalness: 0.38 });
+  const glass = new THREE.MeshStandardMaterial({
+    color: "#f2c56d",
+    emissive: "#7a3a14",
+    emissiveIntensity: 0,
+    transparent: true,
+    opacity: 0.42,
+    roughness: 0.18,
+    metalness: 0.02
+  });
+  const flameMaterial = new THREE.MeshStandardMaterial({
+    color: "#f2b24b",
+    emissive: "#e06422",
+    emissiveIntensity: 0,
+    roughness: 0.42
+  });
+  const haloMaterial = new THREE.MeshBasicMaterial({
+    color: "#f5b65b",
+    transparent: true,
+    opacity: 0,
+    depthWrite: false
+  });
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.55, 0.9, 8), stone);
+  base.position.y = 0.45;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base);
+
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.36, 7.5, 10), wood);
+  post.position.y = 4.45;
+  post.castShadow = true;
+  group.add(post);
+
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.26, 1.4), darkWood);
+  cap.position.y = 8.25;
+  cap.castShadow = true;
+  group.add(cap);
+
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 2.9, 8), iron);
+  arm.position.set(1.2, 7.75, 0);
+  arm.rotation.z = Math.PI * 0.5;
+  arm.castShadow = true;
+  group.add(arm);
+
+  const brace = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 2.1, 8), iron);
+  brace.position.set(0.73, 6.98, 0);
+  brace.rotation.z = Math.PI * 0.27;
+  brace.castShadow = true;
+  group.add(brace);
+
+  const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.74, 6), iron);
+  chain.position.set(2.55, 7.28, 0);
+  chain.castShadow = true;
+  group.add(chain);
+
+  const lantern = new THREE.Group();
+  lantern.position.set(2.55, 6.42, 0);
+  group.add(lantern);
+
+  const lanternBody = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.2, 0.92), glass);
+  lanternBody.name = "streetLampGlass";
+  lanternBody.castShadow = true;
+  lantern.add(lanternBody);
+
+  const lanternTop = new THREE.Mesh(new THREE.ConeGeometry(0.78, 0.46, 4), iron);
+  lanternTop.position.y = 0.82;
+  lanternTop.rotation.y = Math.PI * 0.25;
+  lanternTop.castShadow = true;
+  lantern.add(lanternTop);
+
+  const lanternBottom = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.18, 1.08), iron);
+  lanternBottom.position.y = -0.7;
+  lanternBottom.castShadow = true;
+  lantern.add(lanternBottom);
+
+  for (const [x, z] of [[-0.51, -0.51], [0.51, -0.51], [-0.51, 0.51], [0.51, 0.51]]) {
+    const frame = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.34, 6), iron);
+    frame.position.set(x, 0, z);
+    frame.castShadow = true;
+    lantern.add(frame);
+  }
+
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.78, 8), flameMaterial);
+  flame.name = "streetLampFlame";
+  flame.position.y = -0.08;
+  lantern.add(flame);
+
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(1.55, 18, 12), haloMaterial);
+  halo.name = "streetLampHalo";
+  halo.position.y = -0.05;
+  lantern.add(halo);
+
+  const light = new THREE.PointLight("#f0a84a", isPreview ? 0 : 5.4, STREET_LAMP_POINT_LIGHT_RADIUS, 1.25);
+  light.name = "streetLampLight";
+  light.position.set(STREET_LAMP_LOCAL_LIGHT_OFFSET.x, STREET_LAMP_LOCAL_LIGHT_OFFSET.y, STREET_LAMP_LOCAL_LIGHT_OFFSET.z);
+  light.visible = false;
+  group.add(light);
+
+  // Forged collars, carved plinth and a finial add detail without extra lights.
+  for (const y of [1, 2, 6.2, 7.8]) {
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.15, 16), iron);
+    collar.position.y = y; group.add(collar);
+  }
+  const plinth = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.35, 0.25, 16), stone);
+  plinth.position.y = 1; group.add(plinth);
+  const finial = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 8), iron);
+  finial.position.set(0, 8.6, 0); group.add(finial);
+  for (const y of [-0.35, 0.35]) {
+    for (const z of [-0.52, 0.52]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.055, 0.06), iron);
+      rail.position.set(0, y, z); lantern.add(rail);
+    }
+  }
+  group.traverse(mesh => {
+    if (!mesh.isMesh) return;
+    if ([wood, darkWood, stone].includes(mesh.material)) interiorUv(mesh.geometry);
+    mesh.receiveShadow = true;
+  });
+  return group;
+}
+
+function getStructureHealthBarHeight(type) {
+  if (type === "outpost") {
+    return 17.4;
+  }
+
+  if (type === "wall") {
+    return 6.4;
+  }
+
+  if (type === "street-lamp") {
+    return 10.8;
+  }
+
+  return 10.7;
+}
+
+function updateStructureLampStates() {
+  for (const structure of state.structures) {
+    const mesh = world.meshes.structures.get(structure.id);
+    updateStreetLampMeshState(mesh, structure);
+  }
+}
+
+function updateStreetLampMeshState(mesh, structure, options = {}) {
+  if (!mesh || structure?.type !== "street-lamp") {
+    return;
+  }
+
+  const nightAmount = world.lighting.nightAmount;
+  const active = structure.id !== "placement-preview" && structure.hp > 0 && nightAmount > 0.5;
+  const flicker = active ? getStreetLampFlicker(structure) : 0;
+  const pointLightEnabled = Boolean(options.pointLightEnabled);
+  const intensity = active && pointLightEnabled ? 5.4 * flicker : 0;
+  const glow = active ? THREE.MathUtils.clamp((nightAmount - 0.45) / 0.55, 0, 1) : 0;
+  const light = mesh.getObjectByName("streetLampLight");
+  const flame = mesh.getObjectByName("streetLampFlame");
+  const glass = mesh.getObjectByName("streetLampGlass");
+  const halo = mesh.getObjectByName("streetLampHalo");
+
+  if (light) {
+    light.intensity = intensity;
+    light.visible = intensity > 0.01;
+  }
+
+  if (flame?.material) {
+    flame.material.emissiveIntensity = active ? 1.35 + flicker * 0.38 : 0;
+    flame.visible = active || nightAmount > 0.32;
+  }
+
+  if (glass?.material) {
+    glass.material.emissiveIntensity = active ? 0.62 + flicker * 0.16 : 0;
+  }
+
+  if (halo?.material) {
+    halo.material.opacity = glow * 0.3;
+    halo.visible = glow > 0.02;
+  }
+}
+
+function updateStreetLampLightingSystem() {
+  const lampStructures = state.structures.filter((structure) => structure.type === "street-lamp");
+  const nightAmount = world.lighting.nightAmount;
+  const candidates = [];
+
+  for (const structure of lampStructures) {
+    const mesh = world.meshes.structures.get(structure.id);
+
+    if (!mesh || structure.hp <= 0 || nightAmount <= 0.05) {
+      updateStreetLampMeshState(mesh, structure, { pointLightEnabled: false });
+      continue;
+    }
+
+    const position = getStreetLampWorldLightPosition(structure, mesh);
+    candidates.push({
+      structure,
+      mesh,
+      position,
+      distance: distance2D(state.player.position, position)
+    });
+  }
+
+  candidates.sort((a, b) => a.distance - b.distance);
+  updateTerrainLampUniforms(candidates);
+
+  const activePointLightIds = new Set(
+    candidates
+      .filter((candidate) => candidate.distance <= STREET_LAMP_POINT_LIGHT_RADIUS * 2.2)
+      .slice(0, MAX_STREET_LAMP_POINT_LIGHTS)
+      .map((candidate) => candidate.structure.id)
+  );
+  document.body.dataset.terrainLampLights = String(Math.min(candidates.length, MAX_TERRAIN_LAMP_LIGHTS));
+  document.body.dataset.streetLampPointLights = String(activePointLightIds.size);
+
+  for (const candidate of candidates) {
+    updateStreetLampMeshState(candidate.mesh, candidate.structure, {
+      pointLightEnabled: activePointLightIds.has(candidate.structure.id)
+    });
+  }
+}
+
+function updateTerrainLampUniforms(candidates) {
+  const uniforms = world.meshes.terrain?.material?.uniforms;
+
+  if (!uniforms?.lampLights) {
+    return;
+  }
+
+  const lights = uniforms.lampLights.value;
+  const campCandidates = world.sceneMode === "outdoor" ? world.campModels.map(camp => ({
+    position: camp.position,
+    distance: distance2D(state.player.position, camp.position),
+    fireStrength: 0.85 * campFireFlicker(state.elapsed, camp.userData.fire.phase)
+  })).filter(camp => camp.distance < 180) : [];
+  const activeLights = [...candidates, ...campCandidates].sort((a,b) => a.distance-b.distance).slice(0, MAX_TERRAIN_LAMP_LIGHTS);
+  uniforms.lampCount.value = activeLights.length;
+
+  for (let index = 0; index < MAX_TERRAIN_LAMP_LIGHTS; index += 1) {
+    const light = activeLights[index];
+
+    if (!light) {
+      lights[index].set(0, 0, 1, 0);
+      continue;
+    }
+
+    const strength = light.fireStrength ?? world.lighting.nightAmount * (0.52 + getStreetLampFlicker(light.structure) * 0.12);
+    lights[index].set(light.position.x, light.position.z, light.fireStrength ? 38 : STREET_LAMP_TERRAIN_LIGHT_RADIUS, strength);
+  }
+}
+
+function getStreetLampFlicker(structure) {
+  return 0.88 + Math.sin(state.elapsed * 7.1 + structure.id.length) * 0.08 + Math.sin(state.elapsed * 13.7) * 0.04;
+}
+
+function getStreetLampWorldLightPosition(structure, mesh = null) {
+  const light = mesh?.getObjectByName("streetLampLight");
+
+  if (light?.getWorldPosition) {
+    return light.getWorldPosition(new THREE.Vector3());
+  }
+
+  const rotation = Number.isFinite(Number(structure.rotation)) ? Number(structure.rotation) : 0;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  return new THREE.Vector3(
+    structure.position.x + STREET_LAMP_LOCAL_LIGHT_OFFSET.x * cos + STREET_LAMP_LOCAL_LIGHT_OFFSET.z * sin,
+    getTerrainHeightAt(structure.position.x, structure.position.z) + STREET_LAMP_LOCAL_LIGHT_OFFSET.y,
+    structure.position.z - STREET_LAMP_LOCAL_LIGHT_OFFSET.x * sin + STREET_LAMP_LOCAL_LIGHT_OFFSET.z * cos
+  );
 }
 
 function updateStructureHealthBar(structure) {
@@ -11083,11 +16060,14 @@ function updateCouriers() {
 
 function getCourierVisualProgress(courier, mesh) {
   const key = getCourierRouteKey(courier);
-  const rawProgress = clamp(Number(courier.progress) || 0, 0, 1);
+  const serverTimeMs = estimateServerTime(world.serverClock);
+  const rawProgress = world.persistence.online
+    ? getCourierProgressAt(courier, serverTimeMs)
+    : clamp(Number(courier.progress) || 0, 0, 1);
   const duration = Math.max(1, Number(courier.duration) || 1);
   let visual = world.courierVisuals.get(courier.id);
 
-  if (!visual || visual.key !== key) {
+  if (!visual) {
     visual = {
       key,
       progress: rawProgress,
@@ -11096,29 +16076,36 @@ function getCourierVisualProgress(courier, mesh) {
       lastFrameElapsed: state.elapsed
     };
     world.courierVisuals.set(courier.id, visual);
+  } else if (visual.key !== key) {
+    visual.key = key;
+    visual.progress = 0;
+    visual.serverProgress = rawProgress;
+    visual.serverElapsed = state.elapsed;
+    visual.lastFrameElapsed = state.elapsed;
   }
 
   if (Math.abs(rawProgress - visual.serverProgress) > 0.001) {
-    const serverMovedBackward = rawProgress < visual.serverProgress - 0.08;
     visual.serverProgress = rawProgress;
     visual.serverElapsed = state.elapsed;
-
-    if (serverMovedBackward) {
-      visual.progress = rawProgress;
-    }
   }
 
   const frameDelta = Math.max(0, state.elapsed - visual.lastFrameElapsed);
   visual.lastFrameElapsed = state.elapsed;
 
-  const estimatedProgress = clamp(
-    visual.serverProgress + Math.max(0, state.elapsed - visual.serverElapsed) / duration,
-    0,
-    1
-  );
+  const estimatedProgress = world.persistence.online && Number.isFinite(Number(courier.routeStartedAt))
+    ? getCourierProgressAt(courier, serverTimeMs)
+    : clamp(
+        visual.serverProgress + Math.max(0, state.elapsed - visual.serverElapsed) / duration,
+        0,
+        1
+      );
 
   if (visual.progress < estimatedProgress) {
-    visual.progress = Math.min(estimatedProgress, visual.progress + frameDelta / duration);
+    const correctionMultiplier = 1 + Math.min(3, Math.max(0, estimatedProgress - visual.progress) * 8);
+    visual.progress = Math.min(
+      estimatedProgress,
+      visual.progress + (frameDelta / duration) * correctionMultiplier
+    );
   } else if (visual.progress > estimatedProgress + 0.03) {
     visual.progress = THREE.MathUtils.lerp(visual.progress, estimatedProgress, Math.min(1, frameDelta * 3));
   }
@@ -11128,6 +16115,10 @@ function getCourierVisualProgress(courier, mesh) {
 }
 
 function getCourierRouteKey(courier) {
+  if (courier.routeId) {
+    return String(courier.routeId);
+  }
+
   const start = courier.position ?? { x: 0, z: 0 };
   const target = courier.target ?? start;
 
@@ -11375,20 +16366,26 @@ function createEventMesh() {
 }
 
 function refreshUi() {
+  refreshFactionHeraldry();
   const faction = state.selectedFactionId ? FACTION_LOOKUP[state.selectedFactionId] : null;
   const zone = getZone(state);
   const interiorFaction = world.interiorFactionId ? FACTION_LOOKUP[world.interiorFactionId] : null;
   const interiorPoi = world.activePoiInteriorId ? state.pois.find((poi) => poi.id === world.activePoiInteriorId) : null;
   ui.hudFaction.textContent = faction?.name ?? "Unsworn";
+  ui.hudFactionGold.textContent = faction ? `${Math.round(state.factionResources?.[state.selectedFactionId]?.gold ?? 0)} Gold` : "";
+  ui.hudHouse.textContent = state.player.houseName ? `House ${formatHouseName(state.player.houseName)}` : "Unbound";
   ui.hudPlayer.textContent = state.player.name;
+  const maxHp = state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
+  ui.hudPlayerHp.textContent = `${Math.round(state.player.hp ?? maxHp)} / ${Math.round(maxHp)} HP`;
   ui.hudRenown.textContent = String(state.player.renown);
   const statusLabel =
     world.sceneMode === "interior" && interiorFaction
       ? `${interiorFaction.name} Keep`
       : world.sceneMode === "poiInterior" && interiorPoi
         ? interiorPoi.name
-        : zone.label;
-  ui.hudZone.textContent = `${statusLabel} | ${Math.round(state.player.hp ?? MULTIPLAYER_MAX_HEALTH)} HP`;
+        : zone.label === "Wildlands" ? getRegionAt(state.player.position.x, state.player.position.z).name : zone.label;
+  ui.hudZone.textContent = statusLabel;
+  ui.hudZone.title = world.sceneMode === "outdoor" ? `Grand Library: ${Math.round(Math.hypot(state.player.position.x, state.player.position.z))}m toward the centre of the island` : statusLabel;
 
   ui.resourceList.innerHTML = `
       <article class="resource-row">
@@ -11427,6 +16424,9 @@ function refreshUi() {
   if (!ui.rulerPanel.classList.contains("is-hidden")) {
     renderRulerPanel();
   }
+  if (!ui.housePanel.classList.contains("is-hidden")) {
+    renderHousePanel();
+  }
   if (!ui.statusPanel.classList.contains("is-hidden")) {
     renderStatusPanel();
   }
@@ -11435,26 +16435,47 @@ function refreshUi() {
 }
 
 function renderStructureList() {
-  ui.structureCount.textContent = `${state.structures.filter((entry) => entry.hp > 0).length} built`;
-  ui.structureList.innerHTML =
-    state.structures.length === 0
-      ? `<div class="notice">${BUILDING_DEFINITIONS.map((building) => `${building.name}: ${formatStructureCost(building.id)}`).join(" | ")}</div>`
-      : state.structures
-          .map((structure) => {
-            const building = BUILDING_LOOKUP[structure.type];
-            const name = building?.name ?? capitalize(structure.type);
-            const hp = Math.max(0, Math.round(structure.hp));
-            const maxHp = Math.max(1, Math.round(structure.maxHp));
+  const activeStructures = state.structures.filter((entry) => entry.hp > 0);
+  ui.structureCount.textContent = `${activeStructures.length} built`;
 
-            return `
-              <article class="structure-row">
-                <strong>${name}</strong>
-                <span>${hp} / ${maxHp} HP</span>
-                <div class="meter" style="--value: ${(hp / maxHp) * 100}%"><span></span></div>
-              </article>
-            `;
-          })
-          .join("");
+  if (activeStructures.length === 0) {
+    ui.structureList.innerHTML = `<div class="notice">No placed buildings yet.</div>`;
+    return;
+  }
+
+  const summaries = activeStructures.reduce((entries, structure) => {
+    const building = BUILDING_LOOKUP[structure.type];
+    const key = structure.type;
+    const summary = entries.get(key) ?? {
+      name: building?.name ?? capitalize(structure.type),
+      count: 0,
+      damaged: 0
+    };
+    const hp = Math.max(0, Number(structure.hp) || 0);
+    const maxHp = Math.max(1, Number(structure.maxHp) || building?.maxHp || 1);
+
+    summary.count += 1;
+    if (hp < maxHp) {
+      summary.damaged += 1;
+    }
+
+    entries.set(key, summary);
+    return entries;
+  }, new Map());
+
+  ui.structureList.innerHTML = Array.from(summaries.values())
+    .map((summary) => {
+      const status = summary.damaged > 0 ? `${summary.damaged} damaged` : "All sound";
+
+      return `
+        <article class="structure-row structure-summary">
+          <strong>${escapeHtml(summary.name)}</strong>
+          <span>${summary.count}</span>
+          <small>${status}</small>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderGearDetails(item) {
@@ -11464,16 +16485,23 @@ function renderGearDetails(item) {
 
   const durability = `${Math.round(item.durability)} / ${item.maxDurability}`;
 
+  if (item.category === "Treasure") {
+    return `<article><header>${getItemIconMarkup(item)}<strong>${escapeHtml(item.name)}</strong></header><p>${escapeHtml(item.description ?? "Dungeon treasure")}</p><p>${escapeHtml(item.rarity)} treasure</p></article>`;
+  }
+
   if (isArmorItem(item)) {
     return `
       <article>
         <header>
-          <strong>${item.name}</strong>
-          <span>${item.type}</span>
+          ${getItemIconMarkup(item, { decorative: true })}
+          <div>
+            <strong>${escapeHtml(equipmentName(item))}</strong>
+            <span>${escapeHtml(item.type)} · ${equipmentMaterial(item).name}${equipmentMaterial(item).tier ? ` · Tier ${equipmentMaterial(item).tier}/5` : ""}</span>
+          </div>
         </header>
         <div class="stat-grid">
-          <span>Material</span><strong>${item.armor.material ?? "Unknown"}</strong>
-          <span>Slot</span><strong>${getArmorSlotLabel(item.armor.slot)}</strong>
+          <span>Material</span><strong>${escapeHtml(item.armor.material ?? "Unknown")}</strong>
+          <span>Slot</span><strong>${escapeHtml(getArmorSlotLabel(item.armor.slot))}</strong>
           <span>Defense</span><strong>${formatStat(item.armor.defense)}</strong>
           <span>Resistance</span><strong>${formatStat(item.armor.resistance)}%</strong>
           <span>Toughness</span><strong>${formatStat(item.armor.toughness)}</strong>
@@ -11488,11 +16516,15 @@ function renderGearDetails(item) {
     return `
       <article>
         <header>
-          <strong>${item.name}</strong>
-          <span>${item.type}</span>
+          ${getItemIconMarkup(item, { decorative: true })}
+          <div>
+            <strong>${escapeHtml(equipmentName(item))}</strong>
+            <span>${escapeHtml(item.type)} · ${equipmentMaterial(item).name}${equipmentMaterial(item).tier ? ` · Tier ${equipmentMaterial(item).tier}/5` : ""}</span>
+          </div>
         </header>
         <div class="stat-grid">
-          <span>Category</span><strong>${item.category}</strong>
+          ${isShield(item.type) ? `<span>Defend</span><strong>Hold its mouse button. Face the attack. Timed blocks cost less guard; attacks lower your shield.</strong>` : ""}
+          <span>Category</span><strong>${escapeHtml(item.category)}</strong>
           <span>Durability</span><strong>${durability}</strong>
         </div>
       </article>
@@ -11502,10 +16534,14 @@ function renderGearDetails(item) {
   return `
     <article>
       <header>
-        <strong>${item.name}</strong>
-        <span>${item.type}</span>
+        ${getItemIconMarkup(item, { decorative: true })}
+        <div>
+          <strong>${escapeHtml(equipmentName(item))}</strong>
+          <span>${escapeHtml(item.type)} · ${equipmentMaterial(item).name}${equipmentMaterial(item).tier ? ` · Tier ${equipmentMaterial(item).tier}/5` : ""}</span>
+        </div>
       </header>
       <div class="stat-grid">
+        <span>Style</span><strong>${MELEE_STYLES[item.type]?.description ?? "Aim and release to fire."}</strong>
         <span>Range</span><strong>${item.weapon.range}</strong>
         <span>Damage</span><strong>${item.weapon.damage}</strong>
         <span>Penetration</span><strong>${item.weapon.penetration}</strong>
@@ -11528,12 +16564,22 @@ function formatStat(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, "");
 }
 
+let inventoryPreview;
 function renderInventoryPanel() {
+  if (ui.inventoryPanel.classList.contains("is-hidden")) return;
   const selectedGear = getSelectedGearItem(state);
+  document.querySelector("#inventory-character-name").textContent = state.player.name;
+  const inventoryScrollTop = ui.inventoryGrid.scrollTop;
+  const inventoryScrollLeft = ui.inventoryGrid.scrollLeft;
 
   ui.inventoryGrid.innerHTML = state.player.inventory
     .map((item) => renderInventoryItemSlot(item, selectedGear))
-    .join("");
+    .join("") || `<div class="inventory-empty">Your pack is empty.<small>Equipment you collect will appear here.</small></div>`;
+
+  // The general UI refresh rebuilds this grid twice per second. Keep that
+  // background render from overriding the position chosen by the player.
+  ui.inventoryGrid.scrollTop = inventoryScrollTop;
+  ui.inventoryGrid.scrollLeft = inventoryScrollLeft;
 
   ui.inventoryDetails.innerHTML = renderGearDetails(selectedGear);
   renderEquipmentSlots();
@@ -11545,10 +16591,10 @@ function renderInventoryItemSlot(item, selectedGear) {
   const selected = selectedGear?.id === item.id;
 
   return `
-    <button class="inventory-item-slot ${equippedSlot ? "is-equipped" : ""} ${selected ? "is-selected" : ""}" data-item-id="${item.id}" type="button">
-      <strong>${getItemGlyph(item)}</strong>
-      <span>${item.name}</span>
-      <small>${equippedSlot?.label ?? item.rarity}</small>
+    <button class="inventory-item-slot ${equippedSlot ? "is-equipped" : ""} ${selected ? "is-selected" : ""}" data-item-id="${item.id}" type="button" title="${escapeHtml(equipmentName(item))}" style="--material-color:${equipmentMaterial(item).color}">
+      ${getItemIconMarkup(item)}
+      <span>${escapeHtml(equipmentName(item))}</span>
+      <small>${escapeHtml(equippedSlot?.label ?? (item.category === "Treasure" ? "Rare treasure" : equipmentMaterial(item).tier ? `Tier ${equipmentMaterial(item).tier} · ${equipmentMaterial(item).quality}` : equipmentMaterial(item).name))}</small>
       <div class="meter" style="--value: ${(item.durability / item.maxDurability) * 100}%"><span></span></div>
     </button>
   `;
@@ -11563,8 +16609,8 @@ function renderEquipmentSlots() {
       continue;
     }
 
-    button.querySelector("strong").textContent = item ? getItemGlyph(item) : "Empty";
-    button.title = item ? `${slot.label}: ${item.name}` : `${slot.label}: empty`;
+    button.querySelector("strong").innerHTML = item ? getItemIconMarkup(item, { decorative: true }) : "Empty";
+    button.title = item ? `${slot.label}: ${equipmentName(item)}` : `${slot.label}: empty`;
     button.classList.toggle("is-filled", Boolean(item));
   }
 }
@@ -11578,7 +16624,7 @@ function renderInventoryHotbar(selectedGear) {
       return `
         <button class="inventory-hotbar-slot ${item ? "is-filled" : ""} ${selected ? "is-selected" : ""}" data-hotbar-index="${index}" type="button">
           <span>${index + 1}</span>
-          <strong>${item ? getItemGlyph(item) : "Empty"}</strong>
+          <strong>${item ? getItemIconMarkup(item) : "Empty"}</strong>
         </button>
       `;
     })
@@ -11593,7 +16639,7 @@ function renderHotbar() {
       return `
         <div class="hotbar-slot ${item ? "is-filled" : ""}">
           <span>${index + 1}</span>
-          <strong>${item ? getItemGlyph(item) : "Empty"}</strong>
+          <strong>${item ? getItemIconMarkup(item) : "Empty"}</strong>
         </div>
       `;
     })
@@ -11605,30 +16651,25 @@ function renderGearSelection() {
 }
 
 function renderHandSlot(element, item, emptyLabel) {
-  element.textContent = item ? getItemGlyph(item) : "Empty";
+  element.innerHTML = item ? getItemIconMarkup(item) : "Empty";
   element.title = item ? `${emptyLabel}: ${item.name}` : `${emptyLabel}: empty`;
   element.parentElement.classList.toggle("is-filled", Boolean(item));
 }
 
-function getItemGlyph(item) {
-  const glyphs = {
-    Axe: "Axe",
-    Bow: "Bow",
-    Chestplate: "Chest",
-    Crossbow: "Xbow",
-    Dagger: "Dagger",
-    Feet: "Boots",
-    Gloves: "Gloves",
-    Helmet: "Helm",
-    "Long Bow": "LBow",
-    "Long Shield": "LShld",
-    "Long Sword": "LSword",
-    Spear: "Spear",
-    Shield: "Shield",
-    Sword: "Sword"
-  };
+function getItemIconMarkup(item, options = {}) {
+  const label = escapeHtml(equipmentName(item));
+  const aria = options.decorative ? 'aria-hidden="true"' : `role="img" aria-label="${label}"`;
+  if (item.category === "Treasure" && SORCERERS[item.element]) {
+    return `<span class="item-icon" ${aria}><svg viewBox="0 0 64 64" width="48" height="48"><path d="M32 4 54 24 32 60 10 24Z" fill="${SORCERERS[item.element].color}" stroke="#fff" stroke-width="2"/><path d="m32 4-8 20 8 36 8-36Z" fill="#fff" opacity=".3"/><path d="M10 24h44" stroke="#fff" opacity=".6"/></svg></span>`;
+  }
+  return `<span class="item-icon" ${aria} style="--material-color:${equipmentMaterial(item).color}"><img src="${equipmentArtUrl(item)}" alt="" draggable="false"></span>`;
+}
 
-  return glyphs[item.type] ?? item.type.slice(0, 5);
+function itemIconClass(type) {
+  return String(type)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "unknown";
 }
 
 function renderToasts() {
@@ -11644,30 +16685,50 @@ function flash(message) {
   }
 }
 
-function animate() {
-  const rawDeltaSeconds = world.clock.getDelta();
-  const deltaSeconds = Math.min(0.05, rawDeltaSeconds);
+function stepSimulation(deltaSeconds) {
   state.elapsed += deltaSeconds;
   updateMovement(deltaSeconds);
   tickFactionIncome(state, deltaSeconds, { factionIncome: !world.persistence.online });
-  if (!world.persistence.online) {
-    tickCouriers(state, deltaSeconds);
-  }
+  if (!world.persistence.online) tickCouriers(state, deltaSeconds);
   tickEvent(state, deltaSeconds);
-  if (tickLoreSystem(state)) {
-    markPersistenceDirty();
-  }
-  updatePersistence(deltaSeconds);
+  if (tickLoreSystem(state)) markPersistenceDirty();
   updateWorld(deltaSeconds);
+}
 
-  if (Math.floor(state.elapsed * 2) !== Math.floor((state.elapsed - deltaSeconds) * 2)) {
+function animate() {
+  const rawDeltaSeconds = world.clock.getDelta();
+  diagnostics.profiler.begin(document.hidden ? 0 : rawDeltaSeconds);
+  const previousElapsed = state.elapsed;
+  updatePersistence(Math.max(0, rawDeltaSeconds));
+  updateHeldItemVisuals();
+  const steps = simulationSteps(rawDeltaSeconds);
+  for (const step of steps) {
+    if (diagnostics.profiler.current) diagnostics.profiler.current.steps++;
+    stepSimulation(step);
+  }
+
+  if (Math.floor(state.elapsed * 2) !== Math.floor(previousElapsed * 2)) {
     refreshUi();
   }
 
+  updateFrameVisuals(steps.reduce((sum, step) => sum + step, 0));
+  updateWorldRenderDistance();
+  updateEntityStatusVisibility();
+  minimap.update(state.elapsed);
+  world.cameraOcclusion.update(world.camera, world.playerMesh.position, !world.outpostTower.active, world.sceneMode !== "outdoor");
+  world.worldLabels.update(world.scene, world.camera,
+    world.cameraMenuSuspended ? null : document.pointerLockElement === canvas
+      ? new THREE.Vector2(0, 0) : getEntityStatusHoverNdc());
   world.renderer.render(world.scene, world.camera);
+  if (!ui.inventoryPanel.classList.contains("is-hidden")) {
+    inventoryPreview ??= createInventoryPreview(document.querySelector("#inventory-character-preview"));
+    inventoryPreview.render(world.playerMesh);
+  }
   world.frames += 1;
   document.body.dataset.renderFrames = String(world.frames);
   updateRenderStats(rawDeltaSeconds);
+  diagnostics.profiler.end(world.renderer.info.render);
+  diagnostics.paint();
   requestAnimationFrame(animate);
 }
 
@@ -11676,50 +16737,95 @@ function resize() {
   const height = window.innerHeight;
   world.camera.aspect = width / height;
   world.camera.updateProjectionMatrix();
+  world.renderer.setPixelRatio(getRenderPixelRatio(width, height, window.devicePixelRatio));
   world.renderer.setSize(width, height, false);
 }
 
-function createTerrainGeometry() {
-  const geometry = new THREE.BufferGeometry();
-  const vertices = [];
-  const uvs = [];
-  const indices = [];
-
-  for (let zIndex = 0; zIndex <= TERRAIN_SEGMENTS; zIndex += 1) {
-    const z = -TERRAIN_HALF + (zIndex / TERRAIN_SEGMENTS) * TERRAIN_SIZE;
-
-    for (let xIndex = 0; xIndex <= TERRAIN_SEGMENTS; xIndex += 1) {
-      const x = -TERRAIN_HALF + (xIndex / TERRAIN_SEGMENTS) * TERRAIN_SIZE;
-      vertices.push(x, getTerrainHeightAt(x, z), z);
-      uvs.push(x / TERRAIN_SIZE + 0.5, z / TERRAIN_SIZE + 0.5);
+function createChunkedTerrain() {
+  const group = new THREE.Group();
+  const material = createTerrainMaterial();
+  // Retain a shared material for day/night and terrain lamp uniforms.
+  group.material = material;
+  group.userData.raycastMeshes = [];
+  const size = 300;
+  for (let z = -TERRAIN_HALF; z < TERRAIN_HALF; z += size) {
+    for (let x = -TERRAIN_HALF; x < TERRAIN_HALF; x += size) {
+      const tile = new THREE.Group();
+      tile.userData.renderBounds = { x:x+size/2, z:z+size/2, radius:Math.SQRT2*size/2, distance:WORLD_RENDER_DISTANCE };
+      const shoreline = tileTouchesLake(x, z, size);
+      const detailed = new THREE.Mesh(createTerrainTile(x,z,size,shoreline ? 60 : 30,getTerrainHeightAt), material);
+      detailed.receiveShadow = true;
+      tile.add(detailed);
+      if (!shoreline) {
+        const coarse = new THREE.Mesh(createTerrainTile(x,z,size,10,getTerrainHeightAt), material);
+        coarse.receiveShadow = true;
+        tile.add(coarse);
+        tile.userData.terrainDetail = { detailed, coarse };
+      }
+      group.userData.raycastMeshes.push(detailed);
+      group.add(tile);
     }
   }
+  return group;
+}
 
-  const row = TERRAIN_SEGMENTS + 1;
-  for (let zIndex = 0; zIndex < TERRAIN_SEGMENTS; zIndex += 1) {
-    for (let xIndex = 0; xIndex < TERRAIN_SEGMENTS; xIndex += 1) {
-      const a = zIndex * row + xIndex;
-      const b = a + 1;
-      const c = a + row;
-      const d = c + 1;
-      indices.push(a, c, b, b, c, d);
+function raycastTerrain() {
+  // Each small mesh rejects the ray with its bounds before testing triangles.
+  // Use full detail even when rendered at lower detail to keep targeting stable.
+  const previousFar = world.raycaster.far;
+  world.raycaster.far = WORLD_RENDER_DISTANCE;
+  try {
+    const candidates = terrainAimCandidates(world.meshes.terrain.userData.raycastMeshes, world.raycaster.ray, WORLD_RENDER_DISTANCE);
+    return world.raycaster.intersectObjects(candidates, false)[0];
+  } finally {
+    world.raycaster.far = previousFar;
+  }
+}
+
+function updateWorldRenderDistance() {
+  if (world.sceneMode !== "outdoor") return;
+  const camera = world.camera.position;
+  for (const object of world.renderChunks) {
+    const bounds = object.userData.renderBounds;
+    object.visible = isWithinRenderDistance(bounds, camera);
+    if (object.visible) updateInstanceDetail(object, camera);
+    const detail = object.userData.terrainDetail;
+    if (detail) {
+      const near = Math.hypot(camera.x-bounds.x,camera.z-bounds.z) < TERRAIN_DETAIL_DISTANCE+bounds.radius;
+      detail.detailed.visible = near;
+      detail.coarse.visible = !near;
     }
   }
-
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  return geometry;
 }
 
 function createTerrainMaterial() {
+  const roadMask = new THREE.DataTexture(createRoadMask(WORLD_ROUTES, TERRAIN_SIZE), 4096, 4096, THREE.RedFormat);
+  roadMask.minFilter = roadMask.magFilter = THREE.LinearFilter;
+  roadMask.generateMipmaps = false;
+  roadMask.needsUpdate = true;
+  const footpathMask = new THREE.DataTexture(createRoadMask(FOOTPATHS, TERRAIN_SIZE, 4096, 1.8), 4096, 4096, THREE.RedFormat);
+  footpathMask.minFilter = footpathMask.magFilter = THREE.LinearFilter;
+  footpathMask.generateMipmaps = false; footpathMask.needsUpdate = true;
   return new THREE.ShaderMaterial({
+    lights: true,
     uniforms: {
+      ...THREE.UniformsUtils.clone(THREE.UniformsLib.lights),
+      sunDirection: { value: new THREE.Vector3(0, 1, 0) },
+      sunColor: { value: new THREE.Color("#fff2d7") },
+      sunStrength: { value: 1 },
+      shadowAnchor: { value: new THREE.Vector2() },
+      roadMask: { value: roadMask },
+      footpathMask: { value: footpathMask },
       grassMap: { value: createGrassTexture() },
-      rockMap: { value: createRockTexture() }
+      rockMap: { value: createRockTexture() },
+      sandMap: { value: createSandTexture() },
+      nightAmount: { value: 0 },
+      lampCount: { value: 0 },
+      lampLights: { value: Array.from({ length: MAX_TERRAIN_LAMP_LIGHTS }, () => new THREE.Vector4(0, 0, 1, 0)) }
     },
     vertexShader: `
+      #include <common>
+      #include <shadowmap_pars_vertex>
       varying vec2 vUv;
       varying vec3 vNormalWorld;
       varying vec3 vWorldPos;
@@ -11727,32 +16833,103 @@ function createTerrainMaterial() {
       void main() {
         vUv = uv;
         vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vec3 transformedNormal = normalMatrix * normal;
+        #include <shadowmap_vertex>
         vWorldPos = worldPosition.xyz;
         vNormalWorld = normalize(mat3(modelMatrix) * normal);
         gl_Position = projectionMatrix * viewMatrix * worldPosition;
       }
     `,
     fragmentShader: `
+      #include <common>
+      #include <packing>
+      #include <shadowmap_pars_fragment>
+      uniform bool receiveShadow;
+      #include <shadowmask_pars_fragment>
+      uniform vec3 sunDirection;
+      uniform vec3 sunColor;
+      uniform float sunStrength;
+      uniform vec2 shadowAnchor;
+      uniform sampler2D roadMask;
+      uniform sampler2D footpathMask;
       uniform sampler2D grassMap;
       uniform sampler2D rockMap;
+      uniform sampler2D sandMap;
+      uniform float nightAmount;
+      uniform int lampCount;
+      uniform vec4 lampLights[${MAX_TERRAIN_LAMP_LIGHTS}];
       varying vec2 vUv;
       varying vec3 vNormalWorld;
       varying vec3 vWorldPos;
 
       void main() {
         vec3 normal = normalize(vNormalWorld);
+        float edgeDistance = length(vWorldPos.xz);
         float incline = smoothstep(0.045, 0.24, length(normal.xz));
         float highStone = smoothstep(7.5, 12.0, vWorldPos.y) * 0.12;
-        float rockAmount = clamp(incline + highStone, 0.0, 1.0);
-        vec3 grass = texture2D(grassMap, vUv * 22.0).rgb;
+        float mountainStone = smoothstep(32.0, 90.0, vWorldPos.y) * 0.72;
+        float riverbedStone = 0.0;
+        float forestBiome = 1.0 - smoothstep(0.35, 1.55, length((vWorldPos.xz - vec2(${BIOME_REGIONS.kingswood.x.toFixed(1)}, ${BIOME_REGIONS.kingswood.z.toFixed(1)})) / vec2(${BIOME_REGIONS.kingswood.radiusX.toFixed(1)}, ${BIOME_REGIONS.kingswood.radiusZ.toFixed(1)})));
+        float highlandBiome = 1.0 - smoothstep(0.68, 1.18, length((vWorldPos.xz - vec2(${BIOME_REGIONS.quarryHighlands.x.toFixed(1)}, ${BIOME_REGIONS.quarryHighlands.z.toFixed(1)})) / vec2(${BIOME_REGIONS.quarryHighlands.radiusX.toFixed(1)}, ${BIOME_REGIONS.quarryHighlands.radiusZ.toFixed(1)})));
+        float sandAmount = 0.0;
+        ${INLAND_LAKES.map(basin => `{
+          vec2 delta = vWorldPos.xz - vec2(${basin.x.toFixed(1)}, ${basin.z.toFixed(1)});
+          float c = cos(${(-basin.rotation).toFixed(4)}), s = sin(${(-basin.rotation).toFixed(4)});
+          vec2 local = vec2(delta.x * c - delta.y * s, delta.x * s + delta.y * c) / vec2(${basin.radiusX.toFixed(1)}, ${basin.radiusZ.toFixed(1)});
+          float angle = atan(local.y, local.x);
+          float shore = 1.0 + sin(angle * 3.0 + 0.65) * 0.045 + sin(angle * 7.0 - 1.2) * 0.024 + cos(angle * 11.0 + 0.4) * 0.012;
+          sandAmount = max(sandAmount, 1.0 - smoothstep(0.78, 1.36, length(local) / shore));
+        }`).join("\n")}
+        float rockAmount = clamp(incline + highStone + mountainStone + riverbedStone + highlandBiome * 0.26, 0.0, 1.0);
+        vec3 grass = texture2D(grassMap, vWorldPos.xz * 0.028).rgb;
         vec3 rock = texture2D(rockMap, vWorldPos.xz * 0.055 + vec2(vWorldPos.y * 0.018, 0.0)).rgb;
+        vec3 sand = texture2D(sandMap, vWorldPos.xz * 0.065).rgb;
         vec3 baseColor = mix(grass, rock, rockAmount);
-        vec3 lightDir = normalize(vec3(-0.48, 0.82, -0.3));
+        baseColor = mix(baseColor, baseColor * vec3(0.88, 0.96, 0.86), forestBiome * 0.22);
+        baseColor = mix(baseColor, sand, sandAmount * 0.96);
+
+        ${REGIONS.map(region => `baseColor = mix(baseColor, baseColor * vec3(${new THREE.Color(region.color).r.toFixed(3)}, ${new THREE.Color(region.color).g.toFixed(3)}, ${new THREE.Color(region.color).b.toFixed(3)}) * 1.65, (1.0 - smoothstep(0.15, 1.65, length((vWorldPos.xz - vec2(${region.x.toFixed(1)}, ${region.z.toFixed(1)})) / vec2(${region.radiusX.toFixed(1)}, ${region.radiusZ.toFixed(1)})))) * 0.22);`).join("\n")}
+        float snow = smoothstep(${SNOW_LINE.toFixed(1)}, ${(SNOW_LINE + 25).toFixed(1)}, vWorldPos.y + sin(vWorldPos.x * 0.05) * 3.0) * smoothstep(0.38, 0.8, normal.y);
+        baseColor = mix(baseColor, vec3(0.91, 0.95, 0.98), snow * 0.97);
+        float coastAngle = atan(vWorldPos.z, vWorldPos.x);
+        float coastRadius = 2300.0 * (1.0 + 0.085 * sin(coastAngle * 3.0 + 0.6) + 0.055 * sin(coastAngle * 5.0 - 1.1) + 0.025 * cos(coastAngle * 9.0));
+        float coastalSand = (1.0 - smoothstep(30.0, 145.0, coastRadius - edgeDistance)) * (1.0 - smoothstep(-2.5, 5.0, vWorldPos.y));
+        baseColor = mix(baseColor, sand, coastalSand);
+        float roadAmount = texture2D(roadMask, (vWorldPos.xz + vec2(${TERRAIN_HALF.toFixed(1)})) / ${TERRAIN_SIZE.toFixed(1)}).r;
+        vec3 roadColor = vec3(0.32, 0.25, 0.14) * (0.85 + sand.r * 0.3);
+        float footpath = texture2D(footpathMask, (vWorldPos.xz + vec2(${TERRAIN_HALF.toFixed(1)})) / ${TERRAIN_SIZE.toFixed(1)}).r;
+        float soilGrain = sin(vWorldPos.x * 1.9 + sin(vWorldPos.z * 2.7)) * sin(vWorldPos.z * 3.3);
+        baseColor = mix(baseColor, roadColor * (1.14 + soilGrain * 0.08), footpath * (0.85 + soilGrain * 0.15) * (1.0 - snow) * (1.0 - sandAmount));
+        baseColor = mix(baseColor, roadColor, roadAmount);
+        vec3 lightDir = normalize(sunDirection);
         float diffuse = max(dot(normal, lightDir), 0.0);
         vec3 sky = vec3(1.0, 0.91, 0.72);
         vec3 ground = vec3(0.2, 0.28, 0.2);
         vec3 hemi = mix(ground, sky, normal.y * 0.5 + 0.5) * 0.62;
-        vec3 color = baseColor * (hemi + diffuse * 0.88);
+        // Shadows remove direct sun/moon light; sky fill and local lamps remain.
+        hemi *= mix(vec3(1.0), vec3(0.22, 0.28, 0.42), nightAmount);
+        float shadowDistance = length(vWorldPos.xz - shadowAnchor);
+        float shadow = 1.0;
+        if (shadowDistance < 105.0) {
+          shadow = mix(getShadowMask(), 1.0, smoothstep(70.0, 105.0, shadowDistance));
+        }
+        vec3 color = baseColor * (hemi + sunColor * diffuse * 0.88 * sunStrength * shadow);
+        float lampAmount = 0.0;
+        for (int i = 0; i < ${MAX_TERRAIN_LAMP_LIGHTS}; i++) {
+          if (i >= lampCount) break;
+          vec4 lamp = lampLights[i];
+          float range = max(lamp.z, 0.001);
+          float distanceToLamp = length(vWorldPos.xz - lamp.xy);
+          float normalizedDistance = clamp(distanceToLamp / range, 0.0, 1.0);
+          float edgeFade = smoothstep(1.0, 0.0, normalizedDistance);
+          float falloff = edgeFade / (1.0 + edgeFade * 0.65);
+          lampAmount += falloff * lamp.w;
+        }
+        lampAmount = clamp(lampAmount, 0.0, 0.95);
+        vec3 lampColor = vec3(1.0, 0.62, 0.28);
+        color += lampColor * lampAmount * (0.18 + nightAmount * 0.48);
+        float haze = smoothstep(420.0, 1100.0, distance(cameraPosition, vWorldPos));
+        color = mix(color, mix(vec3(0.62, 0.70, 0.73), vec3(0.055, 0.07, 0.10), nightAmount), haze);
         gl_FragColor = vec4(color, 1.0);
       }
     `
@@ -11760,33 +16937,48 @@ function createTerrainMaterial() {
 }
 
 function getTerrainHeightAt(x, z) {
-  let height = 0;
-  let factionCore = 0;
-
-  for (const level of TERRAIN_LEVELS) {
-    const distance = Math.hypot(x - level.x, z - level.z);
-    const plateau = 1 - smoothstep(level.radius, level.radius + level.falloff, distance);
-    height += level.height * plateau;
+  let height = getNaturalHeight(x, z);
+  // Broad, level foundations blend into the hills; doors and courtyards stay usable.
+  for (const landmark of TERRAIN_FOUNDATIONS) {
+    const d = Math.hypot(x - landmark.position.x, z - landmark.position.z);
+    // Include the vertices of a coarse 30m terrain cell beyond the castle
+    // apron, so interpolated triangles cannot rise through its flat paving.
+    const radius = landmark.id === LIBRARY_ID ? 78 : CASTLES.some(castle => castle.id === landmark.id) ? CASTLE_FOUNDATION_RADIUS + 45 : 52;
+    if (d < radius + 50) {
+      const blend = 1 - smoothstep(radius, radius + 50, d);
+      height = THREE.MathUtils.lerp(height, landmark.height, blend);
+    }
   }
-
-  for (const faction of FACTIONS) {
-    const distance = Math.hypot(x - faction.position.x, z - faction.position.z);
-    factionCore = Math.max(factionCore, 1 - smoothstep(22, 40, distance));
+  for (const basin of INLAND_LAKES) {
+    const distance = lakeDistance(x, z, basin);
+    if (distance >= basin.bankScale) continue;
+    const bed = THREE.MathUtils.lerp(basin.bedHeight, basin.waterHeight - 0.14, smoothstep(0.5, basin.surfaceScale, distance));
+    height = THREE.MathUtils.lerp(bed, height, smoothstep(basin.surfaceScale, basin.bankScale, distance));
   }
+  return height;
+}
 
-  const broadUndulation =
-    Math.sin(x * 0.028 + 1.4) * Math.cos(z * 0.023 - 0.7) * 0.72 +
-    Math.sin((x + z) * 0.017) * 0.42 +
-    (hash2d(Math.floor(x / 18), Math.floor(z / 18)) - 0.5) * 0.36;
-  const edgeFalloff = 1 - smoothstep(238, 260, Math.max(Math.abs(x), Math.abs(z)));
+function getInlandLakeDistance(x, z) {
+  return Math.min(...INLAND_LAKES.map(basin => lakeDistance(x, z, basin)));
+}
 
-  height += broadUndulation * edgeFalloff * (1 - factionCore * 0.86);
-  return clamp(height, 0, 13.5);
+function getInlandLakeShoreScale(angle) {
+  return shoreScale(angle);
+}
+
+function isPositionInInlandLake(position) {
+  return world.sceneMode === "outdoor" &&
+    getInlandLakeDistance(position.x, position.z) < INLAND_LAKE.surfaceScale;
 }
 
 function getTerrainGrassAmountAt(x, z) {
+  if (getInlandLakeDistance(x, z) < 1.34) {
+    return 0;
+  }
+
   const sample = 1.6;
   const height = getTerrainHeightAt(x, z);
+  if (height > SNOW_LINE - 8 || distanceToCoast(x,z) < 80) return 0;
   const heightX = getTerrainHeightAt(x + sample, z) - getTerrainHeightAt(x - sample, z);
   const heightZ = getTerrainHeightAt(x, z + sample) - getTerrainHeightAt(x, z - sample);
   const normal = new THREE.Vector3(-heightX, sample * 2, -heightZ).normalize();
@@ -11851,6 +17043,81 @@ function createGrassTexture() {
         context.stroke();
       }
     }
+  }
+
+  const texture = new THREE.CanvasTexture(canvasTexture);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createLakeWaterTexture() {
+  const size = 256;
+  const canvasTexture = document.createElement("canvas");
+  canvasTexture.width = size;
+  canvasTexture.height = size;
+  const context = canvasTexture.getContext("2d");
+  const image = context.createImageData(size, size);
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const normalizedX = ((x + 0.5) / size - 0.5) * 2;
+      const normalizedY = ((y + 0.5) / size - 0.5) * 2;
+      const radius = Math.hypot(normalizedX, normalizedY);
+      const edgeFade = 1 - smoothstep(0.86, 1, radius);
+      const wave =
+        Math.sin(x * 0.18 + y * 0.07) * 0.5 +
+        Math.sin(x * 0.055 - y * 0.14 + 1.7) * 0.35 +
+        Math.sin((x + y) * 0.035 - 0.8) * 0.15;
+      const shallowAmount = smoothstep(0.48, 0.96, radius);
+      const index = (y * size + x) * 4;
+
+      image.data[index] = Math.round(22 + shallowAmount * 27 + wave * 5);
+      image.data[index + 1] = Math.round(111 + shallowAmount * 35 + wave * 8);
+      image.data[index + 2] = Math.round(145 + shallowAmount * 34 + wave * 10);
+      image.data[index + 3] = Math.round(clamp(edgeFade * (0.78 + wave * 0.045), 0, 1) * 255);
+    }
+  }
+
+  context.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvasTexture);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createSandTexture() {
+  const canvasTexture = document.createElement("canvas");
+  canvasTexture.width = 512;
+  canvasTexture.height = 512;
+  const context = canvasTexture.getContext("2d");
+  context.fillStyle = "#c9aa6c";
+  context.fillRect(0, 0, 512, 512);
+
+  for (let index = 0; index < 5200; index += 1) {
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    const radius = 0.35 + Math.random() * 1.45;
+    const lightness = 48 + Math.random() * 24;
+    context.fillStyle = `hsla(${34 + Math.random() * 16}, ${34 + Math.random() * 20}%, ${lightness}%, ${0.18 + Math.random() * 0.3})`;
+
+    for (const offsetX of [-512, 0, 512]) {
+      for (const offsetY of [-512, 0, 512]) {
+        context.beginPath();
+        context.arc(x + offsetX, y + offsetY, radius, 0, Math.PI * 2);
+        context.fill();
+      }
+    }
+  }
+
+  for (let index = 0; index < 210; index += 1) {
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    context.strokeStyle = `hsla(34, 30%, ${38 + Math.random() * 18}%, 0.22)`;
+    context.lineWidth = 0.8 + Math.random() * 1.5;
+    context.beginPath();
+    context.arc(x, y, 3 + Math.random() * 9, 0.2, Math.PI * (0.8 + Math.random() * 0.55));
+    context.stroke();
   }
 
   const texture = new THREE.CanvasTexture(canvasTexture);
@@ -11976,6 +17243,11 @@ function updateRenderStats(deltaSeconds) {
 
   world.renderStatsTimer = 0;
 
+  document.body.dataset.renderCalls = String(world.renderer.info.render.calls);
+  document.body.dataset.renderTriangles = String(world.renderer.info.render.triangles);
+  document.body.dataset.renderSize = `${world.renderer.domElement.width}x${world.renderer.domElement.height}`;
+  // GPU readback stalls rendering; pixel diagnostics are explicitly opt-in.
+  if (!new URLSearchParams(location.search).has("renderDiagnostics")) return;
   const gl = world.renderer.getContext();
   const sampleSize = Math.min(96, gl.drawingBufferWidth, gl.drawingBufferHeight);
   const x = Math.floor((gl.drawingBufferWidth - sampleSize) / 2);
@@ -12036,6 +17308,41 @@ function createHealthBarSprite(name = "") {
   };
   updateHealthBarSprite(sprite, MULTIPLAYER_MAX_HEALTH, MULTIPLAYER_MAX_HEALTH, name);
   return sprite;
+}
+
+function updateCastleRegeneration(deltaSeconds) {
+  const player = { ...state.player, factionId: state.selectedFactionId,
+    sceneMode: world.sceneMode, interiorFactionId: world.interiorFactionId };
+  const active = isInOwnCastle(player) && player.hp > 0 && player.hp < player.maxHp;
+  if (active && !world.multiplayer.enabled) {
+    state.player.hp = regenerateHealth(player, deltaSeconds);
+    markPlayerPersistenceDue();
+  }
+  if (!world.regenerationEffect && active) {
+    const group = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({ color: 0x76ffab, transparent: true,
+      opacity: 0.5, depthWrite: false, side: THREE.DoubleSide });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.3, 40), material);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.12;
+    group.add(ring);
+    const geometry = new THREE.SphereGeometry(0.075, 6, 4);
+    for (let i = 0; i < 14; i++) group.add(new THREE.Mesh(geometry, material));
+    world.playerMesh.add(group);
+    world.regenerationEffect = group;
+  }
+  const effect = world.regenerationEffect;
+  if (!effect) return;
+  effect.visible = active;
+  if (!active) return;
+  const pulse = 1 + Math.sin(state.elapsed * 4) * 0.08;
+  effect.children[0].scale.set(pulse, pulse, pulse);
+  effect.children.slice(1).forEach((particle, index) => {
+    const phase = (state.elapsed * 0.45 + index / 14) % 1;
+    const angle = index * 2.4 + state.elapsed * 0.6;
+    particle.position.set(Math.cos(angle) * 1.05, 0.2 + phase * 4.8, Math.sin(angle) * 1.05);
+    particle.scale.setScalar(Math.sin(phase * Math.PI));
+  });
 }
 
 function updatePlayerHealthBar() {
@@ -12155,12 +17462,11 @@ function createTextSprite(text, color = "#ffffff", width = 42) {
   textureCanvas.height = 128;
   const context = textureCanvas.getContext("2d");
   context.clearRect(0, 0, 512, 128);
-  context.fillStyle = "rgba(8, 9, 8, 0.72)";
-  context.fillRect(10, 30, 492, 68);
-  context.strokeStyle = "rgba(238, 226, 196, 0.45)";
-  context.strokeRect(10, 30, 492, 68);
+  context.font = "500 38px Segoe UI, Arial, sans-serif";
+  const backgroundWidth = Math.min(492, context.measureText(text).width + 32);
+  drawRoundedRect(context, (512 - backgroundWidth) / 2, 30, backgroundWidth, 68, 12, "rgba(8, 9, 8, 0.58)");
   context.fillStyle = color;
-  context.font = "700 38px Segoe UI, Arial, sans-serif";
+  context.font = "500 38px Segoe UI, Arial, sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillText(text, 256, 65, 460);
@@ -12174,7 +17480,16 @@ function createTextSprite(text, color = "#ffffff", width = 42) {
     depthWrite: false
   });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(width, width / 4, 1);
+  sprite.scale.set(width * 0.3, width * 0.075, 1);
+  sprite.center.set(0.5, 0);
+  // Keep the whole billboard above its anchor, with extra headroom.
+  sprite.addEventListener("added", () => {
+    if (!sprite.userData.labelRaised) {
+      sprite.position.y += 2.5;
+      sprite.userData.labelRaised = true;
+    }
+  });
+  world.worldLabels.register(sprite);
   sprite.renderOrder = 1000;
   return sprite;
 }
@@ -12200,4 +17515,109 @@ function randomItem(items) {
 
 function randomBetween(min, max) {
   return min + Math.random() * (max - min);
+}
+
+function renderFactionChoices() {
+  ui.factionCards.innerHTML = `<button class="faction-card" data-faction="unsworn" type="button"><h2>Enter the realm</h2><p>Explore as an unsworn traveller. Find an abandoned castle and hold Space at its throne to found your faction.</p></button>` +
+    FACTIONS.filter(f => state.factions[f.id]).map(f => `<button class="faction-card" data-faction="${f.id}" type="button">${flagIcon(f.flag)}<h2>${escapeHtml(f.name)}</h2><p>${escapeHtml(f.summary)}</p><span>Join this faction</span></button>`).join("");
+}
+function flagIcon(flag) { return `<img class="faction-flag-icon" alt="Faction flag" src="data:image/svg+xml,${encodeURIComponent(flagSvg(flag))}">`; }
+function renderFoundingRecords() {
+  return Object.values(state.factions).map(f => `<article class="founding-record">${flagIcon(f.flag)}<div><strong>${escapeHtml(f.name)}</strong><p>Founded by King ${escapeHtml(f.founderName)}</p><p>${escapeHtml(f.mission)}</p></div></article>`).join("");
+}
+function getFlagTexture(flag) {
+  const key = JSON.stringify(normalizeFlag(flag));
+  if (!heraldryTextures.has(key)) {
+    const pixels = flagPixels(flag);
+    const texture = new THREE.DataTexture(pixels.data, pixels.width, pixels.height, THREE.RGBAFormat);
+    texture.flipY = true;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    heraldryTextures.set(key, texture);
+  }
+  return heraldryTextures.get(key);
+}
+function applyFlagMaterial(mesh, flag) {
+  if (!mesh) return;
+  const texture = flag ? getFlagTexture(flag) : null;
+  mesh.material.color.set(flag ? "#ffffff" : "#6f6a5f");
+  if (mesh.material.map !== texture) { mesh.material.map = texture; mesh.material.needsUpdate = true; }
+}
+function refreshFactionHeraldry() {
+  for (const structure of state.structures) {
+    applyFlagMaterial(world.meshes.structures.get(structure.id)?.getObjectByName("factionBanner"), state.factions[structure.ownerFactionId]?.flag);
+  }
+  for (const f of FACTIONS) {
+    const group = world.meshes.factions.get(f.id);
+    if (!group) continue;
+    const banner = group.getObjectByName("castleBanner");
+    if (banner) {
+      banner.visible = Boolean(state.factions[f.id]);
+      if (banner.visible && banner.material.map !== getFlagTexture(f.flag)) {
+        banner.material.color.set("#ffffff"); banner.material.map = getFlagTexture(f.flag); banner.material.needsUpdate = true;
+      }
+    }
+    if (group.userData.factionName !== f.name) {
+      const old = group.getObjectByName("castleLabel");
+      if (old) { old.removeFromParent(); old.material.map?.dispose(); old.material.dispose(); }
+      const label = createTextSprite(f.name, f.accent, 50); label.name = "castleLabel"; label.position.set(0,27,0); group.add(label);
+      group.userData.factionName = f.name;
+    }
+  }
+  if (!ui.factionSelect.classList.contains("is-hidden")) { renderFactionChoices(); updateHouseNameGate(); }
+}
+function updateRoyalCape(rig, factionId, crowned, deltaSeconds, motion) {
+  if (!rig.royalCape && crowned) rig.royalCape = createRoyalCape(rig.body);
+  if (!rig.royalCape) return;
+  const faction = state.factions[factionId];
+  rig.royalCape.visible = Boolean(crowned && faction);
+  if (rig.royalCape.visible) animateRoyalCape(rig.royalCape, motion, deltaSeconds);
+  if (faction && rig.royalCape.material.map !== getFlagTexture(faction.flag)) {
+    rig.royalCape.material.map = getFlagTexture(faction.flag); rig.royalCape.material.needsUpdate = true;
+  }
+}
+function openFoundingEditor(castleId, editing = false) {
+  if (!canUseFactionThrone(state, castleId)) return;
+  const dialog = document.querySelector("#founding-dialog");
+  const form = dialog.querySelector("form");
+  form.reset();
+  const existing = state.factions[castleId];
+  dialog.querySelector("h2").textContent = editing ? "Edit your faction" : "Found a faction";
+  dialog.querySelector("form > p").textContent = editing ? "Update your kingdom's name, mission and banner." : "Claim this abandoned castle and become its first king.";
+  form.querySelector('[type="submit"]').textContent = editing ? "Save faction changes" : "Found faction & become king";
+  dialog.querySelector("[data-cancel]").textContent = editing ? "Cancel" : "Leave throne";
+  if (editing && existing) {
+    form.elements.name.value = existing.name;
+    form.elements.mission.value = existing.mission;
+    for (const [key, value] of Object.entries(normalizeFlag(existing.flag))) form.elements[key].value = value;
+  }
+  const draft = () => ({ name: form.elements.name.value, mission: form.elements.mission.value,
+    flag: { pattern: form.elements.pattern.value, background: form.elements.background.value, foreground: form.elements.foreground.value, stripes: form.elements.stripes.value } });
+  const preview = () => { dialog.querySelector(".flag-preview").innerHTML = flagIcon(draft().flag); form.elements.stripes.disabled = form.elements.pattern.value !== "stripes"; };
+  form.oninput = preview;
+  dialog.querySelector(".founding-error").textContent = "";
+  dialog.oncancel = () => { if (!editing) leaveRulerSeat(); };
+  dialog.querySelector("[data-cancel]").onclick = () => { dialog.close(); if (!editing) leaveRulerSeat(); };
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const button = form.querySelector('[type="submit"]'); button.disabled = true;
+    try {
+      let result;
+      if (world.persistence.enabled) {
+        await publishLocalPlayer(true);
+        const data = await fetchPersistentJson(editing ? "/api/world/update-faction" : "/api/world/found-faction", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...buildPersistentPayload(false), castleId, draft: draft(), seated: world.seatedOnThrone, interiorFactionId: world.interiorFactionId }) });
+        result = data;
+        if (data.ok) { applyPersistentPayload(data, { includePlayer: true }); state.selectedFactionId = castleId; }
+      } else result = (editing ? updateFactionIdentity : foundFaction)(state, castleId, draft(), { castleId: world.interiorFactionId, seated: world.seatedOnThrone });
+      if (!result.ok) { dialog.querySelector(".founding-error").textContent = result.message; return; }
+      dialog.close(); runAction(result); publishLocalPlayer(true); setRulerPanelOpen(true);
+    } catch { dialog.querySelector(".founding-error").textContent = "Could not confirm the claim. Please try again."; }
+    finally { button.disabled = false; }
+  };
+  dialog.onclose = () => queueMicrotask(resumeLockedCameraAfterMenu);
+  releaseLockedCameraForMenu();
+  preview(); dialog.showModal();
 }

@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>King of Kingdoms 3D</title>
-    <link rel="stylesheet" href="./styles.css?v=0.7.2" />
+    <title>Fate of Kingdoms 3D</title>
+    <link rel="stylesheet" href="./styles.css?v=0.7.4" />
     <script type="importmap">
       {
         "imports": {
@@ -15,15 +15,16 @@
   </head>
   <body>
     <main id="app">
-      <canvas id="game-canvas" aria-label="King of Kingdoms 3D game world"></canvas>
+      <canvas id="game-canvas" tabindex="-1" aria-label="Fate of Kingdoms 3D game world"></canvas>
       <div class="camera-crosshair" aria-hidden="true"></div>
+      <div id="combat-hit-marker" class="combat-hit-marker" aria-hidden="true"></div>
 
       <section id="faction-select" class="faction-select" aria-labelledby="faction-title">
         <div class="faction-shell">
-          <p class="eyebrow">King of Kingdoms 3D</p>
-          <h1 id="faction-title">Choose your banner</h1>
+          <p class="eyebrow">Fate of Kingdoms 3D</p>
+          <h1 id="faction-title">Begin your family</h1>
           <label class="house-field">
-            <span>House</span>
+            <span>Family name</span>
             <input id="house-name" type="text" maxlength="18" placeholder="BARATHEON" autocomplete="off" spellcheck="false" />
             <strong id="house-name-status">A-Z</strong>
           </label>
@@ -31,17 +32,34 @@
         </div>
       </section>
 
+      <section id="death-screen" class="faction-select death-screen is-hidden" role="dialog" aria-modal="true" aria-labelledby="death-title" aria-hidden="true">
+        <form id="respawn-form" class="faction-shell death-shell">
+          <p class="eyebrow">Your life has ended</p>
+          <h1 id="death-title">You died</h1>
+          <p id="respawn-location"></p>
+          <label class="house-field">
+            <span>First name</span>
+            <input id="respawn-name" type="text" maxlength="18" required autocomplete="off" spellcheck="false" />
+          </label>
+          <button id="respawn-button" type="submit">Respawn</button>
+        </form>
+      </section>
+
       <section class="hud topbar" aria-label="World state">
         <button id="hud-faction-button" class="hud-menu-button" type="button" aria-controls="ruler-panel" aria-expanded="false">
-          <span>Faction:</span>
+          <span class="hud-heading">Faction: <small id="hud-faction-gold" class="hud-stat"></small></span>
           <strong id="hud-faction">Unsworn</strong>
         </button>
+        <button id="hud-house-button" class="hud-menu-button" type="button" aria-controls="house-panel" aria-expanded="false">
+          <span>House:</span>
+          <strong id="hud-house">Unbound</strong>
+        </button>
         <button id="hud-player-button" class="hud-menu-button" type="button" aria-controls="inventory-panel" aria-expanded="false">
-          <span>Player</span>
+          <span class="hud-heading">Player <small id="hud-player-hp" class="hud-stat"></small></span>
           <strong id="hud-player">Player</strong>
         </button>
         <button id="hud-lore-button" class="hud-menu-button" type="button" aria-controls="lore-scroll" aria-expanded="false">
-          <span>Lore:</span>
+          <span>Renown:</span>
           <strong id="hud-renown">0</strong>
         </button>
         <button id="hud-status-button" class="hud-menu-button" type="button" aria-controls="status-panel" aria-expanded="false">
@@ -59,10 +77,6 @@
         <strong id="location-prompt-title">Hold Space</strong>
         <div class="hold-meter"><span id="location-prompt-progress"></span></div>
       </section>
-      <section id="interior-hint" class="interior-hint is-hidden" aria-hidden="true">
-        <span id="interior-title">Castle Interior</span>
-        <button id="leave-interior" type="button">Leave Keep</button>
-      </section>
 
       <section id="npc-trade-panel" class="hud npc-trade-panel is-hidden" aria-label="NPC resource trade" aria-hidden="true">
         <div class="panel-chrome">
@@ -76,16 +90,7 @@
           <span>Amount</span>
           <input id="npc-trade-amount" type="number" min="1" step="1" value="1" />
         </label>
-        <div class="trade-prices">
-          <span>Buy price</span>
-          <strong id="npc-buy-price">0</strong>
-          <span>Sell price</span>
-          <strong id="npc-sell-price">0</strong>
-        </div>
-        <div class="trade-actions">
-          <button id="npc-buy-resource" class="primary" type="button">Buy (0)</button>
-          <button id="npc-sell-resource" type="button">Sell (0)</button>
-        </div>
+        <div id="npc-trade-resource-list" class="deposit-list market-trade-list"></div>
       </section>
 
       <section id="steward-panel" class="hud npc-trade-panel steward-panel is-hidden" aria-label="Steward resource deposit" aria-hidden="true">
@@ -141,7 +146,10 @@
         </div>
         <div class="inventory-shell">
           <section class="paperdoll" aria-label="Equipped gear">
-            <div class="body-outline" aria-hidden="true"></div>
+            <div class="character-preview-heading"><span>YOUR CHARACTER</span><strong id="inventory-character-name"></strong></div>
+            <div id="inventory-character-preview" class="character-preview">
+              <div class="preview-controls"><button type="button" data-preview-turn="left" aria-label="Rotate character left">&#8592;</button><span>Drag to rotate</span><button type="button" data-preview-turn="right" aria-label="Rotate character right">&#8594;</button></div>
+            </div>
             <button class="gear-slot gear-slot-head" data-equip-slot="head" type="button">
               <span>Head</span>
               <strong>Empty</strong>
@@ -168,6 +176,7 @@
             </button>
           </section>
           <section class="inventory-bag" aria-label="Item grid">
+            <div class="material-legend" aria-label="Metal quality from lowest to highest"><span>METAL QUALITY</span><span style="--swatch:#b77b46">I Bronze</span><span style="--swatch:#858c97">II Iron</span><span style="--swatch:#c5d5e1">III Steel</span><span style="--swatch:#70d6cf">IV Mithril</span><span style="--swatch:#a68ad4">V Adamant</span></div>
             <div id="inventory-grid" class="inventory-grid"></div>
             <div id="inventory-details" class="inventory-details"></div>
             <div id="inventory-hotbar" class="inventory-hotbar" aria-label="Assign hotbar slots"></div>
@@ -216,13 +225,24 @@
           <button id="ruler-close" class="menu-close" type="button" aria-label="Close faction menu">Close</button>
         </div>
         <div class="panel-tabs" role="tablist" aria-label="Faction views">
-          <button class="ruler-tab is-active" data-ruler-panel="members" type="button">Houses</button>
+          <button class="ruler-tab is-active" data-ruler-panel="politics" type="button">Factions</button>
+          <button class="ruler-tab" data-ruler-panel="members" type="button">Houses</button>
           <button class="ruler-tab" data-ruler-panel="resources" type="button">Resources</button>
-          <button class="ruler-tab" data-ruler-panel="politics" type="button">Politics</button>
         </div>
-        <div id="ruler-members" class="ruler-view is-active" data-ruler-view="members"></div>
+        <div id="ruler-politics" class="ruler-view is-active" data-ruler-view="politics"></div>
+        <div id="ruler-members" class="ruler-view" data-ruler-view="members"></div>
         <div id="ruler-resources" class="ruler-view" data-ruler-view="resources"></div>
-        <div id="ruler-politics" class="ruler-view" data-ruler-view="politics"></div>
+      </section>
+
+      <section id="house-panel" class="hud house-panel is-hidden" aria-label="House details" aria-hidden="true">
+        <div class="panel-chrome">
+          <div>
+            <strong id="house-title">House</strong>
+            <span id="house-status">House details</span>
+          </div>
+          <button id="house-close" class="menu-close" type="button" aria-label="Close house menu">Close</button>
+        </div>
+        <div id="house-body" class="house-body"></div>
       </section>
 
       <section id="lore-scroll" class="lore-scroll is-hidden" aria-label="Chronicle scroll" aria-hidden="true">
@@ -230,7 +250,7 @@
           <header class="lore-header">
             <div>
               <span>Chronicle</span>
-              <strong>History Volumes</strong>
+              <strong>The Living Chronicle</strong>
               <small id="lore-meta">No volumes</small>
             </div>
             <button id="lore-close" class="menu-close" type="button" aria-label="Close chronicle">Close</button>
@@ -242,6 +262,16 @@
       <section id="toast-log" class="toast-log" aria-live="polite"></section>
     </main>
 
-    <script type="module" src="./src/main.js?v=0.8.5"></script>
-  </body>
+    <script type="module" src="./src/main.js?v=1.0.0"></script>
+  <dialog id="founding-dialog" aria-labelledby="founding-title">
+<form><h2 id="founding-title">Found a faction</h2><p>Claim this abandoned castle and become its first king.</p>
+<label>Faction name<input name="name" required minlength="3" maxlength="40" autocomplete="off"></label>
+<label>Mission statement<textarea name="mission" required minlength="10" maxlength="400" placeholder="What does your kingdom stand for?"></textarea></label>
+<div class="flag-preview"></div>
+<label>Flag pattern<select name="pattern"><option value="cross">Cross +</option><option value="saltire">Saltire X</option><option value="checked">Checked</option><option value="stripes">Horizontal stripes</option></select></label>
+<label>Background colour<input type="color" name="background" value="#234d76"></label>
+<label>Pattern colour<input type="color" name="foreground" value="#efcc69"></label>
+<label>Number of stripes<input type="number" name="stripes" min="2" max="8" value="3"></label>
+<p class="founding-error" role="alert"></p><button type="submit">Found faction &amp; become king</button><button type="button" data-cancel>Leave throne</button>
+</form></dialog></body>
 </html>

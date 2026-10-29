@@ -41,13 +41,17 @@ export const RESOURCE_TYPES = [
   }
 ];
 
+// Outdoor landmarks use human-scale buildings now, so the crownlands need
+// enough breathing room for those compounds and the roads between them.
+export const OUTDOOR_WORLD_SCALE = 5;
+
 export const FACTIONS = [
   {
     id: "crownwardens",
     name: "Crownwardens",
     color: "#2d6ab3",
     accent: "#e3c65f",
-    position: { x: -210, z: -210 },
+    position: { x: -1320, z: -850 },
     safeRadius: 26,
     bufferRadius: 38,
     trait: "Fortified markets",
@@ -58,7 +62,7 @@ export const FACTIONS = [
     name: "Ironvale Clans",
     color: "#a94335",
     accent: "#cfc3aa",
-    position: { x: 210, z: -210 },
+    position: { x: 1130, z: -1020 },
     safeRadius: 24,
     bufferRadius: 36,
     trait: "Forge advantage",
@@ -69,7 +73,7 @@ export const FACTIONS = [
     name: "Verdant Concord",
     color: "#347f4f",
     accent: "#ecd081",
-    position: { x: -210, z: 210 },
+    position: { x: -1120, z: 1060 },
     safeRadius: 25,
     bufferRadius: 37,
     trait: "Harvest economy",
@@ -80,7 +84,7 @@ export const FACTIONS = [
     name: "Ashen Covenant",
     color: "#5b477f",
     accent: "#d88b4a",
-    position: { x: 210, z: 210 },
+    position: { x: 1270, z: 1070 },
     safeRadius: 25,
     bufferRadius: 37,
     trait: "Event hunters",
@@ -90,58 +94,240 @@ export const FACTIONS = [
 
 export const POIS = [
   {
-    id: "north-quarry",
-    name: "Northwatch Quarry",
-    type: "Quarry",
-    resourceId: "stone",
-    position: { x: -72, z: -118 },
-    yield: 4,
-    radius: 13
+    "id": "grand-library",
+    "name": "The Grand Library",
+    "type": "Library",
+    "resourceId": null,
+    "position": {
+      "x": 0,
+      "z": 0
+    },
+    "yield": 0,
+    "radius": 36
   },
   {
-    id: "kingswood",
-    name: "Kingswood Camp",
-    type: "Lumber Camp",
-    resourceId: "wood",
-    position: { x: -132, z: 24 },
-    yield: 5,
-    radius: 14
+    "id": "north-quarry",
+    "name": "Northwatch Quarry",
+    "type": "Quarry",
+    "resourceId": "stone",
+    "position": {
+      "x": -620,
+      "z": -1120
+    },
+    "yield": 4,
+    "radius": 36
   },
   {
-    id: "millfield",
-    name: "Millfield Farms",
-    type: "Wheat Field",
-    resourceId: "wheat",
-    position: { x: 110, z: -84 },
-    yield: 6,
-    radius: 15
+    "id": "kingswood",
+    "name": "Kingswood Camp",
+    "type": "Lumber Camp",
+    "resourceId": "wood",
+    "position": {
+      "x": -1380,
+      "z": 80
+    },
+    "yield": 5,
+    "radius": 36
   },
   {
-    id: "blackridge",
-    name: "Blackridge Mine",
-    type: "Iron Mine",
-    resourceId: "iron",
-    position: { x: 132, z: 52 },
-    yield: 3,
-    radius: 12
+    "id": "millfield",
+    "name": "Millfield Farms",
+    "type": "Wheat Field",
+    "resourceId": "wheat",
+    "position": {
+      "x": -260,
+      "z": 1050
+    },
+    "yield": 6,
+    "radius": 36
   },
   {
-    id: "river-market",
-    name: "Rivergate Market",
-    type: "Trade Post",
-    resourceId: "gold",
-    position: { x: 0, z: 130 },
-    yield: 18,
-    radius: 14
+    "id": "blackridge",
+    "name": "Blackridge Mine",
+    "type": "Iron Mine",
+    "resourceId": "iron",
+    "position": {
+      "x": 1450,
+      "z": -190
+    },
+    "yield": 3,
+    "radius": 36
   },
   {
-    id: "ebon-hollow",
-    name: "Ebon Hollow Dungeon",
-    type: "Dungeon",
-    resourceId: "gold",
-    position: { x: 0, z: 0 },
-    yield: 22,
-    radius: 16
+    "id": "river-market",
+    "name": "Sunmere Market",
+    "type": "Trade Post",
+    "resourceId": "gold",
+    "position": {
+      "x": 930,
+      "z": 1140
+    },
+    "yield": 18,
+    "radius": 36
+  },
+  {
+    "id": "ebon-hollow",
+    "name": "Ebon Hollow Dungeon",
+    "type": "Dungeon",
+    "resourceId": "gold",
+    "position": {
+      "x": -260,
+      "z": -740
+    },
+    "yield": 22,
+    "radius": 36
+  },
+  {
+    "id": "thornroot-depths", "name": "Thornroot Depths", "type": "Dungeon",
+    "resourceId": "gold", "position": { "x": -1240, "z": 800 }, "yield": 22, "radius": 36
+  },
+  {
+    "id": "ashen-vault", "name": "Ashen Vault", "type": "Dungeon",
+    "resourceId": "gold", "position": { "x": 1200, "z": 850 }, "yield": 22, "radius": 36
+  },
+  {
+    "id": "pale-cut",
+    "name": "Pale Cut Quarry",
+    "type": "Quarry",
+    "resourceId": "stone",
+    "position": {
+      "x": 570,
+      "z": -950
+    },
+    "yield": 4,
+    "radius": 36
+  },
+  {
+    "id": "redstone",
+    "name": "Redstone Quarry",
+    "type": "Quarry",
+    "resourceId": "stone",
+    "position": {
+      "x": 1660,
+      "z": 360
+    },
+    "yield": 4,
+    "radius": 36
+  },
+  {
+    "id": "mosswood",
+    "name": "Mosswood Timberyard",
+    "type": "Lumber Camp",
+    "resourceId": "wood",
+    "position": {
+      "x": -1740,
+      "z": -360
+    },
+    "yield": 5,
+    "radius": 36
+  },
+  {
+    "id": "willow-rest",
+    "name": "Willowrest Camp",
+    "type": "Lumber Camp",
+    "resourceId": "wood",
+    "position": {
+      "x": -720,
+      "z": 730
+    },
+    "yield": 5,
+    "radius": 36
+  },
+  {
+    "id": "amberfield",
+    "name": "Amberfield Grange",
+    "type": "Wheat Field",
+    "resourceId": "wheat",
+    "position": {
+      "x": 160,
+      "z": 1470
+    },
+    "yield": 6,
+    "radius": 36
+  },
+  {
+    "id": "windmere",
+    "name": "Windmere Farms",
+    "type": "Wheat Field",
+    "resourceId": "wheat",
+    "position": {
+      "x": -1110,
+      "z": 1530
+    },
+    "yield": 6,
+    "radius": 36
+  },
+  {
+    "id": "frostvein",
+    "name": "Frostvein Mine",
+    "type": "Iron Mine",
+    "resourceId": "iron",
+    "position": {
+      "x": 230,
+      "z": -1530
+    },
+    "yield": 3,
+    "radius": 36
+  },
+  {
+    "id": "cinder-vein",
+    "name": "Cindervein Mine",
+    "type": "Iron Mine",
+    "resourceId": "iron",
+    "position": {
+      "x": 1130,
+      "z": 410
+    },
+    "yield": 3,
+    "radius": 36
+  },
+  {
+    "id": "wayfarer",
+    "name": "Wayfarer Exchange",
+    "type": "Trade Post",
+    "resourceId": "gold",
+    "position": {
+      "x": -960,
+      "z": -600
+    },
+    "yield": 18,
+    "radius": 36
+  },
+  {
+    "id": "high-pass",
+    "name": "Highpass Market",
+    "type": "Trade Post",
+    "resourceId": "gold",
+    "position": {
+      "x": 790,
+      "z": -480
+    },
+    "yield": 18,
+    "radius": 36
+  },
+  {
+    "id": "salt-meadow",
+    "name": "Saltmeadow Farms",
+    "type": "Wheat Field",
+    "resourceId": "wheat",
+    "position": {
+      "x": 1340,
+      "z": 1510
+    },
+    "yield": 6,
+    "radius": 36
+  },
+  {
+    "id": "elderwood",
+    "name": "Elderwood Timberyard",
+    "type": "Lumber Camp",
+    "resourceId": "wood",
+    "position": {
+      "x": -1740,
+      "z": 870
+    },
+    "yield": 5,
+    "radius": 36
   }
 ];
 
@@ -199,6 +385,15 @@ export const BUILDING_DEFINITIONS = [
     cost: { wood: 18, stone: 32, wheat: 0, iron: 4 },
     maxHp: 300,
     renown: 5
+  },
+  {
+    id: "street-lamp",
+    name: "Street Lamp",
+    description:
+      "A medieval roadside lantern. It stays dark during the day, then burns warmly through the night to light nearby paths and defenses.",
+    cost: { wood: 12, stone: 6, wheat: 0, iron: 3 },
+    maxHp: 90,
+    renown: 3
   }
 ];
 
@@ -211,15 +406,16 @@ export const BUILDING_LOOKUP = Object.fromEntries(
 );
 
 export const WEAPON_STATS = {
-  "Empty Hand": { range: 1.35, damage: 4, penetration: 0, frequency: 1.35, speed: 1.25, knockback: 2.6 },
-  Dagger: { range: 1.35, damage: 12, penetration: 4, frequency: 1.8, speed: 1.7, knockback: 0.9 },
-  Sword: { range: 2, damage: 20, penetration: 7, frequency: 1.25, speed: 1.2, knockback: 1.8 },
-  Axe: { range: 1.9, damage: 26, penetration: 11, frequency: 0.95, speed: 0.9, knockback: 3.2 },
+  "Empty Hand": { range: 1.85, damage: 4, penetration: 0, frequency: 1.35, speed: 1.25, knockback: 3.6 },
+  Dagger: { range: 1.35, damage: 17, penetration: 6, frequency: 2, speed: 1.85, knockback: 0.5 },
+  Sword: { range: 2.75, damage: 20, penetration: 7, frequency: 1.4, speed: 1.3, knockback: 1.8 },
+  Axe: { range: 3.1, damage: 29, penetration: 11, frequency: 0.95, speed: 0.9, knockback: 5.2 },
+  Flail: { range: 3.4, damage: 27, penetration: 12, frequency: 0.85, speed: 1, knockback: 3.8 },
   "Long Sword": { range: 2.65, damage: 30, penetration: 10, frequency: 0.9, speed: 0.95, knockback: 2.4 },
-  Spear: { range: 3.35, damage: 22, penetration: 9, frequency: 1.05, speed: 1.05, knockback: 2.8 },
-  Bow: { range: 10.5, damage: 18, penetration: 5, frequency: 0.85, speed: 0.9, knockback: 1.4 },
+  Spear: { range: 5.25, damage: 22, penetration: 9, frequency: 1.05, speed: 1.05, knockback: 3.6 },
+  Bow: { range: 28, damage: 18, penetration: 5, frequency: 0.85, speed: 0.9, knockback: 1.4 },
   Crossbow: { range: 24, damage: 34, penetration: 14, frequency: 0.48, speed: 0.72, knockback: 4 },
-  "Long Bow": { range: 14.5, damage: 26, penetration: 8, frequency: 0.62, speed: 0.78, knockback: 2.2 }
+  "Long Bow": { range: 60, damage: 26, penetration: 8, frequency: 0.62, speed: 0.78, knockback: 2.2 }
 };
 
 export const ARMOR_STATS = {
@@ -231,6 +427,7 @@ export const ARMOR_STATS = {
 
 export const ITEM_DEFINITIONS = [
   { type: "Dagger", name: "Iron Dagger", category: "Weapon", rarity: "Common", maxDurability: 80 },
+  { type: "Flail", name: "Iron Chain Flail", category: "Weapon", rarity: "Uncommon", maxDurability: 105 },
   { type: "Sword", name: "Militia Sword", category: "Weapon", rarity: "Common", maxDurability: 100 },
   { type: "Axe", name: "Border Axe", category: "Weapon", rarity: "Common", maxDurability: 105 },
   { type: "Long Sword", name: "Knight Long Sword", category: "Weapon", rarity: "Uncommon", maxDurability: 118 },

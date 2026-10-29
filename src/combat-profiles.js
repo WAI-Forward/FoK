@@ -1,3 +1,5 @@
+import { MELEE_STYLES } from './combat-motion.js';
+
 export const COMBAT_PROFILES = {
   "Empty Hand": {
     family: "unarmed",
@@ -37,13 +39,13 @@ export const COMBAT_PROFILES = {
       footPlant: 0.14
     },
     hitVolume: {
-      reachBonus: 0.78,
-      halfWidth: 0.82,
-      minForward: -0.08,
-      enemyRadiusScale: 0.72,
-      traceLength: 2.2,
+      reachBonus: 0.15,
+      halfWidth: 0.55,
+      minForward: -0.18,
+      enemyRadiusScale: 0.84,
+      traceLength: 2.9,
       traceWidth: 0.1,
-      slashRadius: 0.72
+      slashRadius: 0.95
     },
     impactProfile: { weight: 0.62, camera: 0.016, hitstop: 0.038, flinch: 0.32, blood: 0.75 }
   },
@@ -56,9 +58,31 @@ export const COMBAT_PROFILES = {
     recovery: 0.48,
     hitMoment: 0.38,
     releaseMoment: 0,
-    durationBase: 0.38,
+    durationBase: 0.36,
     minDuration: 0.16,
     rangeBonus: 0,
+    combo: {
+      sequence: [
+        { name: "swipeIn", kind: "slash", slashDirection: -1, cooldownScale: 1.08, durationScale: 0.9 },
+        { name: "swipeOut", kind: "slash", slashDirection: 1, cooldownScale: 0.42, durationScale: 0.84 },
+        {
+          name: "stab",
+          kind: "thrust",
+          slashDirection: 0,
+          cooldownScale: 0.46,
+          durationScale: 0.92,
+          hitVolume: {
+            reachBonus: 1.25,
+            halfWidth: 0.78,
+            minForward: 0.12,
+            enemyRadiusScale: 0.75,
+            traceLength: 2.65,
+            traceWidth: 0.13,
+            slashRadius: 0.42
+          }
+        }
+      ]
+    },
     mobTuning: { durationScale: 1.36, minDuration: 0.48, lunge: 0.24 },
     modelProfile: { assetKey: "dagger", bladeLength: 1.48, bladeWidth: 0.17, handleLength: 0.66, procedural: true },
     trail: { enabled: true, start: 0.18, end: 0.58, length: 1.45, width: 0.22, color: "#dfe9ff", opacity: 0.34 },
@@ -83,9 +107,9 @@ export const COMBAT_PROFILES = {
     },
     hitVolume: {
       reachBonus: 0.78,
-      halfWidth: 0.92,
+      halfWidth: 1.3,
       minForward: -0.22,
-      enemyRadiusScale: 0.66,
+      enemyRadiusScale: 0.78,
       traceLength: 2.1,
       traceWidth: 0.12,
       slashRadius: 0.9
@@ -96,44 +120,59 @@ export const COMBAT_PROFILES = {
     family: "blade",
     kind: "slash",
     stance: "oneHandSlash",
-    windup: 0.28,
-    strike: 0.34,
-    recovery: 0.38,
-    hitMoment: 0.43,
+    windup: 0.27,
+    strike: 0.42,
+    recovery: 0.31,
+    hitMoment: 0.47,
     releaseMoment: 0,
-    durationBase: 0.43,
-    minDuration: 0.18,
+    durationBase: 0.39,
+    minDuration: 0.16,
     rangeBonus: 0,
+    combo: {
+      steps: 2,
+      followUpStep: 1,
+      followUpCooldownScale: 0.55,
+      resetCooldownScale: 0.92,
+      followUpDurationScale: 0.88,
+      resetDurationScale: 1
+    },
     mobTuning: { durationScale: 1.42, minDuration: 0.54, lunge: 0.36 },
     modelProfile: { assetKey: "sword", bladeLength: 2.65, bladeWidth: 0.2, handleLength: 0.88, procedural: true },
-    trail: { enabled: true, start: 0.22, end: 0.66, length: 2.65, width: 0.32, color: "#d9e8ff", opacity: 0.3 },
+    trail: { enabled: true, start: 0.18, end: 0.72, length: 2.8, width: 0.4, color: "#d9e8ff", opacity: 0.38 },
     pose: {
-      reach: 1.08,
-      lateral: 1.02,
-      lift: 0.08,
-      windupX: -0.52,
-      strikeX: -0.9,
-      recoverX: -0.16,
-      windupZ: -1.12,
-      strikeZ: 2.08,
-      recoverZ: -0.56,
-      windupY: -0.2,
-      strikeY: 0.18,
+      reach: 1.18,
+      lateral: 1.48,
+      lift: 0.12,
+      windupX: -0.48,
+      strikeX: -0.82,
+      recoverX: -0.14,
+      windupZ: -1.5,
+      strikeZ: 3.05,
+      recoverZ: -0.4,
+      windupY: -0.36,
+      strikeY: 0.64,
+      armWindupZ: -0.42,
+      armStrikeZ: 1.22,
+      armRecoverZ: -0.22,
+      armWindupY: -0.48,
+      armStrikeY: 0.94,
+      armRecoverY: -0.12,
       elbowBase: 0.36,
       elbowStrike: 0.22,
       wristStrike: -0.04,
-      torsoTwist: 0.16,
+      torsoTwist: 0.2,
+      torsoYaw: 0.3,
       torsoLean: 0.04,
-      footPlant: 0.08
+      footPlant: 0.14
     },
     hitVolume: {
-      reachBonus: 1.18,
-      halfWidth: 1.38,
-      minForward: -0.34,
-      enemyRadiusScale: 0.72,
-      traceLength: 3.45,
-      traceWidth: 0.14,
-      slashRadius: 1.3
+      reachBonus: 1.45,
+      halfWidth: 0.95,
+      minForward: 0.2,
+      enemyRadiusScale: 0.76,
+      traceLength: 4.2,
+      traceWidth: 0.18,
+      slashRadius: 1.92
     },
     impactProfile: { weight: 0.66, camera: 0.018, hitstop: 0.045, flinch: 0.32, blood: 1 }
   },
@@ -141,6 +180,7 @@ export const COMBAT_PROFILES = {
     family: "greatBlade",
     kind: "slash",
     stance: "twoHandSlash",
+    combo: { steps: 2, followUpStep: 1, followUpDurationScale: 1, resetDurationScale: 1 },
     windup: 0.34,
     strike: 0.34,
     recovery: 0.32,
@@ -174,8 +214,8 @@ export const COMBAT_PROFILES = {
     },
     hitVolume: {
       reachBonus: 1.62,
-      halfWidth: 1.82,
-      minForward: -0.48,
+      halfWidth: 1.05,
+      minForward: 0.2,
       enemyRadiusScale: 0.78,
       traceLength: 4.65,
       traceWidth: 0.18,
@@ -186,45 +226,50 @@ export const COMBAT_PROFILES = {
   Axe: {
     family: "heavyChop",
     kind: "chop",
-    stance: "overhand",
-    windup: 0.36,
-    strike: 0.32,
-    recovery: 0.32,
-    hitMoment: 0.54,
+    stance: "wideSwing",
+    windup: 0.3,
+    strike: 0.42,
+    recovery: 0.28,
+    hitMoment: 0.55,
     releaseMoment: 0,
-    durationBase: 0.52,
-    minDuration: 0.22,
+    durationBase: 0.58,
+    minDuration: 0.26,
     rangeBonus: 0,
+    combo: {
+      sequence: [
+        { name: "swingIn", kind: "chop", slashDirection: -1, cooldownScale: 1, durationScale: 1 },
+        { name: "swingOut", kind: "chop", slashDirection: 1, cooldownScale: 1, durationScale: 1 }
+      ]
+    },
     mobTuning: { durationScale: 1.5, minDuration: 0.66, lunge: 0.46 },
-    modelProfile: { assetKey: "axe", haftLength: 3, headWidth: 1.08, headHeight: 0.62, procedural: true },
-    trail: { enabled: true, start: 0.3, end: 0.78, length: 2.9, width: 0.54, color: "#ffd7a3", opacity: 0.34 },
+    modelProfile: { assetKey: "axe", haftLength: 3.15, headWidth: 1.18, headHeight: 0.76, procedural: true },
+    trail: { enabled: true, start: 0.26, end: 0.76, length: 3.35, width: 0.62, color: "#ffd7a3", opacity: 0.4 },
     pose: {
-      reach: 1.08,
-      lateral: 1.08,
-      lift: 0.84,
-      windupX: -1.18,
-      strikeX: 0.62,
-      recoverX: -0.18,
-      windupZ: -0.72,
-      strikeZ: 1.42,
-      recoverZ: -0.4,
-      windupY: -0.2,
-      strikeY: 0.36,
-      elbowBase: 0.66,
-      elbowStrike: 0.34,
+      reach: 1.34,
+      lateral: 1.72,
+      lift: 0.48,
+      windupX: -0.5,
+      strikeX: -0.16,
+      windupZ: -1.42,
+      strikeZ: 2.72,
+      windupY: -0.42,
+      strikeY: 0.68,
+      elbowBase: 0.72,
+      elbowStrike: 0.28,
       wristStrike: -0.09,
-      torsoTwist: 0.22,
-      torsoLean: 0.1,
-      footPlant: 0.16
+      torsoTwist: 0.34,
+      torsoYaw: 0.24,
+      torsoLean: 0.08,
+      footPlant: 0.2
     },
     hitVolume: {
-      reachBonus: 1.3,
-      halfWidth: 1.95,
-      minForward: -0.22,
+      reachBonus: 1.48,
+      halfWidth: 0.85,
+      minForward: 0.2,
       enemyRadiusScale: 0.8,
-      traceLength: 3.55,
-      traceWidth: 0.22,
-      slashRadius: 1.72
+      traceLength: 3.95,
+      traceWidth: 0.25,
+      slashRadius: 2.18
     },
     impactProfile: { weight: 1, camera: 0.034, hitstop: 0.07, flinch: 0.52, blood: 1.05 }
   },
@@ -232,47 +277,49 @@ export const COMBAT_PROFILES = {
     family: "polearm",
     kind: "thrust",
     stance: "twoHandThrust",
-    windup: 0.3,
-    strike: 0.24,
-    recovery: 0.46,
-    hitMoment: 0.38,
+    windup: 0.32,
+    strike: 0.18,
+    recovery: 0.5,
+    hitMoment: 0.5,
     releaseMoment: 0,
-    durationBase: 0.42,
-    minDuration: 0.18,
-    rangeBonus: 1.35,
+    durationBase: 0.52,
+    minDuration: 0.24,
+    rangeBonus: 0.55,
     mobTuning: { durationScale: 1.42, minDuration: 0.58, lunge: 0.52 },
-    modelProfile: { assetKey: "spear", shaftLength: 4.65, tipLength: 0.82, procedural: true },
-    trail: { enabled: true, start: 0.24, end: 0.58, length: 4.1, width: 0.24, color: "#e6f0ff", opacity: 0.28 },
+    modelProfile: { assetKey: "spear", shaftLength: 5.45, tipLength: 0.9, procedural: true },
+    trail: { enabled: true, start: 0.3, end: 0.61, length: 5.25, width: 0.11, color: "#f4f8ff", opacity: 0.48 },
     pose: {
-      reach: 1.58,
-      lateral: 0.16,
-      lift: 0.08,
-      windupX: -0.26,
-      strikeX: -0.68,
-      recoverX: -0.12,
-      windupZ: -0.18,
-      strikeZ: 0.12,
-      recoverZ: -0.08,
-      windupY: -0.12,
-      strikeY: 0.08,
-      elbowBase: 0.22,
-      elbowStrike: 0.38,
-      wristStrike: -0.08,
-      torsoTwist: 0.08,
-      torsoLean: 0.08,
-      footPlant: 0.18,
-      offhand: 0.72
+      reach: 0.95,
+      retract: 0.78,
+      gripHeight: 3.72,
+      lateral: 0,
+      lift: 0,
+      windupX: 0,
+      strikeX: 0,
+      recoverX: 0,
+      windupZ: 0,
+      strikeZ: 0,
+      recoverZ: 0,
+      windupY: 0,
+      strikeY: 0,
+      elbowBase: 0.46,
+      elbowStrike: 0.3,
+      wristStrike: -0.03,
+      torsoTwist: 0.025,
+      torsoLean: 0.14,
+      footPlant: 0.24,
+      offhand: 0.9
     },
     hitVolume: {
-      reachBonus: 0.44,
-      halfWidth: 0.54,
-      minForward: 0.18,
-      enemyRadiusScale: 0.52,
-      traceLength: 5.5,
-      traceWidth: 0.12,
-      slashRadius: 0.42
+      reachBonus: 0.35,
+      halfWidth: 0.46,
+      minForward: 0.42,
+      enemyRadiusScale: 0.64,
+      traceLength: 6.35,
+      traceWidth: 0.16,
+      slashRadius: 0.38
     },
-    impactProfile: { weight: 0.78, camera: 0.022, hitstop: 0.045, flinch: 0.44, blood: 1.08 }
+    impactProfile: { weight: 0.96, camera: 0.038, hitstop: 0.072, flinch: 0.66, blood: 1.16 }
   },
   Bow: {
     family: "bow",
@@ -286,7 +333,7 @@ export const COMBAT_PROFILES = {
     durationBase: 0.34,
     minDuration: 0.16,
     chargeable: true,
-    chargeRangeScale: { base: 0.92, charged: 1.05 },
+    chargeRangeScale: { base: 0.75, charged: 0.55 },
     chargeDamageScale: { base: 0.68, charged: 0.82 },
     mobTuning: { durationScale: 1.55, minDuration: 0.7, lunge: 0 },
     modelProfile: { assetKey: "bow", height: 2.78, stringOffset: 0.42, arrowLength: 1.5, procedural: true },
@@ -361,7 +408,7 @@ export const COMBAT_PROFILES = {
     durationBase: 0.38,
     minDuration: 0.18,
     chargeable: true,
-    chargeRangeScale: { base: 0.92, charged: 1.05 },
+    chargeRangeScale: { base: 0.75, charged: 0.55 },
     chargeDamageScale: { base: 0.68, charged: 0.82 },
     mobTuning: { durationScale: 1.58, minDuration: 0.76, lunge: 0 },
     modelProfile: { assetKey: "long-bow", height: 3.58, stringOffset: 0.48, arrowLength: 1.65, procedural: true },
@@ -390,6 +437,35 @@ export const COMBAT_PROFILES = {
   }
 };
 
+COMBAT_PROFILES.Flail = {
+  ...COMBAT_PROFILES.Axe, family: 'flail', kind: 'slash', stance: 'chainSweep',
+  windup: .12, strike: .58, recovery: .3, hitMoment: .4,
+  combo: null,
+  modelProfile: { assetKey: 'flail', procedural: true },
+  trail: { ...COMBAT_PROFILES.Axe.trail, length: 1.2, width: .2 },
+  impactProfile: { weight: .95, camera: .03, hitstop: .065, flinch: .5, blood: .8 }
+};
+COMBAT_PROFILES.Sword.combo = { sequence: [
+  { name: 'diagonalCut', kind: 'slash', slashDirection: -1 },
+  { name: 'returnCut', kind: 'slash', slashDirection: 1, durationScale: .92 },
+  { name: 'overheadFinish', kind: 'chop', slashDirection: -1, damageScale: 1.35, durationScale: 1.08 }
+] };
+COMBAT_PROFILES['Long Sword'].combo = { sequence: [
+  { name: 'openingSweep', kind: 'slash', slashDirection: -1 },
+  { name: 'returnSweep', kind: 'slash', slashDirection: 1 },
+  { name: 'overheadFinish', kind: 'chop', slashDirection: -1, damageScale: 1.4, durationScale: 1.18, knockbackScale: 1.3 }
+] };
+COMBAT_PROFILES.Spear.combo = { sequence: [
+  { name: 'probingJab', kind: 'thrust', durationScale: .85, damageScale: .85 },
+  { name: 'drivingThrust', kind: 'thrust', durationScale: 1.1, damageScale: 1.3 }
+] };
+COMBAT_PROFILES.Dagger.combo.sequence[2].damageScale = 1.5;
+for (const [type, style] of Object.entries(MELEE_STYLES)) {
+  Object.assign(COMBAT_PROFILES[type], { itemType: type, durationBase: style.duration, maxTargets: style.targets });
+}
+// Wide axe sweeps need anticipation before accelerating through the target.
+Object.assign(COMBAT_PROFILES.Axe, { windup: .38, strike: .3, recovery: .32, hitMoment: .53 });
+
 export function getCombatProfile(itemType) {
   return COMBAT_PROFILES[itemType] ?? COMBAT_PROFILES["Empty Hand"];
 }
@@ -405,6 +481,34 @@ export function isProjectileCombatType(itemType) {
 
 export function isChargeableCombatType(itemType) {
   return Boolean(getCombatProfile(itemType).chargeable);
+}
+
+export function getCombatComboTiming(itemType, attackIndex = 0) {
+  const combo = getCombatProfile(itemType).combo;
+
+  if (!combo) {
+    return { step: 0, steps: 1, name: null, kind: null, slashDirection: null, hitVolume: null, isFollowUp: false, cooldownScale: 1, durationScale: 1 };
+  }
+
+  const sequence = Array.isArray(combo.sequence) && combo.sequence.length ? combo.sequence : null;
+  const steps = sequence?.length ?? Math.max(1, Math.floor(Number(combo.steps) || 1));
+  const step = ((Math.floor(Number(attackIndex) || 0) % steps) + steps) % steps;
+  const stepProfile = sequence?.[step] ?? {};
+  const isFollowUp = sequence ? step > 0 : step === (combo.followUpStep ?? 1);
+
+  return {
+    step,
+    steps,
+    name: stepProfile.name ?? null,
+    kind: stepProfile.kind ?? null,
+    slashDirection: Number.isFinite(stepProfile.slashDirection) ? stepProfile.slashDirection : null,
+    hitVolume: stepProfile.hitVolume ?? null,
+    damageScale: stepProfile.damageScale ?? 1,
+    knockbackScale: stepProfile.knockbackScale ?? 1,
+    isFollowUp,
+    cooldownScale: stepProfile.cooldownScale ?? (isFollowUp ? (combo.followUpCooldownScale ?? 1) : (combo.resetCooldownScale ?? 1)),
+    durationScale: stepProfile.durationScale ?? (isFollowUp ? (combo.followUpDurationScale ?? 1) : (combo.resetDurationScale ?? 1))
+  };
 }
 
 export function getCombatAttackDuration(itemType, stats = {}, chargePower = 0, options = {}) {
@@ -423,7 +527,9 @@ export function getCombatAttackDuration(itemType, stats = {}, chargePower = 0, o
     duration = Math.max(tuning.minDuration ?? duration, duration * (tuning.durationScale ?? 1.4));
   }
 
-  return duration;
+  // Keep hit windows and combo cadence on the same, slightly faster clock.
+  const playerMelee = !options.mob && (MELEE_STYLES[itemType] || profile.family === 'unarmed');
+  return playerMelee ? duration / 1.2 : duration;
 }
 
 export function getCombatHitMoment(itemType) {
@@ -497,26 +603,32 @@ export function getCombatWeaponHitSegments(itemType, side = -1) {
   const model = profile.modelProfile ?? {};
 
   if (itemType === "Dagger") {
-    return [{ start: [0, -0.08, 0], end: [0, model.bladeLength ?? 1.48, 0], radius: 0.17 }];
+    const grip = (model.handleLength ?? .66) / 2;
+    return [{ start: [0, grip, 0], end: [0, grip + (model.bladeLength ?? 1.48), 0], radius: 0.17 }];
   }
 
   if (itemType === "Sword") {
-    return [{ start: [0, -0.1, 0], end: [0, (model.bladeLength ?? 2.65) + 0.38, 0], radius: 0.23 }];
+    const grip = (model.handleLength ?? .88) / 2;
+    return [{ start: [0, grip, 0], end: [0, (model.bladeLength ?? 2.65) + grip, 0], radius: 0.23 }];
   }
 
   if (itemType === "Long Sword") {
-    return [{ start: [0, -0.16, 0], end: [0, (model.bladeLength ?? 3.55) + 0.54, 0], radius: 0.3 }];
+    const grip = (model.handleLength ?? 1.18) / 2;
+    return [{ start: [0, grip, 0], end: [0, (model.bladeLength ?? 3.55) + grip, 0], radius: 0.3 }];
   }
 
   if (itemType === "Axe") {
+    const headWidth = model.headWidth ?? 1.18;
     return [
-      { start: [0, -0.95, 0], end: [0, 2.28, 0], radius: 0.18 },
-      { start: [side * -0.24, 1.92, 0], end: [side * 1.12, 1.92, 0], radius: 0.5 }
+      { start: [0, 1.4, 0.82], end: [0, 2.25, 0.75], radius: 0.16 }
     ];
   }
 
   if (itemType === "Spear") {
-    return [{ start: [0, -0.75, 0], end: [0, (model.shaftLength ?? 4.65) + 0.25, 0], radius: 0.17 }];
+    const shaftLength = model.shaftLength ?? 5.45;
+    const tipLength = model.tipLength ?? 0.9;
+    const tip = 4.3 + tipLength;
+    return [{ start: [0, tip - tipLength, 0], end: [0, tip, 0], radius: 0.16 }];
   }
 
   return [];
