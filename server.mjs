@@ -1,10 +1,11 @@
-import { isInOwnCastle, regenerateHealth } from './src/health.js';
+import { normalizeHitLocation, locationDamage, mitigateHitDamage } from "./src/hit-damage.js";
+import { isInOwnCastle, regenerateHealth, applyReportedHealth } from './src/health.js';
 import { captureHistory, mergeHistory, normalizeHistory, historyRenown } from './src/history.js';
 import { writeArchiveChapter } from './server-history.mjs';
 import { cheatCatalog, parseCheat, executeCheat } from './src/cheats.js';
 import { createAuth } from "./server-auth.mjs";
 import { isShield, resolveShieldBlock } from "./src/combat-motion.js";
-import { createDeathDrops, pickupDeathDrop } from "./src/death-loot.js";
+import { createDeathDrops, pickupDeathDrop, pruneExpiredLoot } from "./src/death-loot.js";
 import { clearPlayerResources, syncResourceReceipts, reconcileResourceTransfers, transferFactionResource } from "./src/resource-transfers.js";
 import { accruePoiIncome, normalizeIncomeTotals, reconcilePoiIncome } from "./src/poi-income.js";
 import { createGameState, foundFaction, updateFactionIdentity } from "./src/state.js";
@@ -44,8 +45,8 @@ const poiWorkerNames = {
   wheat: "Farmer",
   wood: "Lumberjack"
 };
-const armorSlots = new Set(["head", "chest", "gloves", "feet"]);
-const armorTypes = new Set(["Helmet", "Chestplate", "Gloves", "Feet"]);
+const armorSlots = new Set(["head", "chest", "gloves", "legs", "feet"]);
+const armorTypes = new Set(["Helmet", "Chestplate", "Gloves", "Leggings", "Feet"]);
 const players = new Map();
 const cheatSessions = new Set();
 const memoryPersistence = {
@@ -66,6 +67,28 @@ let dbPoolPromise = null;
 let multiplayerSnapshotSequence = 0;
 let worldSnapshotSequence = 0;
 let worldRequestQueue = Promise.resolve();
+
+// Use the same serialization queue as pickups/saves, including when nobody is
+// connected. Deadlines are also checked on reads and pickups at exactly 5 min.
+let lootSweepQueued = false;
+setInterval(() => {
+  if (lootSweepQueued) return;
+  lootSweepQueued = true;
+  worldRequestQueue = worldRequestQueue.then(async () => {
+    const pool = await getDbPool();
+    if (pool) await ensureDatabaseSchema(pool);
+    const stored = pool
+      ? (await pool.query('SELECT state FROM kok_world_state WHERE id = $1', ['primary'])).rows[0]?.state
+      : memoryPersistence.world;
+    if (!stored?.deathDrops?.length) return;
+    const deathDrops = pruneExpiredLoot(stored.deathDrops);
+    if (JSON.stringify(deathDrops) === JSON.stringify(stored.deathDrops)) return;
+    const world = { ...stored, deathDrops };
+    if (pool) await pool.query('UPDATE kok_world_state SET state = $1::jsonb, updated_at = now() WHERE id = $2', [JSON.stringify(world), 'primary']);
+    else { memoryPersistence.world = world; flushLocalSave(); }
+  }).catch(error => console.error('Could not expire dropped loot', error.message))
+    .finally(() => { lootSweepQueued = false; });
+}, 5000).unref();
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -231,8 +254,10 @@ async function loadPersistentState(playerId) {
   const pool = await getDbPool();
 
   if (!pool) {
+    const previousDrops = JSON.stringify(memoryPersistence.world.deathDrops);
     const world = evolveWorldState(memoryPersistence.world);
     memoryPersistence.world = world;
+    if (previousDrops !== JSON.stringify(world.deathDrops)) flushLocalSave();
     return {
       ok: true,
       storage: "disk",
@@ -564,7 +589,7 @@ function normalizeWorldState(snapshot) {
     poiIncomeTotals: normalizeIncomeTotals(source.poiIncomeTotals),
     resourceTransferTotals: normalizeIncomeTotals(source.resourceTransferTotals),
     resourceTransferRequests: source.resourceTransferRequests ?? {},
-    deathDrops: Array.isArray(source.deathDrops) ? source.deathDrops : [],
+    deathDrops: pruneExpiredLoot(source.deathDrops),
     factions: normalizeFactions(source.factions),
     market: normalizeMarket(source.market, defaults.market),
     factionMembers: normalizeFactionMembers(source.factionMembers, defaults.factionMembers),
@@ -1214,7 +1239,10 @@ function queueResourceDeath(playerId, live) {
 function upsertPlayer(payload) {
   const now = Date.now();
   const existing = players.get(payload.id);
-  if (existing && payload.connectionId && existing.connectionId !== payload.connectionId) existing.lastInputSequence = 0;
+  if (existing && payload.connectionId && existing.connectionId !== payload.connectionId) {
+    existing.lastInputSequence = 0;
+    existing.heartHealingTotal = 0;
+  }
   if (existing && payload.inputSequence <= (existing.lastInputSequence ?? 0)) {
     return { player: existing, accepted: false };
   }
@@ -1247,6 +1275,7 @@ function upsertPlayer(payload) {
     player.lastDamagedBy = null;
     player.lastDamagedByName = null;
     player.lastDamageSource = null;
+    player.flamingUntil = 0;
   }
 
   player.connectionId = payload.connectionId;
@@ -1268,8 +1297,10 @@ function upsertPlayer(payload) {
   player.activePoiInteriorId = payload.activePoiInteriorId;
   player.leftHandType = payload.leftHandType;
   player.leftHandName = payload.leftHandName;
+  player.leftHandGem = payload.leftHandGem;
   player.rightHandType = payload.rightHandType;
   player.rightHandName = payload.rightHandName;
+  player.rightHandGem = payload.rightHandGem;
   player.combatAttacks = payload.combatAttacks;
   player.armorItems = payload.armorItems;
   const guardElapsed = Math.min(1, (now - (player.guardUpdatedAt ?? now)) / 1000);
@@ -1289,8 +1320,10 @@ function upsertPlayer(payload) {
     player.dead = true;
     queueResourceDeath(player.id, player);
     player.respawnAt = Math.max(player.respawnAt ?? 0, payload.respawnAt || now + respawnDelayMs);
-  } else if (!player.dead && Number.isFinite(payload.hp) && payload.hp < player.hp) {
-    player.hp = Math.max(0, payload.hp);
+  } else {
+    const inDungeon = payload.sceneMode === 'poiInterior'
+      && POIS.some(poi => poi.id === payload.activePoiInteriorId && poi.type === 'Dungeon');
+    player.hp = applyReportedHealth(player, payload, inDungeon);
   }
 
   if (!player.dead && player.hp <= 0) {
@@ -1339,7 +1372,8 @@ function resolvePlayerAttack(body) {
   }
 
   const range = clampNumber(body?.range, 0.5, maxAttackRange);
-  let damage = Math.round(clampNumber(body?.damage, 1, 80));
+  const hitLocation = normalizeHitLocation(body?.hitLocation);
+  let damage = locationDamage(Math.round(clampNumber(body?.damage, 1, 80)), hitLocation);
   let knockback = clampNumber(body?.knockback, 0, 30);
   const direction = normalizeDirection(body?.direction);
   const source = sanitizeText(body?.source, 40);
@@ -1370,6 +1404,7 @@ function resolvePlayerAttack(body) {
     damage = block.damage; knockback = block.knockback; target.guardStamina = block.stamina; target.lastBlockedAt = now;
     if (block.broken) { target.guardBrokenUntil = now + 1400; target.guardHand = null; }
   }
+  damage = mitigateHitDamage(damage, clampNumber(body?.penetration, 0, 100), target.armorItems, hitLocation);
   attacker.guardHand = null;
   if (attackId) {
     if (!sameSwing) {
@@ -1379,6 +1414,7 @@ function resolvePlayerAttack(body) {
     attacker.meleeBatch.targets.add(targetId);
   }
   target.hp = Math.max(0, target.hp - damage);
+  if (damage > 0 && body?.status === 'flaming' && source === 'elemental magic' && [attacker.leftHandType, attacker.rightHandType].includes('Staff')) target.flamingUntil = now + 5000;
   if (knockback > 0 && knockbackDirection) {
     target.position = clampWorldPosition({ x: target.position.x + knockbackDirection.x * knockback, z: target.position.z + knockbackDirection.z * knockback });
   }
@@ -1451,8 +1487,10 @@ function sanitizePlayerPayload(body) {
     activePoiInteriorId: sanitizeText(body.activePoiInteriorId, 60) || null,
     leftHandType: sanitizeText(body.leftHandType, 40) || null,
     leftHandName: sanitizeText(body.leftHandName, 60) || null,
+    leftHandGem: sanitizeSocketedGem(body.leftHandGem),
     rightHandType: sanitizeText(body.rightHandType, 40) || null,
     rightHandName: sanitizeText(body.rightHandName, 60) || null,
+    rightHandGem: sanitizeSocketedGem(body.rightHandGem),
     combatAttacks: Array.isArray(body.combatAttacks) ? body.combatAttacks.filter(a => a && ['left','right'].includes(a.hand)).slice(0,2).map(a => ({
       hand: a.hand, id: sanitizeText(a.id,80), itemType: sanitizeText(a.itemType,40), comboStep: clampNumber(a.comboStep,0,2),
       charging: a.itemType === "Flail" && a.charging === true, chargePower: clampNumber(a.chargePower ?? 0,0,1), flailReleaseAngle: clampNumber(a.flailReleaseAngle ?? 0,-Math.PI*2,Math.PI*2),
@@ -1464,6 +1502,7 @@ function sanitizePlayerPayload(body) {
     deathLocation: body.dead && body.deathLocation && Number.isFinite(body.deathLocation.position?.x) && Number.isFinite(body.deathLocation.position?.z) ? body.deathLocation : null,
     armorItems: sanitizeArmorItems(body.armorItems),
     hp: Number.isFinite(Number(body.hp)) ? clampNumber(body.hp, 0, playerMaxHealth) : null,
+    heartHealingTotal: clampNumber(body.heartHealingTotal ?? 0, 0, Number.MAX_SAFE_INTEGER),
     maxHp: playerMaxHealth,
     dead: Boolean(body.dead),
     respawnAt: clampNumber(body.respawnAt, 0, Number.MAX_SAFE_INTEGER)
@@ -1472,6 +1511,10 @@ function sanitizePlayerPayload(body) {
 
 function sanitizePosition(position) {
   return clampWorldPosition(position, 24);
+}
+
+function sanitizeSocketedGem(value) {
+  return ['fire', 'water', 'air', 'earth'].includes(value) ? value : null;
 }
 
 function sanitizeArmorItems(items) {
@@ -1496,21 +1539,25 @@ function sanitizeArmorItems(items) {
       const metalness = clampNumber(item?.armor?.metalness, 0, 0.75);
 
       return {
-        id: `${slot}:${type}:${material}:${color}:${metalness}`,
+        id: `${slot}:${type}:${material}:${color}:${metalness}:${sanitizeSocketedGem(item.socketedGem) ?? ""}`,
+        socketedGem: sanitizeSocketedGem(item.socketedGem),
         type,
         name: sanitizeText(item?.name, 60) || `${material} ${type}`,
         armor: {
           slot,
           material,
           color,
-          metalness
+          metalness,
+          defense: clampNumber(item?.armor?.defense, 0, 100),
+          resistance: clampNumber(item?.armor?.resistance, 0, 70),
+          toughness: clampNumber(item?.armor?.toughness, 0, 100)
         },
         durability: clampNumber(item?.durability, 0, Number.MAX_SAFE_INTEGER),
         maxDurability: clampNumber(item?.maxDurability, 1, Number.MAX_SAFE_INTEGER)
       };
     })
     .filter(Boolean)
-    .slice(0, 4);
+    .slice(0, armorSlots.size);
 }
 
 function sanitizeArmorColor(color) {
@@ -1531,6 +1578,7 @@ function normalizeDirection(direction) {
 
 function serializePlayer(player) {
   return {
+    heartHealingTotal: player.heartHealingTotal ?? 0,
     id: player.id,
     inputSequence: player.lastInputSequence ?? 0,
     name: player.name,
@@ -1551,8 +1599,10 @@ function serializePlayer(player) {
     activePoiInteriorId: player.activePoiInteriorId,
     leftHandType: player.leftHandType,
     leftHandName: player.leftHandName,
+    leftHandGem: player.leftHandGem ?? null,
     rightHandType: player.rightHandType,
     rightHandName: player.rightHandName,
+    rightHandGem: player.rightHandGem ?? null,
     armorItems: player.armorItems ?? [],
     combatAttacks: player.combatAttacks ?? [],
     guardHand: player.guardHand ?? null,
@@ -1568,6 +1618,7 @@ function serializePlayer(player) {
     lastDamagedBy: player.lastDamagedBy,
     lastDamagedByName: player.lastDamagedByName,
     lastDamageSource: player.lastDamageSource ?? null,
+    flamingUntil: player.flamingUntil ?? 0,
     lastSeen: player.lastSeen
   };
 }

@@ -1,5 +1,28 @@
+import { subtractRects, stepLavaExposure, LAVA_SPEED_MULTIPLIER } from "./dungeon-lava.js";
+import { updateRoomDoors, dungeonMobElevation } from "./dungeon-room-doors.js";
+import { fireStaffConfig, flameHitsBody } from './fire-magic.js';
+import { FlameJetVisual } from './fire-magic-visuals.js';
+import { buildDungeonLayout, inside, roomBarriers, crossesBarrier } from "./dungeon-layout.js";
+import { poseEarthStaff } from './earth-magic-visuals.js';
+import { craftIronItem, combineForgeItems, gemSvg } from './forging.js';
+import { renderForge } from './forge-ui.js';
+import { transferStewardItem } from './steward-storage.js';
+const stewardMenu = { tab: 'vault' };
+import { exchangePage, exchangePaginationMarkup } from './exchange-pagination.js';
+import { EarthRockControl, earthStaffControl, ROCK_SMASH_MIN_DROP } from './earth-magic.js';
+import { attachEquipmentGem } from './equipment-gems.js';
+const forgeMenu = { tab: 'exchange', mould: 'Dagger', selection: [] };
+const exchangePages = { stock: 0, inventory: 0 };
+import { BARREL_HP, BARREL_BLAST_RADIUS, createBarrel, barrelPlacements, barrelBlastStrength, createBarrelPickup, disposeBarrelObject } from "./dungeon-barrels.js";
+import { StatusEffects, STATUS_EFFECTS } from './status-effects.js';
+import { PlayerStatusVisuals, createElementalEffect, updateElementalEffect } from './elemental-effects.js';
+import { createStaffVisual, stepSorcererMelee, poseSorcererStaff } from './staff.js';
+const playerStatuses = new StatusEffects();
+const flamingTargets = new Map();
+import { createCastleWorker, nearbyCastleNpc } from './castle-npcs.js';
+import { locateBodyHit, locationDamage, armorForHit, mitigateHitDamage } from "./hit-damage.js";
 import { DUNGEON_GATE_HOLD_SECONDS, createDungeonGate, advanceDungeonGate, isNearDungeonGate, constrainToDungeonAntechamber, crossesClosedDungeonGate } from "./dungeon-gate.js";
-import { SORCERERS, createElementalGem, createSorcererVisual, SorcererSpells, updateCollapseDebris } from "./dungeon-bosses.js";
+import { SORCERERS, createElementalGem, createSorcererVisual, loadSorcererModel, animateSorcerer, stepSorcererMovement, stepSorcererCombat, createBossArena, SorcererSpells, updateCollapseDebris } from "./dungeon-bosses.js";
 import { chooseCampTentSpawn, stepTentExit } from './camp-spawning.js';
 import { attachMobModel } from './mob-models.js';
 import { createPerformanceDiagnostics, isDiagnosticsShortcut } from './performance-diagnostics.js';
@@ -8,7 +31,7 @@ import { resolveNearbyMobPairs } from './mob-collisions.js';
 import { BloodEffects } from './blood-effects.js';
 import { statusPickCandidates } from './status-picking.js';
 import { pickCombatAimPoint, terrainAimCandidates } from './aim-picking.js';
-import { takeMobUpdate, moveMobInSteps, updateStructureTransform } from './update-budget.js';
+import { takeMobUpdate, distantMobInterval, moveMobInSteps, updateStructureTransform } from './update-budget.js';
 import { isInOwnCastle, regenerateHealth, reconcileHealth } from './health.js';
 import { LIBRARY_TABLE_DISPLAYS } from './library-displays.js';
 import { simulationSteps } from './frame-timing.js';
@@ -21,7 +44,7 @@ import { createInventoryPreview } from "./inventory-preview.js";
 import { createGroundSmashEffect, updateGroundSmashEffect } from "./ground-smash.js";
 import { getJumpAttack, canStartDaggerAirAttack, consumeDaggerAirStrike, canSpearVault, applySpearVaultLift, startSpearJump, isGroundSmashTarget, GROUND_SMASH_RADIUS } from "./jump-attacks.js";
 import { createGroundCoverInstances, createFootpaths } from './ground-cover.js';
-import { createLocalShadows } from "./daylight-shadows.js";
+import { createLocalShadows, installShadowEdgeFade } from "./daylight-shadows.js";
 import { createCampLights, updateCampLights, campFireFlicker } from "./camp-art.js";
 import { CAMP_CHEST_REACH, claimCampChest, updateCampChest } from "./camp-loot.js";
 import { INLAND_LAKES, lakeDistance, shoreScale, nearestLake, tileTouchesLake } from "./waterways.js";
@@ -36,15 +59,17 @@ import { getPoiWorkstation, isWithinWorkstationReach, rayHitsWorkstation, create
 import { createRoutePlanner } from "./navigation.js";
 import { NIGHT_CAMP_CAP, raidSpawnSources, raidTargets, nearestRaidTarget, advanceRaidCapture, reclaimPoiForWilderness } from "./night-raids.js";
 import { createRoadMask, roadSpeedMultiplier } from "./roads.js";
-import { clearPlayerInventory, createDeathDrops, sameLootScene } from "./death-loot.js";
+import { clearPlayerInventory, createDeathDrops, sameLootScene, DROPPED_LOOT_LIFETIME_MS, isLootExpired, pruneExpiredLoot } from "./death-loot.js";
+import { trackLootResources, disposeLootResources } from './loot-resources.js';
 import { clearPlayerResources, syncResourceReceipts } from "./resource-transfers.js";
 import { factionProduction } from "./poi-income.js";
 import { createRoyalCape, animateRoyalCape } from "./royal-cape.js";
 import { createCameraOcclusion } from "./camera-occlusion.js";
 import { createWorldLabels } from "./world-labels.js";
 import { createMinimap } from "./minimap.js";
-import { getFaction, flagSvg, flagPixels, normalizeFlag, normalizeFactions } from "./factions.js";
-import { updateInstanceDetail, SpatialGrid, partitionInstances, createTerrainTile, isWithinRenderDistance, getRenderPixelRatio, WORLD_RENDER_DISTANCE, TERRAIN_DETAIL_DISTANCE } from "./world-performance.js";
+import { getFaction, flagSvg, flagPixels, normalizeFlag, normalizeFactions, FLAG_PATTERNS } from "./factions.js";
+import { setupFlagColours } from "./flag-colours.js";
+import { updateInstanceDetail, isBeyondFog, SpatialGrid, partitionInstances, createTerrainTile, isWithinRenderDistance, getRenderPixelRatio, WORLD_RENDER_DISTANCE, TERRAIN_DETAIL_DISTANCE } from "./world-performance.js";
 import { createRockPart, rockVariant, rockColliderProfile, rockSurfaceWorldY } from "./rock-art.js";
 import { createLibraryExterior, createLibraryInterior, createInstancedLandscape, createPoiSetting, createCampModel } from "./world-art.js";
 import { WORLD_EXTENT, SNOW_LINE, LIBRARY_ID, LIBRARY_SCROLL_POSITION, REGIONS, MOB_CAMPS, distanceToCoast, clampWorldPosition, getNaturalHeight, getRegionAt, createWorldRoutes, selectCampForSpawn } from "./world-layout.js";
@@ -55,8 +80,12 @@ import { attachWarriorModel } from "./warrior-model.js";
 import { attachArmourModel } from "./armour-models.js";
 import { flailChargePower, flailSpinAngle, getFlailReleaseAngle } from "./flail-dynamics.js";
 import { MELEE_STYLES, sampleMeleeMotion, canWeaveAttack, isShield, resolveShieldBlock, getStrikeWindow } from "./combat-motion.js";
+import { ATTACK_BUFFER_SECONDS, angleDifference, approachFacing, selectMeleeTarget, assistedDirection,
+  canCancelIntoDefense, attackMovementScale, attackStepDistance, meleeContactPadding, sweptWeaponSegments,
+  enemyAttackPermitted, clearRecoilPose, applyRecoilPose, meleeTargetTorso, meleeTargetInReach, lockedMeleeContact } from './combat-feel.js';
 import { getComboCadence, getComboIndex, createComboChain } from "./combo-timing.js";
 import { CombatTrails } from "./combat-trails.js";
+import { combatAudio } from './combat-audio.js';
 import { attachWeaponModel, createBowString, updateBowString, focusedSwingAngles, reachHand, createFlailModel, updateFlailModel, simulateFlailModel, seatWeaponInHand } from "./weapon-models.js";
 import {
   getCombatAttackDuration,
@@ -192,7 +221,7 @@ const OUTPOST_TOWER_CAMERA = {
   sensitivity: 0.0028
 };
 const account = await chooseAccount();
-const connectionId = crypto.randomUUID();
+const connectionId = createId("connection");
 initializeNetworkIdentity();
 const HAND_CONFIG = {
   left: {
@@ -254,6 +283,7 @@ const BODY_EQUIP_SLOTS = [
   { id: "head", label: "Head", stateKey: "headItemId" },
   { id: "chest", label: "Chest", stateKey: "chestItemId" },
   { id: "gloves", label: "Gloves", stateKey: "glovesItemId" },
+  { id: "legs", label: "Legs", stateKey: "legsItemId" },
   { id: "feet", label: "Feet", stateKey: "feetItemId" },
   { id: "leftHand", label: "Left hand", stateKey: "leftHandItemId", hand: "left" },
   { id: "rightHand", label: "Right hand", stateKey: "rightHandItemId", hand: "right" }
@@ -321,7 +351,7 @@ const ITEM_ICON_SVGS = {
     <path class="item-icon-gold" d="M21 40h22" />
     <path class="item-icon-wood" d="M32 42v13" />`
 };
-const ARMOR_VISUAL_SLOT_IDS = ["head", "chest", "gloves", "feet"];
+const ARMOR_VISUAL_SLOT_IDS = ["head", "chest", "gloves", "legs", "feet"];
 const LOCATION_HOLD_DURATION = 1.05;
 const POI_DOOR_INTERACTION_RANGE = 6.5;
 const POI_FLAG_HOLD_DURATION = 1.35;
@@ -363,9 +393,7 @@ const OUTDOOR_DUNGEON_MONSTER_SPAWN_BUFFER = 10;
 const OUTDOOR_DUNGEON_MONSTER_TRACK_RANGE = 105;
 const DUNGEON_COLLAPSE_WARNING_SECONDS = 240;
 const DUNGEON_RESPAWN_SECONDS = 300;
-const DUNGEON_ROOM_CELL_SIZE = 72;
-const DUNGEON_ROOM_ROW_SPACING = 68;
-const DUNGEON_CORRIDOR_WIDTH = 15;
+const DUNGEON_CORRIDOR_WIDTH = 12;
 const DUNGEON_TREASURE_PICKUP_RANGE = 7;
 const ENTITY_STATUS_CHANGED_VISIBLE_DURATION = 2.8;
 const PVE_STATUS_BAR_HEIGHT = 7.15;
@@ -387,6 +415,7 @@ const KNOCKBACK_DAMPING = 8.8;
 const OUTPOST_ATTACK_RANGE = 95;
 const OUTPOST_ATTACK_INTERVAL = 2.35;
 const OUTPOST_ATTACK_DAMAGE = 24;
+const PROJECTILE_DAMAGE_MULTIPLIER = 0.7;
 const OUTPOST_PROJECTILE_SPEED = 76;
 const DROPPED_ITEM_PICKUP_RANGE = 5.5;
 const LOCKED_DROPPED_ITEM_PICKUP_ASSIST_RADIUS = 3.2;
@@ -947,6 +976,7 @@ function buildPersistentPayload(includeWorld = true) {
         hotbar: state.player.hotbar,
         resources: state.player.resources,
         inventory: state.player.inventory,
+        stewardInventory: state.player.stewardInventory,
         campChestRefills: state.player.campChestRefills
       }
     }
@@ -1135,6 +1165,7 @@ function applyPlayerSnapshot(snapshot, options = {}) {
   if (Array.isArray(persisted.inventory)) {
     state.player.inventory = persisted.inventory;
   }
+  state.player.stewardInventory = Array.isArray(persisted.stewardInventory) ? persisted.stewardInventory : [];
 
   if (refreshPersistedWeaponRanges()) {
     markPersistenceDirty();
@@ -1163,6 +1194,10 @@ function refreshPersistedWeaponRanges() {
   let changed = false;
 
   for (const item of state.player.inventory) {
+    if (item.socketedGem && item.name !== equipmentName(item)) {
+      item.name = equipmentName(item);
+      changed = true;
+    }
     const baseline = WEAPON_STATS[item?.type];
 
     if (!baseline || !item?.weapon) {
@@ -1170,7 +1205,7 @@ function refreshPersistedWeaponRanges() {
     }
 
     const currentRange = Number(item.weapon.range) || 0;
-    if (currentRange < baseline.range) {
+    if (currentRange !== baseline.range) {
       item.weapon.range = baseline.range;
       changed = true;
     }
@@ -1361,6 +1396,7 @@ function installPerformanceProbes() {
   updateAttackAnimations = p.wrap('Player combat', updateAttackAnimations);
   updatePveEnemies = p.wrap('Dungeon mobs', updatePveEnemies);
   updateOutdoorDungeonMonsters = p.wrap('Outdoor mobs', updateOutdoorDungeonMonsters);
+  updateRaidRoutes = p.wrap('Raid pathfinding', updateRaidRoutes);
   resolvePveMobCollisions = p.wrap('Mob collisions', resolvePveMobCollisions);
   resolvePveMobPlayerCollisions = p.wrap('Mob/player collisions', resolvePveMobPlayerCollisions);
   updatePveMobAnimation = p.wrap('Mob animation', updatePveMobAnimation);
@@ -1390,11 +1426,11 @@ function readPerformanceCounters() {
   const effects = world.bloodEffects?.effects ?? [];
   const memory = performance.memory;
   const info = world.renderer.info;
-  const treeChunks = world.renderChunks.filter(mesh => mesh.visible && mesh.userData.instanceDetail);
+  const treeChunks = world.renderChunks.filter(mesh => mesh.visible && mesh.userData.treeDetail);
   return {
     'Scene': world.sceneMode,
     'Visible tree batches (full / distant)': world.sceneMode === 'outdoor'
-      ? `${treeChunks.filter(mesh => mesh.geometry === mesh.userData.instanceDetail.detailed).length} / ${treeChunks.filter(mesh => mesh.geometry === mesh.userData.instanceDetail.coarse).length}` : 'n/a',
+      ? `${treeChunks.filter(mesh => mesh.userData.treeDetail.detailed.visible).length} / ${treeChunks.filter(mesh => mesh.userData.treeDetail.coarse.visible).length}` : 'n/a',
     'Mobs alive (outdoor / dungeon)': `${outdoor.length} / ${dungeon.length}`,
     'Outdoor mobs within 100 units': world.sceneMode === 'outdoor'
       ? outdoor.filter(mob => !mob.raidInteriorId && distance2D(mob.mesh.position, state.player.position) < 100).length : 'n/a',
@@ -1411,6 +1447,7 @@ function readPerformanceCounters() {
 }
 
 function setupRenderer() {
+  installShadowEdgeFade();
   world.renderer.shadowMap.enabled = true;
   world.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -1507,6 +1544,8 @@ function updateDayNightLighting(deltaSeconds) {
     terrainUniforms.sunColor.value.copy(sunLight.color);
     terrainUniforms.sunStrength.value = sunLight.intensity / 2.1;
     terrainUniforms.shadowAnchor.value.set(sunLight.target.position.x, sunLight.target.position.z);
+    terrainUniforms.hazeNear.value = world.scene.fog.near;
+    terrainUniforms.hazeFar.value = world.scene.fog.far;
   }
 
   document.body.dataset.timeOfDay = isNight ? "night" : "day";
@@ -1895,6 +1934,8 @@ function createOutdoorScenery() {
     ...(entry.type === "rock" ? rockColliderProfile(entry) : {})
   }));
   world.sceneryGrid = new SpatialGrid(world.sceneryColliders);
+  world.earthMagic = new EarthRockControl(group, world.sceneryColliders, getTerrainHeightAt,
+    () => { world.sceneryGrid = new SpatialGrid(world.sceneryColliders); }, resolveEarthRockSmash);
   world.meshes.scenery = group;
   addOutdoor(group);
   document.body.dataset.biomeScenery = String(scenery.length);
@@ -2522,18 +2563,18 @@ function createBlacksmithRoom(root, materials) {
   forgeLight.position.set(60, 4.4, -14.7);
   root.add(forgeLight);
 
-  const anvilBase = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.85, 1.1, 8), wood);
-  anvilBase.position.set(50, 0.55, -8.5);
+  const anvilBase = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.85, 2.1, 8), wood);
+  anvilBase.position.set(50, 1.05, -8.5);
   anvilBase.castShadow = true;
   root.add(anvilBase);
 
   const anvil = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.7, 1.15), iron);
-  anvil.position.set(50, 1.42, -8.5);
+  anvil.position.set(50, 2.42, -8.5);
   anvil.castShadow = true;
   root.add(anvil);
 
   const horn = new THREE.Mesh(new THREE.ConeGeometry(0.38, 1.05, 10), iron);
-  horn.position.set(51.62, 1.42, -8.5);
+  horn.position.set(51.62, 2.42, -8.5);
   horn.rotation.z = -Math.PI * 0.5;
   horn.castShadow = true;
   root.add(horn);
@@ -2730,6 +2771,10 @@ function rebuildProceduralDungeon(group) {
   world.dungeon.treasure = null;
   world.dungeon.chests = [];
   world.dungeon.contentRoot = createProceduralDungeonContent(world.dungeon.layout);
+  updateRoomDoors(world.dungeon, surface, 0);
+  world.dungeon.sealRoot.traverse(child => {
+    if (child.isMesh) { child.userData.dungeonId = world.dungeon.id; tagInteriorCameraWall(child); }
+  });
   world.cameraOcclusion.register(world.dungeon.contentRoot);
   group.add(world.dungeon.contentRoot);
   document.body.dataset.dungeonStatus = world.dungeon.status;
@@ -2737,8 +2782,21 @@ function rebuildProceduralDungeon(group) {
 }
 
 function removeDungeonContent() {
+  for (const barrel of world.dungeon.barrels ?? []) disposeBarrelObject(barrel.mesh);
+  for (const drop of world.dungeon.barrelDrops ?? []) disposeBarrelObject(drop.mesh);
+  for (const effect of world.dungeon.barrelEffects ?? []) disposeBarrelObject(effect.mesh);
+  world.dungeon.barrels = [];
+  world.dungeon.barrelDrops = [];
+  world.dungeon.barrelEffects = [];
   world.dungeon.gate = null;
-  for (const enemy of world.pveEnemies) enemy.spells?.clear();
+  if (world.dungeon.sealRoot) {
+    world.dungeon.sealRoot.traverse(child => { child.geometry?.dispose(); child.material?.dispose(); });
+    world.dungeon.sealRoot.removeFromParent();
+  }
+  world.dungeon.sealRoot = null; world.dungeon.roomDoors = [];
+  world.dungeon.lavaExposure = 0;
+  for (const enemy of world.pveEnemies) enemy.spells?.dispose();
+  for (const drop of [...world.droppedItems]) if (!drop.shared && drop.activePoiInteriorId === world.dungeon.id) removeDroppedItem(drop.id);
   if (world.dungeon.contentRoot) {
     removeFromParent(world.dungeon.contentRoot);
   }
@@ -2750,120 +2808,7 @@ function removeDungeonContent() {
 }
 
 function generateDungeonLayout() {
-  const rooms = [];
-  const corridors = [];
-  const occupied = new Set();
-  const path = [{ gx: 0, gy: 0 }];
-  occupied.add("0,0");
-
-  for (let index = 1; index < 24; index += 1) {
-    const previous = path[path.length - 1];
-    const options = [
-      { gx: previous.gx, gy: previous.gy + 1 },
-      { gx: previous.gx - 1, gy: previous.gy },
-      { gx: previous.gx + 1, gy: previous.gy }
-    ].filter((cell) => Math.abs(cell.gx) <= 3 && cell.gy <= 24 && cell.gy > 0 && !occupied.has(`${cell.gx},${cell.gy}`));
-    const next = options.length ? randomItem(options) : { gx: previous.gx, gy: previous.gy + 1 };
-    path.push(next);
-    occupied.add(`${next.gx},${next.gy}`);
-  }
-
-  const branchSeeds = path.slice(1, -1).sort(() => Math.random() - 0.5).slice(0, 10);
-  for (const seed of branchSeeds) {
-    const side = Math.random() > 0.5 ? 1 : -1;
-    const branch = { gx: seed.gx + side, gy: seed.gy };
-    const key = `${branch.gx},${branch.gy}`;
-    if (Math.abs(branch.gx) <= 3 && !occupied.has(key)) {
-      path.push({ ...branch, branchOf: `${seed.gx},${seed.gy}` });
-      occupied.add(key);
-    }
-  }
-
-  for (const [index, cell] of path.entries()) {
-    const isStart = index === 0;
-    const isEnd = index === 23;
-    const width = isStart ? 96 : isEnd ? 60 : randomBetween(43, 55);
-    const depth = isStart ? 64 : isEnd ? 52 : randomBetween(40, 50);
-    rooms.push({
-      id: `room-${index}`,
-      gx: cell.gx,
-      gy: cell.gy,
-      x: cell.gx * DUNGEON_ROOM_CELL_SIZE,
-      z: 20 - cell.gy * DUNGEON_ROOM_ROW_SPACING,
-      width,
-      depth,
-      kind: isStart ? "entrance" : isEnd ? "end" : cell.branchOf ? "side" : "main",
-      branchOf: cell.branchOf ?? null,
-      connections: new Set()
-    });
-  }
-
-  const roomByCell = new Map(rooms.map((room) => [`${room.gx},${room.gy}`, room]));
-
-  for (let index = 1; index < 24; index += 1) {
-    connectDungeonRooms(roomByCell.get(`${path[index - 1].gx},${path[index - 1].gy}`), roomByCell.get(`${path[index].gx},${path[index].gy}`), corridors);
-  }
-
-  for (const room of rooms.filter((entry) => entry.kind === "side")) {
-    const [gx, gy] = room.branchOf.split(",").map(Number);
-    connectDungeonRooms(roomByCell.get(`${gx},${gy}`), room, corridors);
-  }
-
-  const walkRects = [
-    ...rooms.map((room) => rectFromCenter(room.x, room.z, room.width, room.depth)),
-    ...corridors.map((corridor) => rectFromCenter(corridor.x, corridor.z, corridor.width, corridor.depth))
-  ];
-  const bounds = getBoundsFromRects(walkRects, 3);
-
-  return {
-    rooms,
-    corridors,
-    walkRects,
-    bounds,
-    entranceRoom: rooms[0],
-    endRoom: rooms.find((room) => room.kind === "end")
-  };
-}
-
-function connectDungeonRooms(first, second, corridors) {
-  if (!first || !second) {
-    return;
-  }
-
-  first.connections.add(second.id);
-  second.connections.add(first.id);
-
-  const dx = second.x - first.x;
-  const dz = second.z - first.z;
-  const horizontal = Math.abs(dx) >= Math.abs(dz);
-
-  corridors.push({
-    x: (first.x + second.x) / 2,
-    z: (first.z + second.z) / 2,
-    width: horizontal ? Math.abs(dx) + DUNGEON_CORRIDOR_WIDTH : DUNGEON_CORRIDOR_WIDTH,
-    depth: horizontal ? DUNGEON_CORRIDOR_WIDTH : Math.abs(dz) + DUNGEON_CORRIDOR_WIDTH
-  });
-}
-
-function rectFromCenter(x, z, width, depth) {
-  return {
-    minX: x - width / 2,
-    maxX: x + width / 2,
-    minZ: z - depth / 2,
-    maxZ: z + depth / 2
-  };
-}
-
-function getBoundsFromRects(rects, padding = 0) {
-  return rects.reduce(
-    (bounds, rect) => ({
-      minX: Math.min(bounds.minX, rect.minX - padding),
-      maxX: Math.max(bounds.maxX, rect.maxX + padding),
-      minZ: Math.min(bounds.minZ, rect.minZ - padding),
-      maxZ: Math.max(bounds.maxZ, rect.maxZ + padding)
-    }),
-    { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity }
-  );
+  return buildDungeonLayout(Math.random);
 }
 
 function createProceduralDungeonContent(layout) {
@@ -2878,10 +2823,26 @@ function createProceduralDungeonContent(layout) {
   const woodMat = new THREE.MeshStandardMaterial({ color: "#5a3826", roughness: 0.84 });
 
   for (const corridor of layout.corridors) {
-    const floor = new THREE.Mesh(interiorUv(new THREE.BoxGeometry(corridor.width, 0.32, corridor.depth)), corridorMat);
-    floor.position.set(corridor.x, 0.03, corridor.z);
-    floor.receiveShadow = true;
-    root.add(floor);
+    for (const side of [-1,1]) {
+      const wall = new THREE.Mesh(interiorUv(new THREE.BoxGeometry(corridor.horizontal ? corridor.width : 1, 10.8, corridor.horizontal ? 1 : corridor.depth)),stoneMat);
+      wall.position.set(corridor.x+(corridor.horizontal?0:side*6.5),1.4,corridor.z+(corridor.horizontal?side*6.5:0));
+      wall.userData.dungeonId = world.dungeon.id;
+      wall.castShadow = true; wall.receiveShadow = true;
+      tagInteriorCameraWall(wall); root.add(wall);
+    }
+    const gaps = layout.lava.filter(g=>g.corridor===corridor);
+    for (const gap of gaps) {
+      const lava = new THREE.Mesh(new THREE.BoxGeometry(gap.width,.3,gap.depth), new THREE.MeshStandardMaterial({color:0xff6508,emissive:0xff3300,emissiveIntensity:2}));
+      lava.position.set(gap.x,-1.5,gap.z); root.add(lava);
+    }
+    if (gaps.length) {
+      const warning = createTextSprite('Lava burns and slows - Space to jump out', '#ffb35c', 24);
+      warning.position.set(corridor.x,4,corridor.z); root.add(warning);
+    }
+    for (const part of subtractRects(corridor,gaps)) {
+      const floor=new THREE.Mesh(interiorUv(new THREE.BoxGeometry(part.width,4,part.depth)),corridorMat);
+      floor.position.set(part.x,-1.81,part.z); floor.receiveShadow=true; root.add(floor);
+    }
   }
 
   for (const room of layout.rooms) {
@@ -2898,12 +2859,13 @@ function createProceduralDungeonContent(layout) {
 }
 
 function addDungeonRoom(root, room, layout, materials) {
-  const floor = new THREE.Mesh(interiorUv(new THREE.BoxGeometry(room.width, 0.4, room.depth)), materials.floorMat);
-  floor.position.set(room.x, -0.02, room.z);
+  const floor = new THREE.Mesh(interiorUv(new THREE.BoxGeometry(room.width, 4, room.depth)), materials.floorMat);
+  floor.position.set(room.x, -1.82, room.z);
   floor.receiveShadow = true;
   root.add(floor);
 
   root.add(createDungeonInteriorDetails(room));
+  addDungeonBarrels(root, room);
   addDungeonRoomWalls(root, room, layout, materials.stoneMat);
   if (room.kind === "entrance") {
     world.dungeon.gate = createDungeonGate(room, DUNGEON_CORRIDOR_WIDTH, surface);
@@ -2920,14 +2882,14 @@ function addDungeonRoom(root, room, layout, materials) {
     root.add(column);
   }
 
-  const torchCount = room.kind === "entrance" ? 2 : room.kind === "end" ? 4 : 1 + Math.floor(Math.random() * 2);
-  for (let index = 0; index < torchCount; index += 1) {
-    addDungeonTorch(root, room, index, materials);
+  const lightCount = room.kind === "entrance" ? 2 : room.kind === "end" ? 4 : 1 + Math.floor(Math.random() * 2);
+  for (let index = 0; index < lightCount; index += 1) {
+    addDungeonRoomLight(root, room, index);
   }
 
   if (room.kind === "end") {
-    // The elemental sorcerer is the end-room objective.
-  } else if (room.kind !== "entrance") {
+    root.add(createBossArena(room));
+  } else if (room.kind === "treasure" || (room.kind === "main" && Math.random() < .45)) {
     const chest = new THREE.Group();
     chest.userData.opened = false;
     const base = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.7, 2.1), materials.woodMat);
@@ -2936,8 +2898,8 @@ function addDungeonRoom(root, room, layout, materials) {
     chest.add(base, lid);
     chest.userData.lid = lid;
     chest.userData.roomId = room.id;
-    chest.userData.gold = Math.round(randomBetween(25, 65));
-    const label = createTextSprite("Loot Chest", "#f4d77a", 24);
+    chest.userData.gold = Math.round(room.kind === "treasure" ? randomBetween(100, 180) : randomBetween(8, 22));
+    const label = createTextSprite(room.kind === "treasure" ? "Guarded Treasure" : "Supply Chest", "#f4d77a", 24);
     label.position.y = 4;
     chest.add(label);
     chest.userData.label = label;
@@ -2954,6 +2916,125 @@ function addDungeonRoom(root, room, layout, materials) {
     bone.rotation.set(Math.PI * 0.5, 0, Math.random() * Math.PI);
     root.add(bone);
   }
+}
+
+function addDungeonBarrels(root, room) {
+  world.dungeon.barrels ??= [];
+  for (const placement of barrelPlacements(room)) {
+    const mesh = createBarrel(placement.trapped);
+    mesh.position.set(placement.x, .2, placement.z);
+    mesh.rotation.y = placement.rotation;
+    root.add(mesh);
+    world.dungeon.barrels.push({ id: `barrel-${world.dungeon.id}-${world.dungeon.barrels.length}`,
+      name: 'Barrel', isBarrel: true, mesh, trapped: placement.trapped,
+      hp: BARREL_HP, maxHp: BARREL_HP, radius: 1.5, hitMinY: 0, hitMaxY: 3.2, dead: false });
+  }
+}
+
+function getActiveDungeonBarrels() {
+  return world.sceneMode === 'poiInterior' && getActivePoiInterior()?.type === 'Dungeon'
+    ? (world.dungeon.barrels ?? []).filter(barrel => !barrel.dead) : [];
+}
+
+function constrainDungeonBarrels(position) {
+  const result = { ...position };
+  for (const barrel of getActiveDungeonBarrels()) {
+    const dx = result.x-barrel.mesh.position.x, dz = result.z-barrel.mesh.position.z;
+    const distance = Math.hypot(dx,dz), clearance = barrel.radius + .8;
+    if (distance < clearance) {
+      result.x = barrel.mesh.position.x + (distance > .001 ? dx/distance : 1)*clearance;
+      result.z = barrel.mesh.position.z + (distance > .001 ? dz/distance : 0)*clearance;
+    }
+  }
+  return result;
+}
+
+function damageDungeonBarrel(barrel, amount) {
+  if (barrel.dead || !Number.isFinite(amount) || amount <= 0) return;
+  barrel.hp = Math.max(0, barrel.hp-amount);
+  if (barrel.hp > 0) return;
+  barrel.dead = true; // Mark before the blast so clustered barrels cannot recurse forever.
+  const origin = barrel.mesh.position.clone();
+  disposeBarrelObject(barrel.mesh);
+  if (!barrel.trapped) {
+    world.dungeon.barrelDrops ??= [];
+    for (let i=0;i<3;i++) {
+      const heart = i > 0, mesh = createBarrelPickup(heart), angle = i*Math.PI*2/3;
+      mesh.position.set(origin.x + Math.cos(angle)*2, 1, origin.z + Math.sin(angle)*2);
+      world.dungeon.contentRoot.add(mesh);
+      world.dungeon.barrelDrops.push({ mesh, heart, value: heart ? 12 : 4 + Math.floor(Math.random()*7), age: 0 });
+    }
+    combatAudio.impact(.8);
+    return;
+  }
+  const fire = new THREE.Mesh(new THREE.SphereGeometry(1,16,10), new THREE.MeshBasicMaterial({ color: '#ff9a32', transparent: true, opacity: .85, depthWrite: false }));
+  fire.position.copy(origin).y += 1.4;
+  world.dungeon.contentRoot.add(fire);
+  world.dungeon.barrelEffects ??= [];
+  world.dungeon.barrelEffects.push({ mesh: fire, age: 0 });
+  combatAudio.impact(3);
+  world.combatFeedback.cameraImpulse = Math.max(world.combatFeedback.cameraImpulse, .065*barrelBlastStrength(origin, state.player.position));
+  const targets = [...getActiveCombatEnemies(), getLocalPlayerCombatTarget()];
+  for (const target of targets) {
+    if (target.dead || target.removed) continue;
+    const position = target.isLocalPlayer ? state.player.position : target.mesh.position;
+    const strength = barrelBlastStrength(origin, position);
+    if (!strength || crossesClosedDungeonGate(world.dungeon.gate, origin, position)) continue;
+    const direction = new THREE.Vector3(position.x-origin.x,0,position.z-origin.z);
+    if (direction.lengthSq() < .001) direction.set(1,0,0);
+    direction.normalize();
+    damageCombatTarget(target, Math.round(42*strength), 'barrel explosion', {
+      sourceName: 'a trapped barrel', previousPosition: origin, direction,
+      knockback: 14*strength, comboName: 'overheadFinish', unavoidable: true
+    });
+    // Unavoidable area damage bypasses shield handling, including its knockback path.
+    if (target.isLocalPlayer) applyKnockbackToLocalPlayer(origin, 14*strength);
+  }
+  for (const nearby of getActiveDungeonBarrels()) {
+    const strength = barrelBlastStrength(origin, nearby.mesh.position);
+    if (strength && !crossesClosedDungeonGate(world.dungeon.gate, origin, nearby.mesh.position)) damageDungeonBarrel(nearby, 42*strength);
+  }
+}
+
+function updateDungeonBarrels(deltaSeconds) {
+  for (const barrel of getActiveDungeonBarrels()) {
+    if (!barrel.burning) continue;
+    barrel.burnAge = (barrel.burnAge ?? 0) + deltaSeconds;
+    updateElementalEffect(barrel.burning, barrel.burnAge % 2, true);
+    damageDungeonBarrel(barrel, 4 * deltaSeconds);
+  }
+  if (world.sceneMode !== 'poiInterior' || getActivePoiInterior()?.type !== 'Dungeon') return;
+  for (const effect of world.dungeon.barrelEffects ?? []) {
+    effect.age += deltaSeconds;
+    effect.mesh.scale.setScalar(1 + Math.min(1,effect.age/.25)*BARREL_BLAST_RADIUS);
+    effect.mesh.material.opacity = Math.max(0,.85*(1-effect.age/.55));
+    if (effect.age >= .55) disposeBarrelObject(effect.mesh);
+  }
+  world.dungeon.barrelEffects = (world.dungeon.barrelEffects ?? []).filter(effect => effect.age < .55);
+  for (const drop of world.dungeon.barrelDrops ?? []) {
+    if (world.dungeon.layout?.lava?.some(gap => inside(drop.mesh.position,gap))) {
+      drop.collected = true; disposeBarrelObject(drop.mesh); continue;
+    }
+    drop.age += deltaSeconds;
+    drop.mesh.rotation.y += deltaSeconds*1.4;
+    drop.mesh.position.y = 1 + Math.sin(drop.age*3)*.18;
+    const player = state.player;
+    if (drop.age < .35 || player.dead || distance2D(player.position, drop.mesh.position) > 2.2) continue;
+    if (drop.heart && player.hp >= player.maxHp) continue;
+    if (drop.heart) {
+      const healed = Math.min(drop.value, player.maxHp - player.hp);
+      player.hp += healed;
+      world.multiplayer.heartHealingTotal = (world.multiplayer.heartHealingTotal ?? 0) + healed;
+      markPlayerPersistenceDue();
+    }
+    else player.gold += drop.value;
+    drop.collected = true;
+    disposeBarrelObject(drop.mesh);
+    markPersistenceDirty();
+    updatePlayerHealthBar();
+    refreshUi();
+  }
+  world.dungeon.barrelDrops = (world.dungeon.barrelDrops ?? []).filter(drop => !drop.collected);
 }
 
 function addDungeonRoomWalls(root, room, layout, material) {
@@ -2997,35 +3078,25 @@ function hasDungeonConnectionOnSide(room, side, layout) {
   return false;
 }
 
-function addDungeonTorch(root, room, index, materials) {
+function addDungeonRoomLight(root, room, index) {
   const x = room.x + (index % 2 === 0 ? -1 : 1) * (room.width / 2 - 1.2);
   const z = room.z + (index < 2 ? -1 : 1) * room.depth * 0.24;
-  const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.1, 8), materials.woodMat);
-  bracket.position.set(x, 2.8, z);
-  bracket.rotation.z = Math.PI / 2;
-  bracket.castShadow = true;
-  root.add(bracket);
-
-  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.95, 9), materials.runeMat);
-  flame.position.set(x, 3.45, z);
-  root.add(flame);
-
+  // Preserve room illumination without the floating cone and wooden bracket props.
   const light = new THREE.PointLight("#a779ff", room.kind === "end" ? 1.75 : 1.05, room.kind === "end" ? 32 : 22, 1.7);
   light.position.set(x, 4.2, z);
   root.add(light);
 }
 
 function createDungeonEnemySpawns(layout) {
-  const rooms = layout.rooms.filter((room) => room.kind !== "entrance" && room.kind !== "end");
-  const targetCount = Math.min(rooms.length * 2, Math.max(rooms.length + 1, getOnlinePlayerCount() * 5));
+  const rooms = layout.rooms.filter((room) => room.kind !== "entrance" && room.kind !== "end" && room.kind !== "treasure");
   const spawns = [];
-
-  for (let index = 0; index < targetCount; index += 1) {
-    const room = rooms[index % rooms.length];
+  const encounters = rooms.flatMap(room => Array(room.kind === 'combat' ? 4 + Math.min(2, getOnlinePlayerCount()-1) : room.kind === 'barracks' ? 3 : 1).fill(room));
+  for (const [index, room] of encounters.entries()) {
     const depthBonus = Math.max(0, room.gy) * 5;
     const archetype = index % 5 === 4 ? "raider" : "creature";
     const template = getPveMobTemplate(archetype, index);
     spawns.push({
+      roomId: room.id,
       archetype,
       name: template.name,
       position: {
@@ -3046,6 +3117,34 @@ function createDungeonEnemySpawns(layout) {
     position: { x: layout.endRoom.x, z: layout.endRoom.z }, hp: boss.hp,
     color: boss.color, speed: 4, radius: 2.1 });
   return spawns;
+}
+
+function updateDungeonEncounters(deltaSeconds = 0) {
+  if (world.sceneMode !== 'poiInterior' || getActivePoiInterior()?.type !== 'Dungeon') return;
+  const dungeon = world.dungeon, layout = dungeon.layout;
+  if (!layout) return;
+  for (const room of layout.rooms.filter(room => room.kind === 'combat' && !room.cleared)) {
+    if (!room.active && !state.player.dead && inside(state.player.position, room, -5)) {
+      const present = world.pveEnemies.filter(enemy => !enemy.dead && inside(enemy.mesh.position, room));
+      if (!present.length && world.pveEnemies.some(enemy => !enemy.dead && enemy.roomId === room.id)) continue;
+      room.encounterEnemies = new Set(present);
+      room.active = true;
+      flash('The doors seal. Defeat every guard to reopen them and unlock the treasure.');
+    }
+    if (room.active && !world.pveEnemies.some(enemy => !enemy.dead && (room.encounterEnemies?.has(enemy) || inside(enemy.mesh.position, room)))) {
+      room.cleared = true;
+      flash('Room cleared. The seals break and its treasure is unlocked.');
+    }
+    // A failed attempt can be entered again after respawning.
+    if (state.player.dead && !room.cleared) room.active = false;
+  }
+  updateRoomDoors(dungeon, surface, deltaSeconds);
+  const contact = !state.player.dead && world.playerMotion.verticalOffset <= -1.2 && layout.lava.some(gap => inside(state.player.position,gap));
+  const exposure = stepLavaExposure(contact,dungeon.lavaExposure ?? 0,deltaSeconds);
+  dungeon.lavaExposure = exposure.elapsed;
+  if (exposure.damage) {
+    damageLocalPlayerTarget({mesh:world.playerMesh},exposure.damage,'lava',{sourceName:'lava',unavoidable:true,statusTick:true});
+  }
 }
 
 function beginDungeonCollapse() {
@@ -3223,16 +3322,18 @@ function getAlivePveMobCount() {
   return [...world.pveEnemies, ...world.outdoorMonsters].filter((enemy) => !enemy.dead).length;
 }
 
-function createRandomPveWeapon(powerScale = 1) {
-  const definition = randomItem(PVE_WEAPON_DEFINITIONS);
+function createRandomPveWeapon(powerScale = 1, type = null, lootGrade = null) {
+  const definition = type
+    ? PVE_WEAPON_DEFINITIONS.find(item => item.type === type)
+    : randomItem(PVE_WEAPON_DEFINITIONS.filter(item => item.type !== 'Staff'));
   const baseStats = WEAPON_STATS[definition.type];
   const renownCap = Math.max(1, Math.floor(getOnlineRenownTotal()));
   const materialCap = clamp(Math.floor(renownCap / 45) + 1, 1, METAL_TIERS.length);
-  const material = METAL_TIERS[Math.floor(Math.random() * materialCap)];
+  const material = METAL_TIERS[lootGrade === 'supply' ? 0 : lootGrade === 'treasure' ? materialCap-1 : Math.floor(Math.random() * materialCap)];
   const quality = material.power;
   const maxDurability = Math.round(clamp(definition.maxDurability * randomBetween(0.72, 1.18), 25, renownCap + 80));
   const weapon = {
-    range: roundStat(clamp(baseStats.range * randomBetween(0.75, 1.2), 0.8, renownCap)),
+    range: baseStats.range,
     damage: Math.round(clamp(baseStats.damage * quality * randomBetween(0.72, 1.25) * powerScale, 1, renownCap * 1.35)),
     penetration: Math.round(clamp(baseStats.penetration * quality * randomBetween(0.65, 1.25) * powerScale, 0, renownCap * 1.2)),
     frequency: roundStat(clamp(baseStats.frequency * randomBetween(0.75, 1.2), 0.35, Math.min(2.4, renownCap))),
@@ -3253,7 +3354,7 @@ function createRandomPveWeapon(powerScale = 1) {
   };
 }
 
-function createRandomPveArmor(slot = null) {
+function createRandomPveArmor(slot = null, lootGrade = null) {
   const armorType = slot
     ? PVE_ARMOR_TYPES.find((entry) => entry.slot === slot)
     : randomItem(PVE_ARMOR_TYPES);
@@ -3262,7 +3363,7 @@ function createRandomPveArmor(slot = null) {
     return null;
   }
 
-  const material = getRandomPveArmorMaterial();
+  const material = lootGrade === 'supply' ? PVE_ARMOR_MATERIALS[0] : lootGrade === 'treasure' ? PVE_ARMOR_MATERIALS.filter(m => m.tier <= Math.max(2, Math.floor(getOnlineRenownTotal()/45)+2)).at(-1) : getRandomPveArmorMaterial();
   const renownCap = Math.max(1, Math.floor(getOnlineRenownTotal()));
   const quality = randomBetween(0.86, 1.18);
   const tierBudget = material.tier * 4 + Math.sqrt(renownCap);
@@ -3411,7 +3512,7 @@ function rollMobLootDurability(item) {
 }
 
 function getDroppedLootItems(enemy) {
-  if (enemy.bossElement) return [createElementalGem(enemy.bossElement, createId("gem"))];
+  if (enemy.bossElement) return [createElementalGem(enemy.bossElement, createId("gem")), structuredClone(enemy.weapon)];
   const droppedWeapon = enemy.weapon ? cloneDroppedWeapon(enemy.weapon) : null;
   const droppedArmor = (enemy.armor ?? []).map(cloneDroppedArmor);
   const goldAmount = Math.max(1, Math.round(randomBetween(enemy.goldMin ?? 1, enemy.goldMax ?? 3)));
@@ -3427,7 +3528,7 @@ function getDroppedLootItems(enemy) {
 }
 
 function spawnDroppedLootItems(items, position, sourceName = "mob") {
-  if (!items.length || world.sceneMode !== "outdoor") {
+  if (!items.length) {
     return;
   }
 
@@ -3439,21 +3540,23 @@ function spawnDroppedLootItems(items, position, sourceName = "mob") {
     const radius = items.length === 1 ? 0.45 : randomBetween(0.75, 1.95);
     const x = baseX + Math.cos(angle) * radius;
     const z = baseZ + Math.sin(angle) * radius;
-    const groundY = getTerrainHeightAt(x, z);
+    const groundY = world.sceneMode === 'outdoor' ? getTerrainHeightAt(x, z) : 0;
     const dropId = createId("drop");
     const mesh = createDroppedItemMesh(item, dropId);
 
     mesh.position.set(x, groundY + 0.22, z);
     mesh.rotation.y = angle + Math.PI * 0.5;
-    addOutdoor(mesh);
+    world.scene.add(mesh);
     world.droppedItems.push({
       id: dropId,
+      expiresAt: Date.now() + DROPPED_LOOT_LIFETIME_MS,
       item,
       mesh,
       position: { x, z },
       baseY: groundY + 0.22,
       phase: Math.random() * Math.PI * 2,
-      sourceName
+      sourceName,
+      sceneMode: world.sceneMode, activePoiInteriorId: world.activePoiInteriorId, interiorFactionId: world.interiorFactionId
     });
   });
 
@@ -3461,7 +3564,7 @@ function spawnDroppedLootItems(items, position, sourceName = "mob") {
 }
 
 function syncDeathDropMeshes() {
-  const drops = state.deathDrops ?? [];
+  const drops = state.deathDrops = pruneExpiredLoot(state.deathDrops);
   const ids = new Set(drops.map(drop => drop.id));
   for (const existing of [...world.droppedItems]) if (existing.shared && !ids.has(existing.id)) removeDroppedItem(existing.id);
   for (const drop of drops) {
@@ -3478,6 +3581,7 @@ function syncDeathDropMeshes() {
 }
 
 async function pickupSharedDeathDrop(drop) {
+  if (isLootExpired(drop)) { removeDroppedItem(drop.id); return; }
   if (drop.pending) return;
   if (!world.multiplayer.enabled) {
     state.player.inventory.push(drop.item);
@@ -3532,6 +3636,7 @@ function createDroppedItemMesh(item, dropId) {
   group.add(visual);
 
   group.userData.droppedItemId = dropId;
+  trackLootResources(group);
   group.traverse((child) => {
     child.userData.droppedItemRoot = group;
     child.userData.droppedItemId = dropId;
@@ -3593,6 +3698,13 @@ function createDroppedArmorVisual(item) {
       glove.castShadow = true;
       group.add(glove);
     }
+  } else if (slot === "legs") {
+    for (const side of [-1, 1]) {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.14, 0.85, 10), material);
+      leg.position.x = side * 0.22;
+      leg.castShadow = true;
+      group.add(leg);
+    }
   } else if (slot === "feet") {
     for (const side of [-1, 1]) {
       const boot = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.25, 0.56), material);
@@ -3619,7 +3731,7 @@ function getPveAttackRange(weaponItem, fallback = 2.4) {
     return fallback;
   }
 
-  const range = weaponItem.weapon.range;
+  const range = WEAPON_STATS[weaponItem.type]?.range ?? weaponItem.weapon.range;
   return isProjectileWeapon(weaponItem.type) ? Math.min(16, Math.max(fallback, range * 0.8)) : Math.max(fallback, range);
 }
 
@@ -3888,6 +4000,7 @@ function createPveEnemy(spawn) {
   const enemy = {
     id,
     name: spawn.name,
+    roomId: spawn.roomId,
     mobClass: archetype,
     mesh: group,
     rig,
@@ -3917,13 +4030,14 @@ function createPveEnemy(spawn) {
   if (spawn.bossElement) {
     enemy.bossElement = spawn.bossElement;
     enemy.dungeonId = world.dungeon.id;
-    enemy.weapon = null; enemy.armor = [];
+    enemy.weapon = createRandomPveWeapon(1, 'Staff'); enemy.armor = [];
     rig.visualRoot.visible = false;
-    const visual = createSorcererVisual(spawn.bossElement);
+    const visual = createSorcererVisual(spawn.bossElement, enemy.weapon);
     visual.traverse(child => { child.userData.pveEnemyId = id; });
     group.add(visual);
     enemy.sorcererVisual = visual;
-    enemy.spells = new SorcererSpells(world.dungeon.contentRoot ?? group.parent ?? world.scene, spawn.bossElement);
+    loadSorcererModel(visual, spawn.bossElement, enemy.weapon);
+    enemy.spells = new SorcererSpells(world.dungeon.contentRoot ?? group.parent ?? world.scene, spawn.bossElement, world.dungeon.layout.endRoom);
     enemy.castTurn = 0;
     enemy.attackTimer = 1.5;
     healthBar.position.y = 10;
@@ -4183,152 +4297,11 @@ function createTradeNpc(npc) {
 }
 
 function createStewardNpc() {
-  const group = new THREE.Group();
-  group.userData.cameraOcclusionExcluded = true;
-  group.name = "factionStewardNpc";
-  group.position.set(-18, 0, -9);
-  group.rotation.y = Math.PI * 0.2;
-
-  const robe = new THREE.MeshStandardMaterial({ color: "#4d5f76", roughness: 0.76 });
-  const skin = new THREE.MeshStandardMaterial({ color: "#d3b58f", roughness: 0.78 });
-  const leather = new THREE.MeshStandardMaterial({ color: "#3f2a1a", roughness: 0.86 });
-  const parchment = new THREE.MeshStandardMaterial({ color: "#d9c38d", roughness: 0.72 });
-  const gold = new THREE.MeshStandardMaterial({ color: "#caa44b", roughness: 0.42, metalness: 0.18 });
-
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(3.3, 0.18, 8, 48),
-    new THREE.MeshBasicMaterial({ color: "#d6a542", transparent: true, opacity: 0.75 })
-  );
-  ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.18;
-  group.add(ring);
-
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.82, 1.9, 5, 12), robe);
-  body.position.y = 2.65;
-  body.castShadow = true;
-  group.add(body);
-
-  const sash = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.22, 1.05), gold);
-  sash.position.y = 2.58;
-  sash.castShadow = true;
-  group.add(sash);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12), skin);
-  head.position.y = 4.14;
-  head.castShadow = true;
-  group.add(head);
-
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.35, 10), leather);
-  cap.position.y = 4.58;
-  cap.castShadow = true;
-  group.add(cap);
-
-  const ledger = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.2, 1.8), parchment);
-  ledger.position.set(0, 1.9, 1.5);
-  ledger.rotation.x = -0.18;
-  ledger.castShadow = true;
-  group.add(ledger);
-
-  const coffer = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.35, 1.7), leather);
-  coffer.position.set(0, 0.74, 2.15);
-  coffer.castShadow = true;
-  group.add(coffer);
-
-  const cofferBand = new THREE.Mesh(new THREE.BoxGeometry(2.76, 0.22, 1.82), gold);
-  cofferBand.position.set(0, 1.24, 2.15);
-  cofferBand.castShadow = true;
-  group.add(cofferBand);
-
-  const label = createTextSprite("Steward", "#d6a542", 30);
-  label.position.set(0, 6.2, 0);
-  group.add(label);
-
-  group.traverse((child) => {
-    child.userData.stewardNpc = true;
-  });
-
-  return group;
+  return createCastleWorker("steward");
 }
 
 function createBlacksmithNpc() {
-  const group = new THREE.Group();
-  group.userData.cameraOcclusionExcluded = true;
-  group.name = "factionBlacksmithNpc";
-  group.position.set(BLACKSMITH_NPC.position.x, 0, BLACKSMITH_NPC.position.z);
-  group.rotation.y = Math.PI * 0.68;
-
-  const cloth = new THREE.MeshStandardMaterial({ color: BLACKSMITH_NPC.color, roughness: 0.78 });
-  const skin = new THREE.MeshStandardMaterial({ color: "#d3b58f", roughness: 0.78 });
-  const leather = new THREE.MeshStandardMaterial({ color: "#3a2416", roughness: 0.88 });
-  const steel = new THREE.MeshStandardMaterial({ color: "#85898e", roughness: 0.42, metalness: 0.42 });
-  const ember = new THREE.MeshStandardMaterial({
-    color: "#f1792a",
-    emissive: "#b54218",
-    emissiveIntensity: 0.85,
-    roughness: 0.48
-  });
-
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(3.2, 0.18, 8, 48),
-    new THREE.MeshBasicMaterial({ color: "#f0a84a", transparent: true, opacity: 0.78 })
-  );
-  ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.18;
-  group.add(ring);
-
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.84, 1.95, 5, 12), cloth);
-  body.position.y = 2.72;
-  body.castShadow = true;
-  group.add(body);
-
-  const apron = new THREE.Mesh(new THREE.BoxGeometry(1.25, 1.55, 0.18), leather);
-  apron.position.set(0, 2.62, -0.66);
-  apron.castShadow = true;
-  group.add(apron);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 12), skin);
-  head.position.y = 4.18;
-  head.castShadow = true;
-  group.add(head);
-
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.54, 0.26, 10), leather);
-  cap.position.y = 4.58;
-  cap.castShadow = true;
-  group.add(cap);
-
-  const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 1.2, 4, 8), skin);
-  arm.position.set(-0.72, 3.08, -0.18);
-  arm.rotation.z = -0.72;
-  arm.castShadow = true;
-  group.add(arm);
-
-  const hammerHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.25, 8), leather);
-  hammerHandle.position.set(-1.24, 2.8, -0.18);
-  hammerHandle.rotation.z = -0.72;
-  hammerHandle.castShadow = true;
-  group.add(hammerHandle);
-
-  const hammerHead = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.28, 0.28), steel);
-  hammerHead.position.set(-1.56, 3.28, -0.18);
-  hammerHead.rotation.z = -0.72;
-  hammerHead.castShadow = true;
-  group.add(hammerHead);
-
-  const billet = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.22, 0.38), ember);
-  billet.position.set(0.95, 1.72, 1.02);
-  billet.rotation.y = -0.22;
-  billet.castShadow = true;
-  group.add(billet);
-
-  const label = createTextSprite(BLACKSMITH_NPC.name, "#f0a84a", 30);
-  label.position.set(0, 6.25, 0);
-  group.add(label);
-
-  group.traverse((child) => {
-    child.userData.blacksmithNpc = true;
-  });
-
-  return group;
+  return createCastleWorker("blacksmith");
 }
 
 function addShopkeepProps(group, resourceIds, darkMaterial) {
@@ -4880,12 +4853,19 @@ function getArmorSlotMounts(rig, slotId) {
     ].filter(mount => mount.parent);
   }
 
+  if (slotId === "legs") {
+    return [
+      { parent: rig.leftThigh ?? rig.leftLeg?.userData.thigh ?? rig.leftLeg, side: 1, part: "thigh" },
+      { parent: rig.rightThigh ?? rig.rightLeg?.userData.thigh ?? rig.rightLeg, side: -1, part: "thigh" },
+      { parent: rig.leftShin, side: 1, part: "shin" },
+      { parent: rig.rightShin, side: -1, part: "shin" }
+    ].filter(mount => mount.parent);
+  }
+
   if (slotId === "feet") {
     return [
       { parent: rig.leftFoot ?? rig.leftLeg, side: HAND_CONFIG.left.side },
-      { parent: rig.rightFoot ?? rig.rightLeg, side: HAND_CONFIG.right.side },
-      { parent: rig.leftShin, side: HAND_CONFIG.left.side, part: "shin" },
-      { parent: rig.rightShin, side: HAND_CONFIG.right.side, part: "shin" }
+      { parent: rig.rightFoot ?? rig.rightLeg, side: HAND_CONFIG.right.side }
     ].filter(mount => mount.parent);
   }
 
@@ -4957,6 +4937,7 @@ function createPlayerArmorSlotMesh(item, slotId, side = 0, part = null) {
   group.userData.armorVisual = true;
   group.userData.armorSlot = slotId;
   group.userData.armorSide = side;
+  attachEquipmentGem(group, item, part ?? slotId, side);
   attachArmourModel(group, item, part ?? ({ gloves: "forearm", feet: "foot" }[slotId] ?? slotId), side);
   group.traverse((child) => {
     if (child.isMesh) {
@@ -5117,6 +5098,7 @@ function respawnPlayer(event) {
   const name = formatHouseName(ui.respawnName.value);
   if (!name) { ui.respawnName.focus(); return; }
   beginNewPlayerLife(state, name);
+  playerStatuses.clear();
   placePlayerAtRespawnPoint();
   state.player.dead = false;
   state.player.hp = state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
@@ -5296,7 +5278,51 @@ function setupUi() {
 
     runAction(depositToFaction(state, button.dataset.depositResource, getStewardAmount()));
   });
+  document.querySelector('#steward-tabs').addEventListener('click', event => {
+    const tab = event.target.closest('[data-steward-tab]');
+    if (!tab) return;
+    stewardMenu.tab = tab.dataset.stewardTab;
+    renderStewardPanel();
+  });
+  document.querySelector('#steward-storage').addEventListener('click', event => {
+    const button = event.target.closest('[data-storage-item]');
+    if (!button || button.disabled || !world.stewardPanelOpen || world.interiorFactionId !== state.selectedFactionId) return;
+    runAction(transferStewardItem(state.player, button.dataset.storageItem, button.dataset.storageAction));
+  });
+  document.querySelector('#blacksmith-tabs').addEventListener('click', event => {
+    const tab = event.target.closest('[data-smith-tab]');
+    if (!tab) return;
+    forgeMenu.tab = tab.dataset.smithTab;
+    renderNpcTradePanel();
+  });
+  ui.npcTradeResourceList.addEventListener('change', event => {
+    if (event.target.id === 'forge-mould') { forgeMenu.mould = event.target.value; renderNpcTradePanel(); }
+  });
   ui.npcTradeResourceList.addEventListener("click", (event) => {
+    if (getActiveTradeNpc()?.id === BLACKSMITH_NPC.id) {
+      const pageButton = event.target.closest('[data-exchange-page]');
+      if (pageButton && !pageButton.disabled) {
+        const section = pageButton.dataset.exchangeSection;
+        if (Object.hasOwn(exchangePages, section)) {
+          exchangePages[section] = Number(pageButton.dataset.exchangePage);
+          renderNpcTradePanel();
+          ui.npcTradeResourceList.querySelector(`[data-exchange-section="${section}"]:not(:disabled)`)?.focus({ preventScroll: true });
+        }
+        return;
+      }
+      const ingredient = event.target.closest('[data-forge-select]');
+      if (ingredient) {
+        const id = ingredient.dataset.forgeSelect;
+        forgeMenu.selection = forgeMenu.selection.includes(id) ? forgeMenu.selection.filter(i => i !== id) : [...forgeMenu.selection.slice(-1), id];
+        renderNpcTradePanel(); return;
+      }
+      if (event.target.closest('[data-forge-craft]')) { runAction(craftIronItem(state.player, forgeMenu.mould, createId('forged'))); return; }
+      if (event.target.closest('[data-forge-combine]')) {
+        const result = combineForgeItems(state.player, forgeMenu.selection[0], forgeMenu.selection[1], createId('forged'));
+        if (result.ok) forgeMenu.selection = [];
+        runAction(result); return;
+      }
+    }
     const weaponButton = event.target.closest("[data-buy-blacksmith-weapon]");
     if (weaponButton) {
       runAction(buyBlacksmithWeapon(weaponButton.dataset.buyBlacksmithWeapon));
@@ -5540,6 +5566,7 @@ function setupUi() {
   // Mouse events fire for each button in a chord; pointerdown/up only fire
   // for the first press and last release, losing alternating-hand inputs.
   canvas.addEventListener("mousedown", (event) => {
+    combatAudio.unlock();
     if (event.button !== 0 && event.button !== 1 && event.button !== 2) {
       return;
     }
@@ -5616,6 +5643,16 @@ function setupUi() {
       updateBaseHoverFromPointer(event);
     }
 
+    world.pointer.attackInputs ??= {};
+    const pressedItem = getEquippedItem(state, world.pointer.attackHand);
+    if (startFireStaff(world.pointer.attackHand) || startEarthRockControl(world.pointer.attackHand)) return;
+    const pressedType = pressedItem?.type ?? 'Empty Hand';
+    world.pointer.attackInputs[world.pointer.attackHand] = {
+      itemId: pressedItem?.id,
+      aim: isLockedThirdPersonCamera() && !isProjectileWeapon(pressedType) && pressedType !== 'Flail' && !isShield(pressedType)
+        ? preparePlayerAttackAim(pressedType, getEffectiveAttackRange(pressedItem ?? { type: pressedType },
+          pressedItem?.weapon ?? WEAPON_STATS[pressedType], 0)) : null
+    };
     world.pointer.enteringBase = world.sceneMode === "interior" ? startRulerSeatAction(event) : false;
     world.pointer.working = world.pointer.enteringBase ? false : startWorkAction(world.pointer.attackHand);
     if (!world.pointer.enteringBase && !world.pointer.working && getEquippedItem(state,world.pointer.attackHand)?.type === 'Flail') startFlailCharge(world.pointer.attackHand);
@@ -5731,6 +5768,23 @@ function setupUi() {
   });
 
   window.addEventListener("mouseup", (event) => {
+    const releasedHand = event.button === 0 ? 'left' : event.button === 2 ? 'right' : null;
+    if (releasedHand && world.fireInputHand === releasedHand) {
+      world.fireCast = null; world.fireInputHand = null;
+      syncPointerButtons(event); world.pointer.dragging = event.buttons !== 0; world.pointer.attackHand = null;
+      if (world.pointer.attackInputs) delete world.pointer.attackInputs[releasedHand];
+      return;
+    }
+    if (releasedHand && world.earthInputHand === releasedHand) {
+      world.earthMagic?.release();
+      world.earthInputHand = null;
+      syncPointerButtons(event);
+      world.pointer.dragging = event.buttons !== 0;
+      world.pointer.attackHand = null;
+      if (world.pointer.attackInputs) delete world.pointer.attackInputs[releasedHand];
+      if (!event.buttons && canvas.hasPointerCapture(world.pointer.captureId)) canvas.releasePointerCapture(world.pointer.captureId);
+      return;
+    }
     const releasedBit = event.button === 0 ? 1 : event.button === 2 ? 2 : 0;
     if ((world.pointer.rejectedAttackButtons ?? 0) & releasedBit) {
       world.pointer.rejectedAttackButtons &= ~releasedBit;
@@ -5782,9 +5836,13 @@ function setupUi() {
     } else if (event.button === 0 || event.button === 2) {
       // Aiming while holding a button is still an attack, not a cancelled click.
       const hand = event.button === 2 ? "right" : "left";
-      tryAttackFromPointer(hand, getRangedChargePower(hand));
+      const pressed = world.pointer.attackInputs?.[hand];
+      if (!pressed || pressed.itemId === getEquippedItem(state, hand)?.id) {
+        tryAttackFromPointer(hand, getRangedChargePower(hand), null, pressed?.aim ?? null);
+      }
     }
 
+    if (world.pointer.attackInputs) delete world.pointer.attackInputs[event.button === 2 ? 'right' : 'left'];
     if (world.pointer.rangedCharge?.hand === (event.button === 2 ? 'right' : 'left')) clearRangedCharge();
     world.pointer.dragging = event.buttons !== 0;
     world.pointer.cameraDragging = Boolean(event.buttons & 4);
@@ -5801,8 +5859,11 @@ function setupUi() {
     hideBaseTooltip();
   });
 
-  window.addEventListener('blur', () => { stopSpaceLocationAction(); world.playerMotion.lastSpaceTap = null; world.flailCharge = null; world.pointer.buttons = 0; world.guard.hand = null; world.weaveQueue = null; world.comboChains = { left: null, right: null }; });
+  window.addEventListener('blur', () => { world.fireCast = null; world.fireInputHand = null; if (world.earthInputHand) world.pointer.dragging = false; world.earthMagic?.release(); world.earthInputHand = null; stopSpaceLocationAction(); world.playerMotion.lastSpaceTap = null; world.flailCharge = null; world.pointer.buttons = 0; world.guard.hand = null; world.weaveQueue = null; world.comboChains = { left: null, right: null }; });
   canvas.addEventListener("pointercancel", () => {
+    world.fireCast = null; world.fireInputHand = null;
+    world.earthMagic?.release();
+    world.earthInputHand = null;
     world.flailCharge = null;
     world.guard.hand = null;
     world.weaveQueue = null;
@@ -5975,6 +6036,8 @@ function rotateLockedThirdPersonCamera(deltaX, deltaY) {
   const { minPitch, maxPitch } = LOCKED_THIRD_PERSON_CAMERA;
   world.cameraYaw -= deltaX * 0.0032;
   world.cameraPitch = clamp(world.cameraPitch + deltaY * 0.003, minPitch, maxPitch);
+  updateCamera(0);
+  world.camera.updateMatrixWorld();
   updateLockedThirdPersonAim();
 }
 
@@ -6044,6 +6107,7 @@ function updateLockedThirdPersonAim() {
   if (!isLockedThirdPersonCamera()) {
     return;
   }
+  world.aimFollowsView = true;
 
   const target = getAimPointFromScreenCenter();
 
@@ -6094,7 +6158,12 @@ function updateLockedThirdPersonAim() {
 
   world.aimPoint.copy(target);
   world.aimTarget.copy(target);
-  world.aimDirection.copy(direction.normalize());
+  // Shoulder melee follows the view, never the parallax to a nearby ray hit.
+  // Keep the 3D hit point separately for projectiles and vertical weapon aim.
+  world.camera.getWorldDirection(world.aimDirection);
+  world.aimDirection.setY(0).normalize();
+  world.aimTarget.set(state.player.position.x + world.aimDirection.x * 42, 0,
+    state.player.position.z + world.aimDirection.z * 42);
   world.hasAim = true;
   applyAimFacing();
 }
@@ -6271,6 +6340,9 @@ function setStatusPanelOpen(open) {
 }
 
 function setInventoryPanelOpen(open) {
+  if (open && ui.inventoryPanel.classList.contains("is-hidden")) {
+    state.player.selectedGearItemId = null;
+  }
   // Wait until all panels finish switching before recapturing the cursor.
   queueMicrotask(resumeLockedCameraAfterMenu);
   ui.inventoryPanel.classList.toggle("is-hidden", !open);
@@ -6718,7 +6790,11 @@ function setupInventoryControls() {
     clickState.itemId = row.dataset.itemId;
     clickState.button = event.button;
     clickState.time = now;
-    selectGearItem(state, row.dataset.itemId);
+    if (state.player.selectedGearItemId === row.dataset.itemId) {
+      state.player.selectedGearItemId = null;
+    } else {
+      selectGearItem(state, row.dataset.itemId);
+    }
 
     if (isDoubleClick) {
       runAction(equipInventoryItem(row.dataset.itemId, event.button === 2 ? "right" : "left"));
@@ -6736,7 +6812,6 @@ function setupInventoryControls() {
     }
 
     event.preventDefault();
-    selectGearItem(state, row.dataset.itemId);
     runAction(equipInventoryItem(row.dataset.itemId, "left"));
     clickState.time = 0;
   });
@@ -7291,6 +7366,10 @@ function openBlacksmithPanel() {
     refreshBlacksmithStock(factionId);
   }
 
+  forgeMenu.tab = 'exchange';
+  forgeMenu.selection = [];
+  exchangePages.stock = 0;
+  exchangePages.inventory = 0;
   world.activeTradeNpcId = BLACKSMITH_NPC.id;
   ui.npcTradeAmount.value = 1;
   ui.npcTradePanel.classList.remove("is-hidden");
@@ -7531,7 +7610,7 @@ function createRandomBlacksmithWeapon(level = 1) {
     150 + safeLevel * 12
   ));
   const weapon = {
-    range: roundStat(clamp(baseStats.range * randomBetween(0.94, 1.08 + levelBonus * 0.35), 0.8, 28 + safeLevel * 0.8)),
+    range: baseStats.range,
     damage: Math.round(clamp(baseStats.damage * quality * randomBetween(0.9, 1.12 + levelBonus), 1, 48 + safeLevel * 6)),
     penetration: Math.round(clamp(baseStats.penetration * quality * randomBetween(0.86, 1.12 + levelBonus), 0, 24 + safeLevel * 3)),
     frequency: roundStat(clamp(baseStats.frequency * randomBetween(0.9, 1.08 + levelBonus * 0.45), 0.35, 2.25 + safeLevel * 0.04)),
@@ -7770,6 +7849,9 @@ function renderNpcTradePanel() {
     return;
   }
 
+  ui.npcTradePanel.classList.toggle('is-blacksmith', npc.id === BLACKSMITH_NPC.id);
+  document.querySelector('#blacksmith-tabs').classList.toggle('is-hidden', npc.id !== BLACKSMITH_NPC.id);
+  document.querySelectorAll('[data-smith-tab]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.smithTab === forgeMenu.tab)));
   ui.npcTradeAmount.closest(".trade-amount")?.classList.toggle("is-hidden", npc.id === BLACKSMITH_NPC.id);
 
   if (npc.id === BLACKSMITH_NPC.id) {
@@ -7811,13 +7893,17 @@ function renderBlacksmithPanel() {
   const progress = getFactionBlacksmithProgress(factionId);
   const nextXp = getBlacksmithNextLevelXp(progress);
   const equippedIds = getEquippedItemIds();
-  const stockRows = getFactionBlacksmithStock(factionId)
+  const stockPage = exchangePage(getFactionBlacksmithStock(factionId), exchangePages.stock);
+  const inventoryPage = exchangePage(state.player.inventory.filter(isBlacksmithEquipment), exchangePages.inventory);
+  exchangePages.stock = stockPage.page;
+  exchangePages.inventory = inventoryPage.page;
+  const stockRows = stockPage.items
     .map((entry) => {
       const item = entry.item;
       const canBuy = state.player.gold >= entry.price;
       const statSummary = isShield(item.type) ? "Hold to block | Frontal defence" : isArmorItem(item)
         ? `DEF ${item.armor.defense} | RES ${item.armor.resistance}% | TGH ${item.armor.toughness}`
-        : `DMG ${item.weapon.damage} | PEN ${item.weapon.penetration} | RNG ${item.weapon.range}`;
+        : `DMG ${item.weapon.damage} | PEN ${item.weapon.penetration} | RNG ${WEAPON_STATS[item.type]?.range ?? item.weapon.range}`;
 
       return `
         <article class="deposit-row market-trade-row weapon-trade-row">
@@ -7830,14 +7916,13 @@ function renderBlacksmithPanel() {
       `;
     })
     .join("");
-  const sellRows = state.player.inventory
-    .filter(isBlacksmithEquipment)
+  const sellRows = inventoryPage.items
     .map((item) => {
       const price = getBlacksmithEquipmentSellPrice(item);
       const equipped = equippedIds.has(item.id);
       const statSummary = isShield(item.type) ? "Hold to block | Frontal defence" : isArmorItem(item)
         ? `DEF ${item.armor.defense} | RES ${item.armor.resistance}% | TGH ${item.armor.toughness}`
-        : `DMG ${item.weapon.damage} | PEN ${item.weapon.penetration} | RNG ${item.weapon.range}`;
+        : `DMG ${item.weapon.damage} | PEN ${item.weapon.penetration} | RNG ${WEAPON_STATS[item.type]?.range ?? item.weapon.range}`;
 
       return `
         <article class="deposit-row market-trade-row weapon-trade-row">
@@ -7857,15 +7942,29 @@ function renderBlacksmithPanel() {
 
   ui.npcTradeTitle.textContent = faction ? `${faction.name} Blacksmith` : BLACKSMITH_NPC.name;
   ui.npcTradeResource.textContent = `Level ${progress.level} | ${xpText}`;
-  ui.npcTradeResourceList.innerHTML = `
+  if (forgeMenu.tab === 'forge') {
+    const html = renderForge(state.player, forgeMenu.selection, forgeMenu.mould, getItemIconMarkup, escapeHtml);
+    if (ui.npcTradeResourceList.dataset.forgeHtml !== html || ui.npcTradeResourceList.dataset.smithTab !== 'forge') ui.npcTradeResourceList.innerHTML = html;
+    ui.npcTradeResourceList.dataset.forgeHtml = html;
+    ui.npcTradeResourceList.dataset.smithTab = 'forge';
+    return;
+  }
+  const html = `
     <div class="blacksmith-section-title">For sale</div>
-    ${stockRows || `<div class="notice">No equipment for sale.</div>`}
+    <div class="blacksmith-page-rows">${stockRows || `<div class="notice">No equipment for sale.</div>`}</div>
+    ${exchangePaginationMarkup('stock', 'For sale', stockPage)}
     <div class="blacksmith-section-header">
       <div class="blacksmith-section-title">Sell equipment</div>
       <button class="primary" data-sell-all-blacksmith-equipment type="button" ${sellableItems.length ? "" : "disabled"}>Sell all unequipped (${sellableItems.length})</button>
     </div>
-    ${sellRows || `<div class="notice">You have no equipment to sell.</div>`}
+    <div class="blacksmith-page-rows">${sellRows || `<div class="notice">You have no equipment to sell.</div>`}</div>
+    ${exchangePaginationMarkup('inventory', 'Sell equipment', inventoryPage)}
   `;
+  if (ui.npcTradeResourceList.dataset.exchangeHtml !== html || ui.npcTradeResourceList.dataset.smithTab !== 'exchange') {
+    ui.npcTradeResourceList.innerHTML = html;
+  }
+  ui.npcTradeResourceList.dataset.exchangeHtml = html;
+  ui.npcTradeResourceList.dataset.smithTab = 'exchange';
 }
 
 function renderStewardPanel() {
@@ -7883,7 +7982,25 @@ function renderStewardPanel() {
 
   const amount = normalizeTradeAmount(ui.stewardAmount.value);
   ui.stewardTitle.textContent = `${faction.name} Steward`;
-  ui.stewardStatus.textContent = "Faction vault deposits";
+  const storageOpen = stewardMenu.tab === 'storage';
+  ui.stewardStatus.textContent = storageOpen ? 'Your personal loot bank · Safe through death' : 'Faction vault deposits';
+  document.querySelectorAll('[data-steward-tab]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.stewardTab === stewardMenu.tab)));
+  ui.stewardAmount.closest('label').classList.toggle('is-hidden', storageOpen);
+  ui.stewardDepositList.classList.toggle('is-hidden', storageOpen);
+  const storage = document.querySelector('#steward-storage');
+  storage.classList.toggle('is-hidden', !storageOpen);
+  if (storageOpen) {
+    const equipped = getEquippedItemIds();
+    const section = (items, title, action) => `<section><h3>${title} (${items.length})</h3><div class="steward-storage-items">${items.map(item => {
+      const disabled = action === 'deposit' && equipped.has(item.id);
+      return `<article class="steward-storage-row">
+        <strong class="trade-item-name">${getItemIconMarkup(item, { decorative: true })}<span>${escapeHtml(equipmentName(item))}</span></strong>
+        <button type="button" data-storage-item="${escapeHtml(item.id)}" data-storage-action="${action}" ${disabled ? 'disabled' : ''}>${disabled ? 'Equipped' : action === 'deposit' ? 'Deposit' : 'Withdraw'}</button>
+      </article>`;
+    }).join('') || '<p class="notice">No items here yet.</p>'}</div></section>`;
+    storage.innerHTML = `<p class="notice">Only you can access these items. Unequip gear before depositing it.</p><div class="steward-storage-columns">${section(state.player.inventory, 'Carried loot', 'deposit')}${section(state.player.stewardInventory, 'Stored loot', 'withdraw')}</div>`;
+    return;
+  }
   ui.stewardDepositList.innerHTML = DEPOSIT_RESOURCES.map((resource) => {
     const playerAmount = getPlayerDepositAmount(resource.id);
     const factionAmount = getFactionDepositAmount(store, resource.id);
@@ -8063,6 +8180,11 @@ function startPlayerRoll() {
   if (motion.rolling || motion.rollCooldown > 0) {
     return false;
   }
+  if (!Object.values(world.attacks).every(canCancelIntoDefense)) {
+    motion.rollQueuedUntil = state.elapsed + ATTACK_BUFFER_SECONDS;
+    return false;
+  }
+  motion.rollQueuedUntil = null;
 
   const direction = getSpaceRollDirection();
 
@@ -8253,9 +8375,14 @@ function updateMovement(deltaSeconds) {
   }
 
   const motion = world.playerMotion;
+  if (motion.rollQueuedUntil != null) {
+    if (state.elapsed > motion.rollQueuedUntil) motion.rollQueuedUntil = null;
+    else if (Object.values(world.attacks).every(canCancelIntoDefense)) startPlayerRoll();
+  }
   const input = getMovementInput();
   const committed = world.attacks.left ?? world.attacks.right;
-  const combatSpeed = world.guard.hand ? .5 : world.flailCharge ? .6 : committed ? (MELEE_STYLES[committed.itemType]?.movement ?? .75) : 1;
+  const combatSpeed = world.guard.hand ? .65 : world.flailCharge ? .65
+    : attackMovementScale(committed, MELEE_STYLES[committed?.itemType]?.movement ?? .75);
   const speed = getPlayerWalkingSpeed() * combatSpeed;
   const move = getPlayerWalkingDirection(input);
   const wasAirborne = motion.jumping || motion.rolling || isPlayerAirborne(motion);
@@ -8302,6 +8429,8 @@ function updateMovement(deltaSeconds) {
     activeSpeed *= WATER_WADING_SPEED_MULTIPLIER;
   }
   document.body.dataset.playerWading = String(isWading);
+  activeSpeed *= playerStatuses.multiplier('speed');
+  if (world.sceneMode === 'poiInterior' && getActivePoiInterior()?.type === 'Dungeon' && motion.verticalOffset <= -1.2 && world.dungeon.layout.lava.some(gap => inside(state.player.position,gap))) activeSpeed *= LAVA_SPEED_MULTIPLIER;
 
   updatePlayerJump(deltaSeconds);
 
@@ -8317,6 +8446,17 @@ function updateMovement(deltaSeconds) {
     x: clamp(state.player.position.x + activeMove.x * activeSpeed * deltaSeconds, bounds.minX, bounds.maxX),
     z: clamp(state.player.position.z + activeMove.z * activeSpeed * deltaSeconds, bounds.minZ, bounds.maxZ)
   };
+  if (!wasAirborne && !isWading && committed?.assistTarget && move.dot(committed.direction) >= -.1) {
+    const target = committed.assistTarget;
+    const offset = target.mesh.position.clone().setY(0).sub(new THREE.Vector3(nextPosition.x, 0, nextPosition.z));
+    const distance = offset.length();
+    const clearance = PLAYER_COLLISION_RADIUS + (target.radius ?? 1.1) + .3;
+    const step = offset.dot(committed.direction) > clearance
+      ? attackStepDistance(committed, deltaSeconds, distance - clearance) : 0;
+    nextPosition.x = clamp(nextPosition.x + committed.direction.x * step, bounds.minX, bounds.maxX);
+    nextPosition.z = clamp(nextPosition.z + committed.direction.z * step, bounds.minZ, bounds.maxZ);
+    committed.advanceApplied = (committed.advanceApplied ?? 0) + step;
+  }
   moveLocalPlayerTo(nextPosition, bounds);
   settlePlayerSupportAfterMove();
   applyLocalPlayerKnockbackMotion(deltaSeconds, bounds);
@@ -8434,7 +8574,7 @@ function moveLocalPlayerTo(position, bounds, radius = PLAYER_COLLISION_RADIUS) {
     : world.sceneMode === "interior"
       ? resolveCastleInteriorMovementPosition(position)
       : getActivePoiInterior()?.type === "Dungeon"
-        ? resolveDungeonMovementPosition(position)
+        ? constrainDungeonBarrels(resolveDungeonMovementPosition(position))
       : position;
 
   if (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon" && world.dungeon.gate && !world.dungeon.gate.open) {
@@ -8456,6 +8596,11 @@ function moveLocalPlayerTo(position, bounds, radius = PLAYER_COLLISION_RADIUS) {
     const furnishings = world.meshes.poiInteriors.get(world.activePoiInteriorId)?.getObjectByName("furnishedPoiHall");
     for (const prop of furnishings?.userData.colliders ?? []) pushCircleOutOfAabb(resolvedPosition, prop, prop.halfWidth, prop.halfDepth, radius);
   }
+  if (world.sceneMode === 'poiInterior' && getActivePoiInterior()?.type === 'Dungeon' && crossesBarrier(state.player.position, resolvedPosition, roomBarriers(world.dungeon.layout), radius)) return;
+  // Falling below a ledge cannot turn into a free step back onto the floor.
+  if (world.sceneMode === 'poiInterior' && getActivePoiInterior()?.type === 'Dungeon' && world.playerMotion.verticalOffset < -.2 &&
+      world.dungeon.layout.lava.some(gap => inside(state.player.position,gap)) &&
+      !world.dungeon.layout.lava.some(gap => inside(resolvedPosition,gap))) return;
   const finalPosition = world.sceneMode === "outdoor" ? clampWorldPosition(resolvedPosition, 38 + radius) : resolvedPosition;
   const previousPosition = { ...state.player.position };
   state.player.position.x = clamp(finalPosition.x, bounds.minX, bounds.maxX);
@@ -8481,6 +8626,7 @@ function preservePlayerElevationAfterMove(previousPosition) {
 }
 
 function getPlayerSupportOffset(position) {
+  if (world.sceneMode === 'poiInterior' && getActivePoiInterior()?.type === 'Dungeon' && world.dungeon.layout?.lava?.some(gap => inside(position, gap))) return -2;
   if (world.sceneMode !== "outdoor") {
     return 0;
   }
@@ -8489,7 +8635,7 @@ function getPlayerSupportOffset(position) {
   let supportOffset = 0;
 
   for (const collider of world.sceneryGrid.query(position.x, position.z)) {
-    if (collider.type !== "rock" || !collider.platformRadius) {
+    if (collider.earthAirborne || collider.type !== "rock" || !collider.platformRadius) {
       continue;
     }
 
@@ -8524,6 +8670,7 @@ function resolveOutdoorSceneryCollision(position, moverRadius = 1.15) {
   const resolved = { ...position };
 
   for (const collider of world.sceneryGrid.query(position.x-moverRadius-32, position.z-moverRadius-32, position.x+moverRadius+32, position.z+moverRadius+32)) {
+    if (collider.earthAirborne) continue;
     const dx = resolved.x - collider.x;
     const dz = resolved.z - collider.z;
     const distance = Math.hypot(dx, dz);
@@ -8734,6 +8881,7 @@ function updateAimFromPointer(event) {
   if (isPlayerRolling()) {
     return;
   }
+  world.aimFollowsView = false;
 
   const target = getAimPointFromNdc(getNdcFromPointer(event));
 
@@ -8821,8 +8969,9 @@ function getAimPointFromNdc(ndc) {
   );
 
   const combatHit = pickCombatAimPoint([
-    ...getActiveCombatEnemies(), ...getAttackableRemotePlayers()
-  ], world.raycaster.ray, isForwardHit);
+    ...getActiveCombatEnemies(),
+    ...getActiveDungeonBarrels(), ...getAttackableRemotePlayers()
+  ], world.raycaster.ray, isForwardHit, target => { world.crosshairTarget = target; });
   if (combatHit) return combatHit;
 
   // Free-pointer aiming retains a flat baseline; shoulder aim follows the view.
@@ -8838,12 +8987,12 @@ function getAimPointFromNdc(ndc) {
   return world.raycaster.ray.origin.clone().addScaledVector(world.raycaster.ray.direction, 90);
 }
 
-function applyAimFacing() {
+function applyAimFacing(deltaSeconds = 0) {
   if (!world.playerMesh || !world.hasAim || isPlayerRolling()) {
     return;
   }
 
-  const direction = new THREE.Vector3(
+  const direction = world.aimFollowsView ? world.aimDirection.clone() : new THREE.Vector3(
     world.aimTarget.x - state.player.position.x,
     0,
     world.aimTarget.z - state.player.position.z
@@ -8865,7 +9014,10 @@ function applyAimFacing() {
     world.playerRig.headGroup.rotation.y = clamp(Math.atan2(world.aimDirection.x, world.aimDirection.z), -0.85, 0.85);
   } else {
     world.playerRig.headGroup.rotation.y = 0;
-    world.playerMesh.rotation.y = Math.atan2(world.aimDirection.x, world.aimDirection.z);
+    // Idle facing follows input, never a cached enemy that may now be behind us.
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(world.playerMesh.quaternion);
+    world.playerMesh.rotation.set(0, approachFacing(Math.atan2(forward.x, forward.z),
+      Math.atan2(world.aimDirection.x, world.aimDirection.z), deltaSeconds), 0);
   }
   document.body.dataset.aimX = world.aimDirection.x.toFixed(3);
   document.body.dataset.aimZ = world.aimDirection.z.toFixed(3);
@@ -9031,6 +9183,12 @@ function getAvailableLocationAction() {
   }
 
   if (world.sceneMode === "interior") {
+    const npc = nearbyCastleNpc(state.player.position, [...world.stewardNpcs, ...world.blacksmithNpcs]);
+    if (npc) return {
+      type: "talkCastleNpc", role: npc.userData.role, factionId: world.interiorFactionId,
+      label: npc.userData.role === "steward" ? "Steward" : "Blacksmith",
+      prompt: "Hold Space to speak to the " + npc.userData.role
+    };
     for (const [z,archiveTab,label] of [[-9,"resources","Family treasury"],[0,"book","Castle history books"],[9,"scroll","Castle history scroll"]]) {
       if (Math.hypot(state.player.position.x + 12, state.player.position.z-z) < 4.5) return { type:"readChronicle", archiveTab, label, prompt:"Hold Space to read" };
     }
@@ -9287,20 +9445,6 @@ function openNpcPanelFromPointer(event) {
     return false;
   }
 
-  const blacksmithHit = getBlacksmithNpcHitFromPointer(event);
-
-  if (blacksmithHit) {
-    openBlacksmithPanel();
-    return true;
-  }
-
-  const stewardHit = getStewardNpcHitFromPointer(event);
-
-  if (stewardHit) {
-    openStewardPanel();
-    return true;
-  }
-
   const hit = getTradeNpcHitFromPointer(event);
 
   if (!hit) {
@@ -9320,28 +9464,6 @@ function getTradeNpcHitFromPointer(event) {
   return world.raycaster
     .intersectObjects(world.tradeNpcs.filter((npc) => npc.parent?.visible), true)
     .find((entry) => entry.object.userData.tradeNpcId);
-}
-
-function getStewardNpcHitFromPointer(event) {
-  if (world.sceneMode !== "interior" || !world.stewardNpcs.length) {
-    return null;
-  }
-
-  world.raycaster.setFromCamera(getNdcFromPointer(event), world.camera);
-  return world.raycaster
-    .intersectObjects(world.stewardNpcs, true)
-    .find((entry) => entry.object.userData.stewardNpc);
-}
-
-function getBlacksmithNpcHitFromPointer(event) {
-  if (world.sceneMode !== "interior" || !world.blacksmithNpcs.length) {
-    return null;
-  }
-
-  world.raycaster.setFromCamera(getNdcFromPointer(event), world.camera);
-  return world.raycaster
-    .intersectObjects(world.blacksmithNpcs, true)
-    .find((entry) => entry.object.userData.blacksmithNpc);
 }
 
 function tryClaimCampChestFromPointer(event) {
@@ -9387,7 +9509,11 @@ function tryClaimDungeonTreasureFromPointer(event) {
       flash("Defeat the nearby guards to open this chest.");
       return true;
     }
-    const item = Math.random() < 0.65 ? createRandomPveWeapon() : createRandomPveArmor();
+    if (room.guardRoomId && !world.dungeon.layout.rooms.find(r => r.id === room.guardRoomId)?.cleared) {
+      flash("Clear the sealed combat room to unlock this treasure."); return true;
+    }
+    const grade = room.kind === 'treasure' ? 'treasure' : 'supply';
+    const item = Math.random() < 0.65 ? createRandomPveWeapon(grade === 'treasure' ? 1.2 : .65, null, grade) : createRandomPveArmor(null, grade);
     chest.userData.opened = true;
     chest.userData.lid.rotation.x = -Math.PI / 3;
     chest.userData.label.visible = false;
@@ -9418,6 +9544,8 @@ function tryPickupDroppedItemFromPointer(event) {
   if (!drop) {
     return false;
   }
+
+  if (isLootExpired(drop)) { removeDroppedItem(drop.id); return true; }
 
   if (distance2D(state.player.position, drop.position) > DROPPED_ITEM_PICKUP_RANGE) {
     flash(`Move closer to pick up ${drop.item.name}.`);
@@ -9480,7 +9608,7 @@ function removeDroppedItem(dropId) {
     return;
   }
 
-  removeFromParent(drop.mesh);
+  disposeLootResources(drop.mesh);
   world.droppedItems = world.droppedItems.filter((entry) => entry.id !== dropId);
   document.body.dataset.droppedItems = String(world.droppedItems.length);
 }
@@ -9522,6 +9650,14 @@ function updateBaseEntryAction(deltaSeconds) {
     return;
   }
 
+  if (action.type === "talkCastleNpc") {
+    const available = getAvailableLocationAction();
+    // Space uses start/stopSpaceLocationAction on keydown/keyup, not the movement-key set.
+    if (available?.type !== action.type || available.role !== action.role || available.factionId !== action.factionId) {
+      stopSpaceLocationAction();
+      return;
+    }
+  }
   if (action.type === "openDungeonGate") {
     if (world.sceneMode !== "poiInterior" || world.activePoiInteriorId !== action.poiId || state.player.dead || isBlockingLocationInput() || !isNearDungeonGate(world.dungeon.gate, state.player.position)) {
       stopSpaceLocationAction(); return;
@@ -9533,7 +9669,11 @@ function updateBaseEntryAction(deltaSeconds) {
   updateLocationPrompt();
 
   if (action.elapsed >= action.duration) {
-    if (action.type === "openDungeonGate") {
+    if (action.type === "talkCastleNpc") {
+      stopBaseEntryAction();
+      if (action.role === "steward") openStewardPanel();
+      else openBlacksmithPanel();
+    } else if (action.type === "openDungeonGate") {
       stopSpaceLocationAction();
       flash("The dungeon doors are open.");
     } else if (action.type === "exit" || action.type === "exitCastle") {
@@ -9897,22 +10037,118 @@ function resetPveEnemiesForPoi(poiId) {
 }
 
 function isCombatInputReady(hand) {
-  const other = hand === 'left' ? 'right' : 'left';
-  if (!canWeaveAttack(world.attacks[other])) return false;
-  const active = world.attacks[hand];
-  if (active && (!active.hitResolved || active.elapsed < active.duration * (active.comboChainPoint ?? 1))) return false;
+  if (world.fireCast || world.earthMagic?.active?.phase === 'held') return false;
   const item = getEquippedItem(state, hand);
+  if (isShield(item?.type)) return true;
+  const now = state.elapsed;
+  const deadline = now + ATTACK_BUFFER_SECONDS;
+  const other = hand === 'left' ? 'right' : 'left';
+  const outgoing = world.attacks[other];
+  if (!canWeaveAttack(outgoing) && now + outgoing.duration *
+      (outgoing.comboChainPoint ?? (outgoing.profile.windup + outgoing.profile.strike)) - outgoing.elapsed > deadline) return false;
+  const active = world.attacks[hand];
+  if (active && now + active.duration * (active.comboChainPoint ?? 1) - active.elapsed > deadline) return false;
   const chain = world.comboChains[hand];
-  if (chain && chain.itemId === item?.id) return state.elapsed >= chain.readyAt;
+  if (chain && chain.itemId === item?.id) return deadline >= chain.readyAt;
   const frequency = item?.weapon?.frequency ?? WEAPON_STATS['Empty Hand'].frequency;
   const last = state.player.equipment[hand === 'left' ? 'lastLeftAttackAt' : 'lastRightAttackAt'];
-  return state.elapsed >= last + 1 / Math.max(.1, frequency);
+  return deadline >= last + 1 / Math.max(.1, frequency);
 }
 
-function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null) {
+function isMeleeAssistVisible(target, position) {
+  const origin = new THREE.Vector3(state.player.position.x, getPlayerWorldElevation() + 2.8, state.player.position.z);
+  const end = meleeTargetTorso(target);
+  const direction = end.clone().sub(origin);
+  const distance = direction.length();
+  const ray = new THREE.Raycaster(origin, direction.normalize(), 0, distance);
+  const walls = world.interiorCameraWalls.filter(wall => {
+    for (let node = wall; node; node = node.parent) if (!node.visible) return false;
+    return true;
+  });
+  if (ray.intersectObjects(walls, false).length) return false;
+  if (world.sceneMode === 'outdoor') {
+    for (let t = .15; t < 1; t += .1) {
+      const point = origin.clone().lerp(end, t);
+      if (getTerrainHeightAt(point.x, point.z) > point.y) return false;
+      const resolved = resolveOutdoorSceneryCollision({ x: point.x, z: point.z }, .1);
+      if (Math.hypot(resolved.x - point.x, resolved.z - point.z) > .12) return false;
+    }
+    if (ray.intersectObjects(getAttackableStructures().map(entry => entry.mesh), true).length) return false;
+  }
+  return true;
+}
+
+function getMeleeAssistTarget(range) {
+  const origin = new THREE.Vector3(state.player.position.x, getPlayerWorldElevation(), state.player.position.z);
+  const explicit = world.crosshairTarget;
+  if (explicit && meleeTargetInReach(explicit, origin, range, .65)) {
+    const position = explicit.mesh.getWorldPosition(new THREE.Vector3());
+    const forward = position.clone().sub(origin).setY(0).dot(world.aimDirection);
+    // The screen ray wins over the character's cone. Camera shoulder offset
+    // must not reject the enemy the player is explicitly pointing at.
+    if (forward > .1 && isMeleeAssistVisible(explicit, position)) return explicit;
+  }
+  return selectMeleeTarget([...getActiveCombatEnemies(), ...getAttackableRemotePlayers()], origin,
+    world.aimDirection, range, world.meleeAssistTarget, isMeleeAssistVisible);
+}
+
+function preparePlayerAttackAim(itemType, range) {
+  // Snapshot input once; queued strokes retain this direction until execution.
+  if (isLockedThirdPersonCamera()) updateLockedThirdPersonAim();
+  const direction = world.aimDirection.clone().setY(0).normalize();
+  if (direction.lengthSq() < .001 && world.playerMesh) {
+    direction.set(0, 0, 1).applyQuaternion(world.playerMesh.quaternion).setY(0).normalize();
+  }
+  const origin = new THREE.Vector3(state.player.position.x, getPlayerWorldElevation(), state.player.position.z);
+  if (isProjectileWeapon(itemType)) {
+    if (world.hasAim) direction.copy(world.aimPoint).sub(origin).setY(0).normalize();
+    return { direction, aimPoint: world.hasAim ? world.aimPoint.clone() : null, target: null };
+  }
+  const target = getMeleeAssistTarget(range);
+  world.meleeAssistTarget = target;
+  let distance = Math.max(4, Math.min(8, range)), height = origin.y + 3.2;
+  if (target) {
+    const point = meleeTargetTorso(target);
+    direction.copy(assistedDirection(origin, direction, point));
+    return { direction, aimPoint: point, aimOrigin: origin, target };
+  }
+  const aimPoint = origin.clone().addScaledVector(direction, distance);
+  aimPoint.y = height;
+  return { direction, aimPoint, aimOrigin: origin, target };
+}
+
+function updateMeleeAssistVisual() {
+  const active = world.attacks.left ?? world.attacks.right;
+  const item = ['right', 'left'].map(hand => getEquippedItem(state, hand))
+    .find(item => item && !isShield(item.type) && !isProjectileWeapon(item.type));
+  const enabled = world.hasAim && !state.player.dead && !isCameraMenuOpen() && !world.outpostTower.active
+    && !isPlayerRolling() && (item || active);
+  const target = enabled ? (active ? active.assistTarget : getMeleeAssistTarget(
+    getCombatRange(item.type, item.weapon ?? WEAPON_STATS[item.type]))) : null;
+  world.meleeAssistTarget = target?.dead ? null : target;
+  if (!world.meleeAssistRing && target) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(1.05, 1.13, 40),
+      new THREE.MeshBasicMaterial({ color: '#f4d38b', transparent: true, opacity: .55, depthWrite: false, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.userData.cameraOcclusionExcluded = true;
+    world.scene.add(ring);
+    world.meleeAssistRing = ring;
+  }
+  const ring = world.meleeAssistRing;
+  if (ring) {
+    ring.visible = Boolean(world.meleeAssistTarget);
+    if (ring.visible) {
+      ring.position.copy(target.mesh.getWorldPosition(new THREE.Vector3()));
+      ring.position.y += .09;
+      ring.scale.setScalar(Math.max(.8, target.radius ?? 1.1));
+    }
+  }
+}
+
+function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null, inputAim = null) {
   // Only fresh clicks renew the short buffer; retries keep their original deadline.
   if (inputExpiresAt === null) {
-    inputExpiresAt = state.elapsed + .15;
+    inputExpiresAt = state.elapsed + ATTACK_BUFFER_SECONDS;
     world.weaveQueue = null;
     for (const chain of Object.values(world.comboChains)) {
       if (chain) chain.queued = false;
@@ -9929,9 +10165,11 @@ function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null
   if (isShield(pendingItemType)) return false;
   if (pendingItemType === 'Dagger' && !canStartDaggerAirAttack(world.playerMotion)) return false;
   if (world.flailCharge && world.flailCharge.hand !== hand) return false;
+  inputAim ??= preparePlayerAttackAim(pendingItemType, getEffectiveAttackRange(
+    pendingItem ?? { type: pendingItemType }, pendingItem?.weapon ?? WEAPON_STATS[pendingItemType], rangedChargePower));
   const otherHand = hand === 'left' ? 'right' : 'left';
   if (!canWeaveAttack(world.attacks[otherHand])) {
-    world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id, expiresAt: inputExpiresAt };
+    world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id, inputAim, expiresAt: inputExpiresAt };
     if (world.comboChains[otherHand]) world.comboChains[otherHand].queued = false;
     return true;
   }
@@ -9943,7 +10181,7 @@ function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null
   const active = world.attacks[hand];
   if (active && (!hasCombo || active.jumpAttack) && active.elapsed < active.duration) {
     const readyAt = Math.max(state.elapsed + active.duration - active.elapsed, active.cooldownReadyAt ?? 0);
-    world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id,
+    world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id, inputAim,
       readyAt, expiresAt: inputExpiresAt };
     return true;
   }
@@ -9952,6 +10190,7 @@ function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null
     chain.queued = true;
     chain.inputExpiresAt = inputExpiresAt;
     chain.chargePower = rangedChargePower;
+    chain.inputAim = inputAim;
     world.weaveQueue = null;
     return true;
   }
@@ -9964,7 +10203,7 @@ function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null
 
   if (!result.ok) {
     if (result.cooldown > 0 && result.cooldown <= .35) {
-      world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id,
+      world.weaveQueue = { hand, chargePower: rangedChargePower, itemId: pendingItem?.id, inputAim,
         readyAt: state.elapsed + result.cooldown, expiresAt: inputExpiresAt };
       return true;
     }
@@ -9980,8 +10219,22 @@ function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null
   const profile = { ...getCombatProfile(result.item.type), kind, comboName: comboTiming.name };
   const chargePower = result.item.type === "Flail" || isChargeableRangedType(result.item.type) ? clamp(rangedChargePower, 0, 1) : 0;
   const range = getEffectiveAttackRange(result.item, result.stats, chargePower);
+  const preparedAim = inputAim;
   const damage = getEffectiveAttackDamage(result.item, result.stats, chargePower) * (comboTiming.damageScale ?? 1);
-  const duration = jumpAttack ? (jumpAttack === 'flurry' ? .66 : jumpAttack === 'plant' ? 1.2 : .8) : getAttackDuration(result.item.type, result.stats, chargePower) * comboTiming.durationScale;
+  let duration = jumpAttack ? (jumpAttack === 'flurry' ? .66 : jumpAttack === 'plant' ? 1.2 : .8) : getAttackDuration(result.item.type, result.stats, chargePower) * comboTiming.durationScale;
+  const baseDuration = duration;
+  const turnAngle = !jumpAttack && world.playerMesh
+    ? Math.abs(angleDifference(world.playerMesh.rotation.y, Math.atan2(preparedAim.direction.x, preparedAim.direction.z))) : 0;
+  const turnExtra = Math.max(0, turnAngle / (4 * .65) - duration * profile.windup);
+  if (turnExtra > 0) {
+    // Smoothstep peaks at 1.5x average speed: allow at most 6 rad/s
+    // during the first 65% of anticipation, including unassisted turns.
+    // Preserve strike/recovery lengths and delay combo readiness by the same beat.
+    duration += turnExtra;
+    profile.windup = (profile.windup * baseDuration + turnExtra) / duration;
+    profile.strike = profile.strike * baseDuration / duration;
+    profile.hitMoment = (profile.hitMoment * baseDuration + turnExtra) / duration;
+  }
   if (jumpAttack) {
     Object.assign(profile, { windup: .18, strike: .52, hitMoment: .4 });
     world.playerMotion.lastSpaceTap = null;
@@ -9991,6 +10244,11 @@ function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null
     world.comboChains[otherHand].expiresAt = Math.max(world.comboChains[otherHand].expiresAt, state.elapsed + duration + .6);
   }
   const cadence = hasCombo && !jumpAttack ? getComboCadence(result.item.type, result.stats, attackCycle) : null;
+  if (cadence && turnExtra > 0) {
+    cadence.chainPoint = (cadence.chainPoint * baseDuration + turnExtra) / duration;
+    cadence.duration = duration;
+    cadence.interval += turnExtra;
+  }
   const blendFrom = captureComboPose(hand);
   world.comboChains[hand] = cadence ? createComboChain(pendingItem.id, attackCycle, cadence, state.elapsed) : null;
   const slashDirection = Number.isFinite(comboTiming.slashDirection)
@@ -10001,15 +10259,15 @@ function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null
   if (comboTiming.steps > 1 || kind === "slash" || kind === "chop") {
     world.attackCycles[hand] += 1;
   }
-  const attackDirection = world.aimDirection.clone();
+  const attackDirection = preparedAim.direction;
   attackDirection.y = 0;
   if (attackDirection.lengthSq() > 0.001) {
     attackDirection.normalize();
   } else {
-    attackDirection.set(0, 0, 1);
+    attackDirection.set(0, 0, 1).applyQuaternion(world.playerMesh?.quaternion ?? new THREE.Quaternion()).setY(0).normalize();
   }
 
-  const aimPoint = world.hasAim ? world.aimPoint.clone() : null;
+  const aimPoint = preparedAim.aimPoint;
   const aimRayDirection = world.aimRayDirection.lengthSq() > 0.001
     ? world.aimRayDirection.clone().normalize()
     : null;
@@ -10031,7 +10289,10 @@ function tryAttackFromPointer(hand, rangedChargePower = 0, inputExpiresAt = null
     hitTargets: new Set(),
     speed: result.stats.speed,
     direction: attackDirection,
+    startFacing: world.playerMesh?.rotation.y ?? Math.atan2(attackDirection.x, attackDirection.z),
+    assistTarget: preparedAim.target,
     aimPoint,
+    aimOrigin: preparedAim.aimOrigin?.clone() ?? null,
     aimRayOrigin,
     aimRayDirection,
     screenX: isLockedThirdPersonCamera() ? window.innerWidth * 0.5 : world.pointer.x,
@@ -10418,7 +10679,9 @@ function getCombatTargetAimPoint(target) {
     position.copy(target.group.position);
   }
 
-  const height = clamp((target?.hitMaxY ?? 5.5) * 0.6, 2.2, 4.8);
+  const scale = target?.gremlinSize?.scale ?? 1;
+  const minY = (target?.hitMinY ?? .6) * scale;
+  const height = minY + ((target?.hitMaxY ?? 5.6) * scale - minY) * .55;
   position.y += height;
   return position;
 }
@@ -10485,7 +10748,7 @@ function updateWorld(deltaSeconds) {
   updateCastleRegeneration(deltaSeconds);
   updatePlayerRespawnStatus();
   updateMultiplayer(deltaSeconds);
-  applyAimFacing();
+  applyAimFacing(deltaSeconds);
   updatePlayerAnimation(deltaSeconds);
   updateRemotePlayers(deltaSeconds);
   world.weaponTrails ??= new CombatTrails(world.scene);
@@ -10495,6 +10758,7 @@ function updateWorld(deltaSeconds) {
   updateWorkAction(deltaSeconds);
   updateBaseEntryAction(deltaSeconds);
   updateDungeonLifecycle(deltaSeconds);
+  updateDungeonEncounters(deltaSeconds);
   updatePveEnemies(deltaSeconds);
   updateOutdoorDungeonMonsters(deltaSeconds);
   updateOutpostDefenses(deltaSeconds);
@@ -10504,6 +10768,8 @@ function updateWorld(deltaSeconds) {
 // Presentation runs after all collision-safe substeps, using their summed delta.
 // Player/mob attack poses stay in updateWorld: their transforms drive hit tests.
 function updateFrameVisuals(deltaSeconds) {
+  world.playerStatusVisuals ??= new PlayerStatusVisuals(world.playerMesh);
+  world.playerStatusVisuals.update(deltaSeconds, playerStatuses);
   const playerElevation = getPlayerWorldElevation();
   world.playerMesh.position.set(state.player.position.x, playerElevation, state.player.position.z);
   updateDayNightLighting(deltaSeconds);
@@ -10515,6 +10781,7 @@ function updateFrameVisuals(deltaSeconds) {
   updateCamera(deltaSeconds);
   world.camera.updateMatrixWorld();
   updateLockedThirdPersonAim();
+  updateMeleeAssistVisual();
   updatePlayerArmorVisuals();
   updateLocationPrompt();
   updateDroppedItems(deltaSeconds);
@@ -10663,6 +10930,7 @@ function buildLocalPlayerPayload(inputSequence) {
   const rightHandItem = getEquippedItem(state, "right");
 
   return {
+    heartHealingTotal: world.multiplayer.heartHealingTotal ?? 0,
     id: state.player.id,
     connectionId,
     inputSequence,
@@ -10684,8 +10952,10 @@ function buildLocalPlayerPayload(inputSequence) {
     activePoiInteriorId: world.activePoiInteriorId,
     leftHandType: leftHandItem?.type ?? null,
     leftHandName: leftHandItem?.name ?? null,
+    leftHandGem: leftHandItem?.socketedGem ?? null,
     rightHandType: rightHandItem?.type ?? null,
     rightHandName: rightHandItem?.name ?? null,
+    rightHandGem: rightHandItem?.socketedGem ?? null,
     combatAttacks: ['left','right'].flatMap(hand => {
       const a = world.attacks[hand], charge=world.flailCharge?.hand===hand ? world.flailCharge : null;
       if (charge) return [{hand,id:'charge',itemType:'Flail',charging:true,elapsed:charge.elapsed%100,chargePower:flailChargePower(charge.elapsed),flailReleaseAngle:charge.angle%(Math.PI*2),duration:5,direction:{x:world.aimDirection.x,z:world.aimDirection.z}}];
@@ -10730,7 +11000,7 @@ function syncMultiplayerPlayers(players, serverTimeMs) {
 
 function loseCarriedResources() {
   world.multiplayer.deathLocation = { position: { ...state.player.position }, elevation: world.playerMesh.position.y,
-    sceneMode: world.sceneMode, interiorFactionId: world.interiorFactionId, activePoiInteriorId: world.activePoiInteriorId };
+    sceneMode: world.sceneMode, interiorFactionId: world.interiorFactionId, activePoiInteriorId: world.activePoiInteriorId, lava: world.sceneMode === 'poiInterior' && getActivePoiInterior()?.type === 'Dungeon' ? world.dungeon.layout.lava.filter(gap => distance2D(gap,state.player.position)<20).map(({x,z,width,depth})=>({x,z,width,depth})) : [], destroyedByLava: world.sceneMode === 'poiInterior' && getActivePoiInterior()?.type === 'Dungeon' && world.dungeon.layout?.lava?.some(gap => inside(state.player.position, gap)) };
   world.multiplayer.deathInventory = structuredClone(state.player.inventory);
   if (!world.multiplayer.enabled) {
     state.deathDrops ??= [];
@@ -10745,6 +11015,10 @@ function loseCarriedResources() {
 function syncLocalPlayerHealth(player) {
   if ((player.lastSeen ?? 0) < (world.multiplayer.healthSnapshotTime ?? 0)) return;
   world.multiplayer.healthSnapshotTime = player.lastSeen ?? 0;
+  if (!player.dead && player.flamingUntil > Date.now() && player.flamingUntil > (world.lastFlamingUntil ?? 0)) {
+    world.lastFlamingUntil = player.flamingUntil;
+    playerStatuses.apply('flaming', player.lastDamagedByName, (player.flamingUntil - Date.now()) / 1000);
+  }
   // Delayed snapshots must not undo a local death or a newly chosen life.
   if ((player.lifeNumber ?? 0) < (state.player.lifeNumber ?? 0)) return;
   if (state.player.dead && !player.dead) return;
@@ -10760,7 +11034,7 @@ function syncLocalPlayerHealth(player) {
   state.player.maxHp = player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   state.player.hp = reconcileHealth({ ...state.player, factionId: state.selectedFactionId,
     sceneMode: world.sceneMode, interiorFactionId: world.interiorFactionId }, player,
-    world.multiplayer.damageInputSequence ?? 0);
+    world.multiplayer.damageInputSequence ?? 0, world.multiplayer.heartHealingTotal ?? 0);
   state.player.dead = Boolean(player.dead);
   world.multiplayer.respawnAt = player.respawnAt ?? 0;
   if (state.player.hp !== previousHp) markPlayerPersistenceDue();
@@ -10843,8 +11117,8 @@ function syncRemotePlayer(player, serverTimeMs) {
     }
   }
 
-  syncRemoteHeldItem(remote, "left", createNetworkHeldItem(player.leftHandType, player.leftHandName));
-  syncRemoteHeldItem(remote, "right", createNetworkHeldItem(player.rightHandType, player.rightHandName));
+  syncRemoteHeldItem(remote, "left", createNetworkHeldItem(player.leftHandType, player.leftHandName, player.leftHandGem));
+  syncRemoteHeldItem(remote, "right", createNetworkHeldItem(player.rightHandType, player.rightHandName, player.rightHandGem));
   syncRemoteArmorVisuals(remote, player.armorItems);
   updateRemoteHealthBar(remote);
 }
@@ -11017,8 +11291,8 @@ function syncRemoteHeldItem(remote, hand, item) {
   }
 }
 
-function createNetworkHeldItem(type, name) {
-  return type ? { id: `${type}:${name ?? type}`, type, name: name ?? type } : null;
+function createNetworkHeldItem(type, name, socketedGem = null) {
+  return type ? { id: `${type}:${name ?? type}:${socketedGem ?? ""}`, type, name: name ?? type, socketedGem } : null;
 }
 
 function createNetworkArmorItem(item) {
@@ -11026,14 +11300,18 @@ function createNetworkArmorItem(item) {
 
   return item?.armor
     ? {
-        id: `${item.armor.slot}:${item.type}:${profile.material}:${profile.color}:${profile.metalness}`,
+        id: `${item.armor.slot}:${item.type}:${profile.material}:${profile.color}:${profile.metalness}:${item.socketedGem ?? ""}`,
         type: item.type,
         name: item.name,
+        socketedGem: item.socketedGem ?? null,
         armor: {
           slot: item.armor.slot,
           material: profile.material,
           color: profile.color,
-          metalness: profile.metalness
+          metalness: profile.metalness,
+          defense: item.armor.defense,
+          resistance: item.armor.resistance,
+          toughness: item.armor.toughness
         },
         durability: item.durability ?? 1,
         maxDurability: item.maxDurability ?? 1
@@ -11086,8 +11364,8 @@ function lerpAngle(from, to, amount) {
 
 function resetPlayerRootLean() {
   if (world.playerMesh) {
-    world.playerMesh.rotation.x = 0;
-    world.playerMesh.rotation.z = 0;
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(world.playerMesh.quaternion);
+    world.playerMesh.rotation.set(0, Math.atan2(forward.x, forward.z), 0);
   }
 
   if (world.playerVisualRoot) {
@@ -11180,9 +11458,9 @@ function updatePlayerAnimation(deltaSeconds) {
   rig.headGroup.position.set(0, 5.2 + bob * 0.65, 0.16);
   rig.headGroup.rotation.x = 0;
   rig.headGroup.rotation.z = 0;
-  if (!world.hasAim) {
-    rig.headGroup.rotation.y = 0;
-  }
+  // Attack chest compensation is additive; clear last frame's head twist even
+  // while an attack owns facing, otherwise repeated strokes accumulate yaw.
+  rig.headGroup.rotation.y = 0;
 
   rig.leftLeg.position.set(HAND_CONFIG.left.side * .42, 2.05, 0);
   rig.rightLeg.position.set(HAND_CONFIG.right.side * .42, 2.05, 0);
@@ -11221,10 +11499,17 @@ function getPveEnemyAttackRange(enemy) {
   return Math.max(range, contactDistance + 0.05);
 }
 
-function startPveEnemyAttack(enemy, targetPosition) {
+function startPveEnemyAttack(enemy, targetPosition, comboIndex = 0) {
+  if (comboIndex === 0 && !enemyAttackPermitted(enemy, getActiveCombatEnemies(), state.elapsed)) return false;
+  enemy.lastAttackStartedAt = state.elapsed;
   const itemType = enemy.weapon?.type ?? "Empty Hand";
   const stats = getPveEnemyAttackStats(enemy);
-  const kind = getAttackKind(itemType);
+  const ranged = isProjectileWeapon(itemType);
+  const combo = getCombatComboTiming(itemType, comboIndex);
+  const kind = ranged ? getAttackKind(itemType) : combo.kind ?? getAttackKind(itemType);
+  const profile = { ...getCombatProfile(itemType), kind, comboName: combo.name };
+  const duration = ranged ? getPveEnemyAttackDuration(itemType, stats)
+    : Math.max(.48, getAttackDuration(itemType, stats) * combo.durationScale);
   const direction = new THREE.Vector3(
     targetPosition.x - enemy.mesh.position.x,
     0,
@@ -11243,22 +11528,44 @@ function startPveEnemyAttack(enemy, targetPosition) {
     itemName: enemy.weapon?.name ?? itemType,
     direction,
     elapsed: 0,
-    profile: getCombatProfile(itemType),
-    duration: getPveEnemyAttackDuration(itemType, stats),
+    profile,
+    duration,
+    comboStep: comboIndex,
+    comboSteps: ranged ? 1 : Math.max(2, combo.steps),
+    comboName: combo.name,
+    slashDirection: combo.slashDirection ?? (comboIndex % 2 ? 1 : -1),
+    comboChainPoint: Math.max(profile.hitMoment + .04, profile.windup + profile.strike + profile.recovery * .22),
     range: getPveEnemyAttackRange(enemy),
-    damage: Math.max(1, Math.round(Number(stats.damage) || 8)),
+    damage: Math.max(1, Math.round((Number(stats.damage) || 8) * (combo.damageScale ?? 1))),
     penetration: Number(stats.penetration) || 0,
-    knockback: Number(stats.knockback) || 0,
+    knockback: (Number(stats.knockback) || 0) * (combo.knockbackScale ?? 1),
     speed: Number(stats.speed) || 1,
     projectileSpawned: false,
     hitResolved: false,
     lungeApplied: 0
   };
+  enemy.mesh.rotation.y = Math.atan2(direction.x, direction.z);
   enemy.attackTimer = enemy.attackCooldown;
+  if (isProjectileWeapon(itemType)) {
+    // Plant the feet before raising the weapon instead of freezing mid-stride.
+    updatePveMobAnimation(enemy, 1, false, false);
+  }
 }
 
 function getPveEnemyAttackDuration(itemType, stats) {
   return getAttackDuration(itemType, stats, 0, { mob: true });
+}
+
+function getPveEnemyAttackProgress(attack) {
+  if (!isProjectileWeapon(attack.itemType)) return Math.min(1, attack.elapsed / attack.duration);
+
+  const release = getCombatReleaseMoment(attack.itemType, 0);
+  const releaseTime = release * attack.duration;
+  // Hold the loaded aiming pose for a beat, even with very fast weapons.
+  const aimHold = Math.max(1.2, 1.4 - releaseTime);
+  if (attack.elapsed < releaseTime) return attack.elapsed / attack.duration;
+  if (attack.elapsed < releaseTime + aimHold) return Math.max(0, release - 0.001);
+  return Math.min(1, (attack.elapsed - aimHold) / attack.duration);
 }
 
 function updatePveEnemyAttack(enemy, deltaSeconds, targetPosition, options = {}) {
@@ -11269,9 +11576,19 @@ function updatePveEnemyAttack(enemy, deltaSeconds, targetPosition, options = {})
     return false;
   }
 
+  if (enemy.shoveStaggerTimer > 0) {
+    resetPveEnemyAttackState(enemy);
+    enemy.attackTimer = Math.max(enemy.attackTimer ?? 0, 1.1);
+    return false;
+  }
+
+  if (isProjectileWeapon(attack.itemType) && !attack.projectileSpawned) {
+    updatePveEnemyAim(enemy, attack, targetPosition, deltaSeconds);
+  }
+
   attack.elapsed += deltaSeconds;
-  const progress = Math.min(1, attack.elapsed / attack.duration);
-  const hitMoment = getPveEnemyHitMoment(attack.itemType);
+  const progress = getPveEnemyAttackProgress(attack);
+  const hitMoment = attack.profile?.hitMoment ?? getPveEnemyHitMoment(attack.itemType);
 
   animatePveEnemyAttack(enemy, attack, progress);
   movePveEnemyDuringAttack(enemy, attack, progress, hitMoment, deltaSeconds, options);
@@ -11288,12 +11605,35 @@ function updatePveEnemyAttack(enemy, deltaSeconds, targetPosition, options = {})
     }
   }
 
+  // Link after the damaging stroke, without returning to idle between hits.
+  if (!projectileAttack && attack.hitResolved && progress >= attack.comboChainPoint
+      && attack.comboStep + 1 < attack.comboSteps && enemy.shoveStaggerTimer <= 0) {
+    const distance = Math.hypot(targetPosition.x - enemy.mesh.position.x, targetPosition.z - enemy.mesh.position.z);
+    if (distance <= attack.range + .75) {
+      startPveEnemyAttack(enemy, targetPosition, attack.comboStep + 1);
+      return true;
+    }
+  }
+
   if (progress >= 1) {
     resetPveEnemyAttackState(enemy);
+    // Ranged cooldown starts after recovery so the aiming hold cannot consume it.
+    enemy.attackTimer = Math.max(enemy.attackTimer ?? 0, projectileAttack ? 1.5 : 1.1);
     return false;
   }
 
   return true;
+}
+
+function updatePveEnemyAim(enemy, attack, targetPosition, deltaSeconds) {
+  const desired = Math.atan2(targetPosition.x - enemy.mesh.position.x, targetPosition.z - enemy.mesh.position.z);
+  const current = Math.atan2(attack.direction.x, attack.direction.z);
+  const difference = Math.atan2(Math.sin(desired - current), Math.cos(desired - current));
+  // 45 degrees per second: a dodge behind the archer beats its tracking.
+  const limit = Math.PI / 4 * deltaSeconds;
+  const yaw = current + clamp(difference, -limit, limit);
+  attack.direction.set(Math.sin(yaw), 0, Math.cos(yaw));
+  enemy.mesh.rotation.y = yaw;
 }
 
 function getPveEnemyHitMoment(itemType) {
@@ -11586,7 +11926,10 @@ function animatePveEnemyAttack(enemy, attack, progress) {
     return;
   }
 
-  const windup = Math.sin(clamp(progress, 0, 1) * Math.PI);
+  const anticipationEnd = attack.profile?.windup ?? .4;
+  const windup = progress < anticipationEnd
+    ? easeOut(progress / anticipationEnd)
+    : 1 - easeOut((progress - anticipationEnd) / Math.max(.01, 1 - anticipationEnd));
   if (rig.kind === "creature") {
     rig.body.rotation.x = Math.PI * 0.42 - windup * 0.18;
     rig.headGroup.rotation.x = -0.2 + windup * 0.32;
@@ -11686,7 +12029,11 @@ function canPveEnemyHitPlayer(enemy, targetPosition) {
     targetPosition.x - enemy.mesh.position.x,
     targetPosition.z - enemy.mesh.position.z
   );
-  return distance <= getPveEnemyAttackRange(enemy) + 0.85;
+  const direction = enemy.attackAnimation?.direction;
+  const dot = direction && distance > .01
+    ? ((targetPosition.x - enemy.mesh.position.x) * direction.x +
+      (targetPosition.z - enemy.mesh.position.z) * direction.z) / distance : 1;
+  return distance <= getPveEnemyAttackRange(enemy) + 0.65 && dot >= Math.cos(.95);
 }
 
 function updatePveEnemies(deltaSeconds) {
@@ -11704,6 +12051,7 @@ function updatePveEnemies(deltaSeconds) {
   const player = state.player.position;
 
   for (const enemy of world.pveEnemies) {
+    clearRecoilPose(enemy);
     if (enemy.dead) {
       enemy.deathTimer += deltaSeconds;
       enemy.mesh.scale.lerp(new THREE.Vector3(1, 0.08, 1), Math.min(1, deltaSeconds * 5));
@@ -11718,7 +12066,7 @@ function updatePveEnemies(deltaSeconds) {
     const toPlayer = new THREE.Vector3(player.x - enemy.mesh.position.x, 0, player.z - enemy.mesh.position.z);
     const distance = toPlayer.length();
 
-    if (distance > 0.05) {
+    if (distance > 0.05 && !enemy.attackAnimation) {
       enemy.mesh.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
     }
 
@@ -11735,6 +12083,7 @@ function updatePveEnemies(deltaSeconds) {
     }
     if (enemy.bossElement) {
       updateDungeonSorcerer(enemy, deltaSeconds, player, distance);
+      updateCombatHitReaction(enemy, deltaSeconds);
       continue;
     }
     const attackActive = updatePveEnemyAttack(enemy, deltaSeconds, player, { outdoor: false });
@@ -11752,8 +12101,8 @@ function updatePveEnemies(deltaSeconds) {
     }
 
     applyPveEntityKnockbackMotion(enemy, deltaSeconds, { outdoor: false });
-    updateCombatHitReaction(enemy, deltaSeconds);
     updatePveMobAnimation(enemy, deltaSeconds, moving, attackActive);
+    updateCombatHitReaction(enemy, deltaSeconds);
 
     if (!attackActive && enemy.shoveStaggerTimer <= 0 && distance <= attackRange && enemy.attackTimer <= 0) {
       startPveEnemyAttack(enemy, player);
@@ -11771,21 +12120,34 @@ function updatePveEnemies(deltaSeconds) {
 function updateDungeonSorcerer(enemy, dt, player, distance) {
   const room = world.dungeon.layout.endRoom;
   const engaged = !state.player.dead && Math.abs(player.x - room.x) < room.width / 2 + 3 && Math.abs(player.z - room.z) < room.depth / 2 + 3;
+  const target = { ...player, y: world.playerMotion.verticalOffset };
+  enemy.spells.root = world.dungeon.contentRoot;
+  enemy.spells.ensureArena();
+  if (stepSorcererCombat(enemy, dt, engaged, distance)) {
+    enemy.spells.cast(enemy.mesh.position, player, enemy.castTurn++);
+  }
+  stepSorcererMelee(enemy, target, dt, engaged, damage => damageLocalPlayerTarget(
+    { mesh: world.playerMesh }, damage, 'Staff', { itemType: 'Staff', sourceName: enemy.name, previousPosition: enemy.mesh.position, knockback: 2 }));
+  const moving = stepSorcererMovement(enemy, player, room, dt, engaged);
+  animateSorcerer(enemy.sorcererVisual, dt, moving, enemy.castPause > 0);
+  poseSorcererStaff(enemy.sorcererVisual, enemy.staffAttack);
+  if (enemy.staffAttack) enemy.mesh.rotation.y = enemy.staffAttack.direction;
   if (!engaged) { enemy.spells.clear(); return; }
   revealHealthBarSprite(enemy.healthBar, { persistent: true });
-  enemy.sorcererVisual.position.y = Math.sin(state.elapsed * 2) * 0.18;
-  enemy.spells.root = world.dungeon.contentRoot;
-  enemy.spells.update(dt, player, (damage, spell) => damageLocalPlayerTarget(
-    { mesh: world.playerMesh }, damage, "elemental magic", { sourceName: enemy.name,
-      previousPosition: { x: spell.x, z: spell.z }, knockback: enemy.bossElement === "air" ? 12 : 3 }));
-  if (enemy.attackTimer <= 0 && distance < 65) {
-    enemy.spells.cast(enemy.mesh.position, player, enemy.castTurn++);
-    enemy.attackTimer = SORCERERS[enemy.bossElement].cooldown;
-  }
+  enemy.spells.update(dt, target, (damage, spell) => damageLocalPlayerTarget(
+    { mesh: world.playerMesh }, damage, 'elemental magic', { sourceName: enemy.name, status: spell.status,
+      previousPosition: enemy.bossElement === 'air' ? spell.origin : { x: spell.x, z: spell.z }, knockback: enemy.bossElement === 'air' ? 22 : 3 }),
+    (damage, position) => damageLocalPlayerTarget({ mesh: world.playerMesh }, damage, 'arena spikes', { sourceName: 'arena spikes', previousPosition: position }),
+    spell => {
+      for (const barrel of getActiveDungeonBarrels()) {
+        if (barrel.burning || Math.hypot(barrel.mesh.position.x-spell.x,barrel.mesh.position.z-spell.z)>spell.radius+barrel.radius) continue;
+        barrel.burning = createElementalEffect('fire',{radius:1.6,delay:0});
+        barrel.burning.userData.effect.warning.visible=false; barrel.mesh.add(barrel.burning);
+      }
+    });
   applyPveEntityKnockbackMotion(enemy, dt, { outdoor: false });
   enemy.mesh.position.x = clamp(enemy.mesh.position.x, room.x - room.width / 2 + 3, room.x + room.width / 2 - 3);
   enemy.mesh.position.z = clamp(enemy.mesh.position.z, room.z - room.depth / 2 + 3, room.z + room.depth / 2 - 3);
-  updateCombatHitReaction(enemy, dt);
 }
 
 function getRaidEntrancePosition(target) {
@@ -11836,6 +12198,7 @@ function updateOutdoorDungeonMonsters(frameDeltaSeconds) {
   const cap = night ? NIGHT_CAMP_CAP : 3;
   const sources = raidSpawnSources(MOB_CAMPS, CASTLES, state.factions, night);
   const targets = raidTargets(state.pois, CASTLES, state.factions);
+  const targetOwners = targets.map(target => `${target.id}:${target.ownerFactionId}`).join('|');
   if (!world.campsInitialized || (night && !world.wasRaidNight)) {
     world.raidPopulationPending = true;
     world.campsInitialized = true;
@@ -11862,9 +12225,10 @@ function updateOutdoorDungeonMonsters(frameDeltaSeconds) {
   }
   for (const monster of world.outdoorMonsters) {
     // Scene changes and nearby combat wake immediately. Distant noncombat AI
-    // runs at 10 Hz; retain all elapsed time for movement and raid capture.
+    // runs at 2–10 Hz; retain all elapsed time for movement and raid capture.
     deltaSeconds = frameDeltaSeconds;
     if (monster.dead) {
+      clearRecoilPose(monster);
       world.raidRoutePlanner?.cancel(monster);
       monster.deathTimer += deltaSeconds;
       monster.mesh.scale.lerp(new THREE.Vector3(1, 0.08, 1), Math.min(1, deltaSeconds * 5));
@@ -11881,15 +12245,20 @@ function updateOutdoorDungeonMonsters(frameDeltaSeconds) {
       : monster.raidInteriorType === "Castle"
         ? world.sceneMode === "interior" && world.interiorFactionId === monster.raidInteriorId
         : world.sceneMode === "poiInterior" && world.activePoiInteriorId === monster.raidInteriorId;
-    const nearby = inPlayerScene && distance2D(state.player.position, monster.mesh.position) < 250;
+    const playerDistance = inPlayerScene ? distance2D(state.player.position, monster.mesh.position) : Infinity;
+    const nearby = playerDistance < 250;
     const sceneKey = `${world.sceneMode}:${world.interiorFactionId}:${world.activePoiInteriorId}`;
     const immediate = nearby || monster.aggro || monster.tentExit || monster.attackAnimation
       || monster.shoveStaggerTimer > 0 || monster.knockbackVelocity?.lengthSq() > .0025
-      || monster.simulationScene !== sceneKey || monster.simulationNight !== night;
+      || monster.simulationScene !== sceneKey || monster.simulationNight !== night
+      || monster.simulationTargets !== targetOwners;
     monster.simulationScene = sceneKey;
     monster.simulationNight = night;
-    deltaSeconds = takeMobUpdate(monster, frameDeltaSeconds, immediate);
+    monster.simulationTargets = targetOwners;
+    deltaSeconds = takeMobUpdate(monster, frameDeltaSeconds, immediate,
+      distantMobInterval(playerDistance, inPlayerScene), (monster.mesh.id * .61803398875) % 1);
     if (!deltaSeconds) continue;
+    clearRecoilPose(monster);
     updatedMobs.add(monster);
     if (monster.tentExit) {
       monster.shoveStaggerTimer = Math.max(0, (monster.shoveStaggerTimer ?? 0) - deltaSeconds);
@@ -11900,8 +12269,8 @@ function updateOutdoorDungeonMonsters(frameDeltaSeconds) {
         movePveEntityTo(monster, step, { outdoor: true });
       }
       applyPveEntityKnockbackMotion(monster, deltaSeconds, { outdoor: true });
-      updateCombatHitReaction(monster, deltaSeconds);
       updatePveMobAnimation(monster, deltaSeconds, step.moving, false);
+      updateCombatHitReaction(monster, deltaSeconds);
       if (distance2D(monster.mesh.position, monster.tentExit) <= .15) {
         monster.spawn = { x: monster.tentExit.x, z: monster.tentExit.z };
         monster.tentExit = null;
@@ -11965,14 +12334,15 @@ function updateOutdoorDungeonMonsters(frameDeltaSeconds) {
       moving = true;
     }
     applyPveEntityKnockbackMotion(monster, deltaSeconds, { outdoor });
-    updateCombatHitReaction(monster, deltaSeconds);
     // Simulation and capture still tick everywhere; only distant visual poses
     // run less often. Nearby combat retains full-rate animation and hit timing.
     monster.animationElapsed = sameScene ? (monster.animationElapsed ?? 0) + deltaSeconds : 0;
-    if (sameScene && (distance < 250 || attackActive || monster.animationElapsed >= 0.1)) {
+    if (sameScene && (distance < 250 || attackActive || (monster.visualActive && monster.animationElapsed >= 0.1))) {
       updatePveMobAnimation(monster, monster.animationElapsed, moving, attackActive);
       monster.animationElapsed = 0;
     }
+    if (!monster.visualActive && distance >= 250 && !attackActive) monster.animationElapsed = 0;
+    updateCombatHitReaction(monster, deltaSeconds);
     if (!attackActive && monster.shoveStaggerTimer <= 0 && monster.aggro && distance <= attackRange && monster.attackTimer <= 0) startPveEnemyAttack(monster, player);
     if (poi && outdoor && !monster.aggro && distance2D(monster.mesh.position, getRaidEntrancePosition(poi)) < 4) {
       monster.raidInteriorId = poi.id;
@@ -11991,12 +12361,19 @@ function updateOutdoorDungeonMonsters(frameDeltaSeconds) {
       flash(`${poi.name} has fallen to the wilderness!`);
     }
   }
-  world.raidRoutePlanner?.step();
-  const outside = world.outdoorMonsters.filter(mob => !mob.raidInteriorId);
+  const byInterior = new Map(), outside = [];
+  for (const mob of world.outdoorMonsters) {
+    if (!mob.raidInteriorId) outside.push(mob);
+    else {
+      if (!byInterior.has(mob.raidInteriorId)) byInterior.set(mob.raidInteriorId, []);
+      byInterior.get(mob.raidInteriorId).push(mob);
+    }
+  }
   resolvePveMobCollisions(outside, { outdoor: true, updatedMobs });
   if (world.sceneMode === "outdoor") resolvePveMobPlayerCollisions(outside, { outdoor: true });
   for (const poi of [...state.pois, ...CASTLES.map(castle => ({ ...castle, type: "Castle" }))]) {
-    const inside = world.outdoorMonsters.filter(mob => mob.raidInteriorId === poi.id);
+    const inside = byInterior.get(poi.id);
+    if (!inside?.length) continue;
     resolvePveMobCollisions(inside, { outdoor: false, updatedMobs });
     if ((poi.type === "Castle" ? world.sceneMode === "interior" && world.interiorFactionId === poi.id : world.sceneMode === "poiInterior" && world.activePoiInteriorId === poi.id)) resolvePveMobPlayerCollisions(inside, { outdoor: false });
   }
@@ -12101,6 +12478,16 @@ function setArmWalkPose(hand, swing) {
 
 function updateShieldGuard(deltaSeconds) {
   const guard = world.guard;
+  const wantsGuard = ['left', 'right'].some(hand =>
+    (world.pointer.buttons & (hand === 'left' ? 1 : 2)) && isShield(getEquippedItem(state, hand)?.type)
+    && getEquippedItem(state, hand).durability > 0);
+  if (wantsGuard && state.elapsed >= guard.brokenUntil && Object.values(world.attacks).some(Boolean)
+      && Object.values(world.attacks).every(canCancelIntoDefense)) {
+    world.attacks = { left: null, right: null };
+    world.comboChains = { left: null, right: null };
+    world.weaveQueue = null;
+    world.weaponTrails?.clear();
+  }
   const available = !isPlayerRolling() && !world.flailCharge && !state.player.dead && !isCameraMenuOpen() && !world.outpostTower.active &&
     !world.attacks.left && !world.attacks.right && state.elapsed >= guard.brokenUntil;
   const hand = available ? ['left','right'].find(h =>
@@ -12127,7 +12514,7 @@ function applyShieldPose(hand) {
   const held = world.heldItems[hand].mesh;
   if (!held) return;
   const side = HAND_CONFIG[hand].side;
-  facePlayerTowardAttack({ direction: world.aimDirection });
+  // Idle facing owns guard yaw and applies the normal turn-rate limit.
   poseAttackArm(hand, -1.04, -side * .38, side * .16, .85, 0, 0);
   world.playerMesh.updateWorldMatrix(true, false);
   // Shield face is local X; align it with the character's forward direction.
@@ -12145,6 +12532,7 @@ function blockLocalDamage(amount, sourcePosition, knockback = 0) {
     age: state.elapsed - guard.raisedAt, facing: { x: Math.sin(world.playerMesh.rotation.y), z: Math.cos(world.playerMesh.rotation.y) },
     position: state.player.position, source: sourcePosition, damage: amount, knockback });
   if (result.blocked) {
+    combatAudio.impact(result.parried ? .85 : .55, true);
     guard.stamina = result.stamina;
     if (result.broken) { guard.brokenUntil = state.elapsed + 1.4; guard.hand = null; }
     const wear = damageInventoryItem(state, item, result.parried ? 1 : Math.max(1, Math.round(amount / 12)));
@@ -12187,7 +12575,7 @@ function updateAttackAnimations(deltaSeconds) {
     else if (state.elapsed >= (queued.readyAt ?? 0) && canWeaveAttack(world.attacks[queued.hand === 'left' ? 'right' : 'left'])) {
       const outgoing = world.attacks[queued.hand === 'left' ? 'right' : 'left'];
       world.weaveQueue = null;
-      if (tryAttackFromPointer(queued.hand, queued.chargePower ?? 0, queued.expiresAt) && world.attacks[queued.hand]?.elapsed === 0) {
+      if (tryAttackFromPointer(queued.hand, queued.chargePower ?? 0, queued.expiresAt, queued.inputAim) && world.attacks[queued.hand]?.elapsed === 0) {
         if (outgoing?.frameBase) restoreCombatTransforms(outgoing.frameBase);
         animateHandAttack(queued.hand, queued.hand === 'left' ? world.leftHandMount : world.rightHandMount, 0);
       }
@@ -12205,7 +12593,7 @@ function updateAttackAnimations(deltaSeconds) {
     const active = world.attacks[hand];
     if (active && (!active.hitResolved || active.elapsed < active.duration * (active.comboChainPoint ?? 1))) continue;
     chain.queued = false;
-    if (tryAttackFromPointer(hand, chain.chargePower ?? 0, chain.inputExpiresAt)) {
+    if (tryAttackFromPointer(hand, chain.chargePower ?? 0, chain.inputExpiresAt, chain.inputAim)) {
       // Evaluate the new pose now, avoiding an idle frame between linked strokes.
       if (active?.frameBase) restoreCombatTransforms(active.frameBase);
       animateHandAttack(hand, hand === "left" ? world.leftHandMount : world.rightHandMount, 0);
@@ -12271,7 +12659,7 @@ function animateHandAttack(hand, mount, deltaSeconds) {
     return;
   }
 
-  attack.elapsed += deltaSeconds * (world.combatFeedback.hitstop > 0 ? 0.55 : 1);
+  attack.elapsed += deltaSeconds * (world.combatFeedback.hitstop > 0 ? 0.15 : 1);
   if (world.comboChains[hand]?.queued && attack.comboChainPoint < 1) {
     attack.elapsed = Math.min(attack.elapsed, attack.duration * attack.comboChainPoint);
   }
@@ -12286,7 +12674,7 @@ function animateHandAttack(hand, mount, deltaSeconds) {
     applyJumpAttackPose(hand, attack, progress, deltaSeconds);
   } else if (attack.itemType === "Flail") {
     applyFlailPose(hand,attack,progress);
-  } else if (attack.itemType === "Spear") {
+  } else if (attack.itemType === "Spear" || (attack.itemType === 'Staff' && attack.kind === 'thrust')) {
     applyCursorDirectedSpearAttack(hand, attack, progress);
   } else if (attack.kind === "thrust") {
     applyCursorDirectedDaggerStab(hand, attack, progress);
@@ -12415,6 +12803,28 @@ function resolveJumpAttackHit(attack, progress) {
   if (progress >= .72) attack.hitResolved = true;
 }
 
+function resolveEarthRockSmash({ center, radius, damage, knockback, hand }) {
+  spawnJumpSmashEffect(center, radius);
+  combatAudio.impact(Math.min(3, radius / 4.8));
+  const id = createId('earth-smash');
+  const hitTargets = new Set();
+  for (const target of getActiveCombatTargets()) {
+    const key = target.id ?? target.mesh?.uuid;
+    const position = getCombatTargetBaseWorldPosition(target);
+    if (target.dead || target.removed || hitTargets.has(key) || !isGroundSmashTarget(center, position, radius, target.radius)) continue;
+    hitTargets.add(key);
+    const direction = position.clone().sub(target.isRemotePlayer ? world.playerMesh.position : center).setY(0);
+    if (direction.lengthSq() < .001) direction.set(1, 0, 0);
+    direction.normalize();
+    const attack = { id, hand, itemType: 'Staff', itemName: 'Falling rock', sourceName: 'an earth-staff rock',
+      damage, penetration: 0, knockback, direction, previousPosition: center, impactPosition: position,
+      range: world.playerMesh.position.distanceTo(center) + radius, hitTargets,
+      profile: getCombatProfile('Flail'), comboName: 'overheadFinish' };
+    triggerCombatImpactFeedback(target, attack, position);
+    damageCombatTarget(target, damage, 'elemental magic', attack);
+  }
+}
+
 function spawnJumpSmashEffect(center, radius) {
   const effect = createGroundSmashEffect(center, radius);
   world.playerMesh.parent.add(effect.group);
@@ -12443,7 +12853,7 @@ function applyFlailPose(hand, attack, progress, charging = false) {
   if (!held) return;
   const side=HAND_CONFIG[hand].side, arm=world.playerRig[hand+'Arm'];
   const aim=attack.direction ? attack : {direction:world.aimDirection.clone()};
-  facePlayerTowardAttack(aim);
+  if (!charging) facePlayerTowardAttack(aim);
   const profile=attack.profile ?? getCombatProfile('Flail');
   const rise=charging ? easeInOut((attack.chargePower ?? 0)*2/.5) : 1;
   const drop=charging ? 0 : easeInOut((progress-profile.windup)/profile.strike);
@@ -12564,11 +12974,7 @@ function applyCursorDirectedSpearAttack(hand, attack, progress) {
     return;
   }
 
-  const horizontal = initialDirection.clone().setY(0);
-  if (!world.seatedOnThrone && !isPlayerRolling() && horizontal.lengthSq() > 0.001) {
-    horizontal.normalize();
-    world.playerMesh.rotation.y = Math.atan2(horizontal.x, horizontal.z);
-  }
+  facePlayerTowardAttack(attack);
 
   const arm = hand === 'left' ? world.playerRig.leftArm : world.playerRig.rightArm;
   const idleArm = arm.quaternion.clone(), idleElbow = arm.userData.forearm.quaternion.clone(), idleHeld = held.quaternion.clone();
@@ -12632,7 +13038,15 @@ function facePlayerTowardAttack(attack) {
   direction.y = 0;
   if (direction.lengthSq() > 0.001) {
     direction.normalize();
-    world.playerMesh.rotation.y = Math.atan2(direction.x, direction.z);
+    const yaw = Math.atan2(direction.x, direction.z);
+    if (Number.isFinite(attack?.startFacing) && attack.duration) {
+      const progress = attack.elapsed / attack.duration;
+      const blend = easeInOut(progress / Math.max(.01, attack.profile.windup * .65));
+      const facing = attack.startFacing + angleDifference(attack.startFacing, yaw) * blend;
+      // Keep the stroke heading through recovery. Idle turning resumes at its
+      // normal rate afterward, without switching sides of a 180-degree blend.
+      world.playerMesh.rotation.set(0, facing, 0);
+    } else world.playerMesh.rotation.set(0, yaw, 0);
   }
 }
 
@@ -12685,11 +13099,24 @@ function getCursorDirectedAttackVector(attack, gripOrigin = null) {
   // A close aim point can pass behind the moving hand. Keep a committed
   // melee strike forward instead of flipping the blade through the wrist.
   if (attack?.profile?.family !== 'bow' && attack?.profile?.family !== 'crossbow') {
+    // Melee aim is relative to the player at input time. Carry the point with
+    // translation (including buffered movement and attack steps), so walking
+    // toward it cannot shorten the aim vector and pitch the weapon downward.
+    if (attack?.aimOrigin) {
+      direction.add(world.playerMesh.getWorldPosition(new THREE.Vector3()).sub(attack.aimOrigin));
+    }
     const forward = direction.x * horizontal.x + direction.z * horizontal.z;
     if (forward < .65) {
       direction.x += horizontal.x * (.65 - forward);
       direction.z += horizontal.z * (.65 - forward);
     }
+    // Movement can carry a saved aim point sideways past the hand. Preserve
+    // the committed heading instead of twisting the weapon toward that point.
+    const reach = Math.max(.65, forward);
+    const lateral = direction.x * horizontal.z - direction.z * horizontal.x;
+    const limited = clamp(lateral, -reach * .3, reach * .3);
+    direction.x += horizontal.z * (limited - lateral);
+    direction.z -= horizontal.x * (limited - lateral);
   }
   return direction.lengthSq() > 0.001 ? direction.normalize() : horizontal;
 }
@@ -12794,7 +13221,8 @@ function resolveMeleeHitAtSwingMoment(attack, progress) {
           clamp((p - previous) / (progress - previous), 0, 1));
       }
       attack.contactSampleAge = Math.max(0, (progress - p) * (attack.duration ?? 0));
-      if (attack.itemType === 'Spear') applyCursorDirectedSpearAttack(attack.hand, attack, p);
+      attack.contactProgress = p;
+      if (attack.itemType === 'Spear' || (attack.itemType === 'Staff' && attack.kind === 'thrust')) applyCursorDirectedSpearAttack(attack.hand, attack, p);
       else if (attack.kind === 'thrust') applyCursorDirectedDaggerStab(attack.hand, attack, p);
       else applyFocusedMeleePose(attack.hand, attack, p);
       updateFlailModel(world.heldItems[attack.hand].mesh, p, attack.itemType === 'Flail', attack.slashDirection);
@@ -12820,7 +13248,15 @@ function captureCombatTransforms() {
 }
 
 function restoreCombatTransforms(snapshot) {
-  for (const {node, position, rotation} of snapshot) { node.position.copy(position); node.quaternion.copy(rotation); }
+  for (const {node, position, rotation} of snapshot) {
+    node.position.copy(position);
+    node.quaternion.copy(rotation);
+    if (node === world.playerMesh) {
+      // XYZ decomposition folds yaw beyond 90 degrees into X/Z flips.
+      const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation);
+      node.rotation.set(0, Math.atan2(forward.x, forward.z), 0);
+    }
+  }
 }
 
 function spawnProjectile(hand, attack) {
@@ -12846,7 +13282,7 @@ function spawnProjectile(hand, attack) {
     age: 0,
     travelled: 0,
     range: attack.range,
-    damage: attack.damage,
+    damage: attack.damage * PROJECTILE_DAMAGE_MULTIPLIER,
     penetration: attack.penetration ?? 0,
     knockback: attack.knockback ?? 0,
     weaponItem: attack.weaponItem,
@@ -12884,12 +13320,11 @@ function spawnPveEnemyProjectile(enemy, attack, targetPosition) {
     getPlayerWorldElevation() + 3.15,
     targetPosition.z
   );
-  const direction = aimPoint.clone().sub(start);
-  direction.y = 0;
-  if (direction.lengthSq() < 0.001) {
-    direction.copy(attack.direction ?? new THREE.Vector3(0, 0, 1));
-  }
-  direction.normalize();
+  const direction = attack.direction.clone().setY(0).normalize();
+  // Ballistics must use the constrained bearing too, not reacquire the player.
+  const aimDistance = Math.max(1, Math.hypot(aimPoint.x - start.x, aimPoint.z - start.z));
+  aimPoint.x = start.x + direction.x * aimDistance;
+  aimPoint.z = start.z + direction.z * aimDistance;
   start.addScaledVector(direction, attack.kind === "crossbow" ? 1 : 0.75);
 
   const horizontalSpeed = getProjectileHorizontalSpeed(attack);
@@ -12904,7 +13339,7 @@ function spawnPveEnemyProjectile(enemy, attack, targetPosition) {
     age: 0,
     travelled: 0,
     range: attack.range,
-    damage: attack.damage,
+    damage: attack.damage * PROJECTILE_DAMAGE_MULTIPLIER,
     penetration: attack.penetration,
     knockback: attack.knockback,
     itemName: attack.itemName,
@@ -13086,7 +13521,7 @@ function spawnTowerProjectile(drawPower) {
     age: 0,
     travelled: 0,
     range: 105,
-    damage: 18 + drawPower * 14,
+    damage: (18 + drawPower * 14) * PROJECTILE_DAMAGE_MULTIPLIER,
     knockback: 2 + drawPower * 2.5,
     speed,
     previousPosition: start.clone(),
@@ -13121,7 +13556,7 @@ function spawnOutpostDefenseProjectile(structure, target) {
     age: 0,
     travelled: 0,
     range: OUTPOST_ATTACK_RANGE + 18,
-    damage: OUTPOST_ATTACK_DAMAGE,
+    damage: OUTPOST_ATTACK_DAMAGE * PROJECTILE_DAMAGE_MULTIPLIER,
     knockback: 3.2,
     speed: OUTPOST_PROJECTILE_SPEED,
     previousPosition: origin.clone(),
@@ -13244,7 +13679,7 @@ function updateProjectiles(deltaSeconds) {
 
     if (hit) {
       wearWeaponOnHit(projectile);
-      projectile.impactPosition = projectile.mesh.position.clone();
+      projectile.impactPosition ??= projectile.mesh.position.clone();
       triggerCombatImpactFeedback(hit, projectile, projectile.impactPosition);
       damageCombatTarget(hit, projectile.damage, projectile.sourceType === "outpost" ? "outpost" : "projectile", projectile);
       projectile.travelled = projectile.range;
@@ -13278,8 +13713,16 @@ function isProjectileExpired(projectile) {
 }
 
 function updateDroppedItems(deltaSeconds) {
+  const now = Date.now();
+  state.deathDrops = pruneExpiredLoot(state.deathDrops, now);
+  for (const drop of [...world.droppedItems]) {
+    if (isLootExpired(drop, now)) { removeDroppedItem(drop.id); continue; }
+    const layout = world.dungeons.get(drop.activePoiInteriorId)?.layout;
+    if (!drop.shared && drop.sceneMode === 'poiInterior' && layout?.lava?.some(gap => inside(drop.position, gap))) removeDroppedItem(drop.id);
+  }
+  updateDungeonBarrels(deltaSeconds);
   for (const drop of world.droppedItems) {
-    drop.mesh.visible = drop.shared ? sameLootScene(world, drop) : world.sceneMode === "outdoor";
+    drop.mesh.visible = drop.sceneMode ? sameLootScene(world, drop) : world.sceneMode === 'outdoor';
     drop.mesh.rotation.y += deltaSeconds * 0.75;
     drop.mesh.position.y = drop.baseY + Math.sin(state.elapsed * 2.4 + drop.phase) * 0.08;
   }
@@ -13292,24 +13735,18 @@ function getProjectileEnemyHit(projectile) {
     return null;
   }
 
+  let nearest = null;
   for (const enemy of enemies) {
-    if (enemy.dead) {
-      continue;
-    }
-
-    const segmentHit = getHorizontalSegmentHit(
-      projectile.previousPosition,
-      projectile.mesh.position,
-      enemy.mesh.position
-    );
-
-    const baseY = enemy.mesh?.position?.y ?? 0;
-    const minY = baseY + (enemy.hitMinY ?? 0.6);
-    const maxY = baseY + (enemy.hitMaxY ?? 5.6);
-
-    if (segmentHit.distance <= enemy.radius + 0.5 && segmentHit.y >= minY && segmentHit.y <= maxY) {
-      return enemy;
-    }
+    if (enemy.dead) continue;
+    const hit = getWeaponSegmentTargetHit({ start: projectile.previousPosition,
+      end: projectile.mesh.position, radius: .12 }, enemy);
+    if (!hit) continue;
+    const distance = hit.point.distanceToSquared(projectile.previousPosition);
+    if (!nearest || distance < nearest.distance) nearest = { enemy, point: hit.point, distance };
+  }
+  if (nearest) {
+    projectile.impactPosition = nearest.point;
+    return nearest.enemy;
   }
 
   return null;
@@ -13374,6 +13811,7 @@ function getActiveCombatEnemies() {
 function getActiveCombatTargets() {
   return [
     ...getActiveCombatEnemies(),
+    ...getActiveDungeonBarrels(),
     ...getAttackableStructures(),
     ...getAttackableCouriers(),
     ...getAttackableRemotePlayers()
@@ -13655,12 +14093,14 @@ function getCourierStatusKey(id) {
 }
 
 function getProjectileSceneryHit(projectile) {
+  if (world.sceneMode === 'poiInterior' && getActivePoiInterior()?.type === 'Dungeon' && crossesBarrier(projectile.previousPosition, projectile.mesh.position, roomBarriers(world.dungeon.layout))) return { type:'sealedDoor' };
   if (world.sceneMode === "poiInterior" && getActivePoiInterior()?.type === "Dungeon" && crossesClosedDungeonGate(world.dungeon.gate, projectile.previousPosition, projectile.mesh.position)) return world.dungeon.gate;
   if (world.sceneMode !== "outdoor") {
     return null;
   }
 
   for (const collider of world.sceneryGrid.query(Math.min(projectile.previousPosition.x, projectile.mesh.position.x)-0.12, Math.min(projectile.previousPosition.z, projectile.mesh.position.z)-0.12, Math.max(projectile.previousPosition.x, projectile.mesh.position.x)+0.12, Math.max(projectile.previousPosition.z, projectile.mesh.position.z)+0.12)) {
+    if (collider.earthAirborne) continue;
     const segmentHit = getHorizontalSegmentHit(
       projectile.previousPosition,
       projectile.mesh.position,
@@ -13712,7 +14152,6 @@ function damagePveEnemyFromMelee(attack) {
   const enemies = getActiveCombatTargets();
   if (attack.kind === 'unarmed') { damageCombatTargetFromAimProfile(enemies, attack); return; }
   const segments = getAttackWeaponHitSegments(attack);
-  showCombatDebugSegments(segments);
   damageCombatTargetFromWeaponSegments(enemies, attack, segments);
 }
 
@@ -13748,6 +14187,11 @@ function getAttackWeaponHitSegments(attack) {
 
 function damageCombatTargetFromWeaponSegments(enemies, attack, weaponSegments) {
   world.weaponTrails?.sample(attack, weaponSegments, attack.contactSampleAge ?? 0);
+  const padded = weaponSegments.map(segment => ({ ...segment, radius: segment.radius + meleeContactPadding(attack) }));
+  weaponSegments = attack.itemType === 'Flail' || attack.jumpAttack ? padded
+    : sweptWeaponSegments(attack.previousWeaponSegments, padded);
+  attack.previousWeaponSegments = padded;
+  showCombatDebugSegments(padded);
   attack.hitTargets ??= new Set();
   const maxTargets = attack.jumpAttack === 'plant' ? 1 : attack.itemType === 'Spear' ? 5 : attack.kind === 'thrust' ? 1 : (attack.profile.maxTargets ?? 1);
   const hits = [];
@@ -13758,8 +14202,13 @@ function damageCombatTargetFromWeaponSegments(enemies, attack, weaponSegments) {
       const hit = getWeaponSegmentTargetHit(segment, enemy);
       if (hit) { hits.push({ enemy, key, hit, distance: hit.point.distanceTo(world.playerMesh.position) }); break; }
     }
+    if (enemy === attack.assistTarget && !hits.some(entry => entry.enemy === enemy)
+        && attack.contactProgress >= attack.profile.hitMoment) {
+      const hit = lockedMeleeContact(attack, world.playerMesh.position, isMeleeAssistVisible);
+      if (hit) hits.push({ enemy, key, hit, distance: hit.distance });
+    }
   }
-  hits.sort((a,b) => a.distance - b.distance);
+  hits.sort((a,b) => Number(b.enemy === attack.assistTarget) - Number(a.enemy === attack.assistTarget) || a.distance - b.distance);
   for (const {enemy, key, hit} of hits) {
     if (attack.hitTargets.size >= maxTargets) break;
     attack.hitTargets.add(key);
@@ -13775,8 +14224,8 @@ function getWeaponSegmentTargetHit(segment, target) {
   const targetPosition = getCombatTargetBaseWorldPosition(target);
   const targetRadius = target.radius ?? 1.1;
   const baseY = targetPosition.y ?? 0;
-  const minY = baseY + (target.hitMinY ?? 0.6);
-  const maxY = baseY + (target.hitMaxY ?? 5.6);
+  const minY = baseY + (target.hitMinY ?? 0.6) * (target.gremlinSize?.scale ?? 1);
+  const maxY = baseY + (target.hitMaxY ?? 5.6) * (target.gremlinSize?.scale ?? 1);
   const verticalPadding = segment.radius + 0.18;
 
   // Clip to the target's vertical extent before finding horizontal distance.
@@ -13888,7 +14337,7 @@ function triggerCombatImpactFeedback(target, attack, impactPosition = null, opti
   const weight = impact.weight ?? 0.55;
 
   if (options.hitstop !== false && !attack?.impactPauseApplied) {
-    world.combatFeedback.hitstop = Math.max(world.combatFeedback.hitstop, Math.min(.025, impact.hitstop ?? .025));
+    world.combatFeedback.hitstop = Math.max(world.combatFeedback.hitstop, clamp(impact.hitstop ?? .04, .03, .075));
     if (attack) attack.impactPauseApplied = true;
   }
   world.combatFeedback.cameraImpulse = Math.max(world.combatFeedback.cameraImpulse, impact.camera ?? 0.014);
@@ -13897,20 +14346,33 @@ function triggerCombatImpactFeedback(target, attack, impactPosition = null, opti
 
   if (attack?.hand) {
     showCombatHitMarker(attack);
+    combatAudio.impact(weight, Boolean(target.isStructure));
   }
 
   if (impactPosition) {
     attack.impactPosition = impactPosition;
   }
 
-  if (target?.mesh && !target.isStructure && !target.isCourier) {
+  if (target?.mesh && !target.isBarrel && !target.isStructure && !target.isCourier) {
     const direction = attack?.direction?.clone?.() ?? new THREE.Vector3(0, 0, 1);
     target.hitReaction = {
       elapsed: 0,
-      duration: 0.16 + (impact.flinch ?? 0.25) * 0.32,
+      duration: .32 + (impact.flinch ?? .25) * .28,
       intensity: impact.flinch ?? 0.25,
       direction
     };
+    // Light hits interrupt anticipation, not an already committed enemy blow.
+    // A short immunity prevents rapid daggers from permanently locking a mob.
+    const incoming = target.attackAnimation;
+    if (!target.isRemotePlayer && !target.isLocalPlayer && !target.bossElement
+        && state.elapsed >= (target.recoilImmuneUntil ?? 0)
+        && (!incoming || incoming.elapsed / incoming.duration < incoming.profile.windup)) {
+      const stagger = .12 + Math.min(.16, weight * .16);
+      target.shoveStaggerTimer = Math.max(target.shoveStaggerTimer ?? 0, stagger);
+      target.attackTimer = Math.max(target.attackTimer ?? 0, stagger + .18);
+      target.recoilImmuneUntil = state.elapsed + .7;
+      resetPveEnemyAttackState(target);
+    }
   }
 }
 
@@ -13939,13 +14401,10 @@ function updateCombatHitReaction(entity, deltaSeconds) {
 
   reaction.elapsed += deltaSeconds;
   const progress = clamp(reaction.elapsed / Math.max(0.001, reaction.duration), 0, 1);
-  const pulse = Math.sin(progress * Math.PI) * reaction.intensity;
-  entity.mesh.rotation.x = -pulse * 0.16;
-  entity.mesh.rotation.z = pulse * 0.08;
+  applyRecoilPose(entity, reaction);
 
   if (progress >= 1) {
-    entity.mesh.rotation.x = 0;
-    entity.mesh.rotation.z = 0;
+    clearRecoilPose(entity);
     entity.hitReaction = null;
   }
 }
@@ -13995,11 +14454,27 @@ function applyPveEnemyHitToPlayer(enemy) {
     return;
   }
 
-  const stats = getPveEnemyAttackStats(enemy);
-  const rawDamage = Math.max(1, Math.round(Number(stats.damage) || 8));
+  const stats = enemy.attackAnimation ?? getPveEnemyAttackStats(enemy);
+  const target = getLocalPlayerCombatTarget();
+  const weapon = getWeaponVisualRoot(enemy.mesh.getObjectByName('pveWeaponVisual'));
+  let contact = null;
+  if (weapon) {
+    weapon.updateWorldMatrix(true, false);
+    for (const segment of weapon.userData?.weaponHitSegments ?? []) {
+      contact = getWeaponSegmentTargetHit({
+        start: new THREE.Vector3(...segment.start).applyMatrix4(weapon.matrixWorld),
+        end: new THREE.Vector3(...segment.end).applyMatrix4(weapon.matrixWorld),
+        radius: segment.radius ?? .16
+      }, target);
+      if (contact) break;
+    }
+  }
+  // Range-based creature attacks without weapon geometry aim at the torso.
+  const location = locateBodyHit(target, contact?.point);
+  const rawDamage = locationDamage(Number(stats.damage) || 8, location);
   if (isPlayerDodging()) return;
   const block = blockLocalDamage(rawDamage, enemy.mesh.position, stats.knockback ?? 0);
-  const damage = block.damage > 0 ? mitigateDamageWithArmor(block.damage, Number(stats.penetration) || 0, getEquippedArmorItems(), { wear: true }) : 0;
+  const damage = block.damage > 0 ? mitigateDamageWithArmor(block.damage, Number(stats.penetration) || 0, getEquippedArmorItems(), { wear: true, location }) : 0;
   if (block.parried) { enemy.attackTimer = Math.max(enemy.attackTimer, .8); enemy.shoveStaggerTimer = .55; }
   const previousHp = state.player.hp ?? state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   const attackDirection = new THREE.Vector3(
@@ -14046,22 +14521,10 @@ function getEquippedArmorItems() {
 }
 
 function mitigateDamageWithArmor(amount, penetration = 0, armorItems = [], options = {}) {
-  const rawDamage = Math.max(1, Math.round(Number(amount) || 1));
-  const totals = getArmorTotals(armorItems);
-
-  if (totals.defense <= 0 && totals.resistance <= 0) {
-    return rawDamage;
-  }
-
-  const effectiveDefense = Math.max(0, totals.defense - penetration * 0.75);
-  const effectiveResistance = clamp(totals.resistance - penetration * 0.35, 0, 70);
-  const reduced = rawDamage * (1 - effectiveResistance / 100) - effectiveDefense * 0.45;
-  const mitigated = Math.max(1, Math.round(Math.max(rawDamage * 0.22, reduced)));
-
-  if (options.wear) {
-    wearArmorItems(armorItems, rawDamage);
-  }
-
+  const location = options.location ?? 'chest';
+  const protectedItems = armorForHit(armorItems, location);
+  const mitigated = mitigateHitDamage(amount, penetration, protectedItems, location);
+  if (options.wear && amount > 0) wearArmorItems(protectedItems, amount);
   return mitigated;
 }
 
@@ -14098,6 +14561,7 @@ function wearArmorItems(armorItems, rawDamage) {
 }
 
 function damageCombatTarget(target, amount, source, attack) {
+  if (target.isBarrel) { damageDungeonBarrel(target, amount); return; }
   if (target.isStructure) {
     damageStructureTarget(target, amount, source, attack);
     return;
@@ -14160,6 +14624,7 @@ function damageCourierTarget(target, amount, source, attack = null) {
     return;
   }
 
+  amount = locationDamage(amount, locateBodyHit(target, attack?.impactPosition));
   courier.hp = Math.max(0, (courier.hp ?? 65) - amount);
   courier.lastDamagedAt = state.elapsed;
   markPersistenceDirty();
@@ -14233,6 +14698,8 @@ function sendPlayerAttack(target, amount, source, attack) {
       attackId: attack?.id ?? null,
       targetId: target.id,
       damage: amount,
+      hitLocation: locateBodyHit(target, attack?.impactPosition),
+      status: attack?.status ?? null,
       penetration: attack?.penetration ?? 0,
       knockback: attack?.knockback ?? 0,
       range: attack?.range ?? 3,
@@ -14277,11 +14744,12 @@ function damageLocalPlayerTarget(target, amount, source, attack = null) {
     return;
   }
 
-  const rawDamage = Math.max(1, Math.round(Number(amount) || 1));
+  const location = locateBodyHit(target, attack?.impactPosition);
+  const rawDamage = locationDamage(amount, location);
   const incoming = attack?.direction;
   const shieldSource = incoming ? { x: state.player.position.x - incoming.x * 10, z: state.player.position.z - incoming.z * 10 } : attack?.previousPosition;
   const block = attack?.unavoidable ? { damage: rawDamage, knockback: 0 } : blockLocalDamage(rawDamage, shieldSource, attack?.knockback ?? 0);
-  const damage = block.damage > 0 ? mitigateDamageWithArmor(block.damage, Number(attack?.penetration) || 0, getEquippedArmorItems(), { wear: true }) : 0;
+  const damage = attack?.statusTick ? amount : block.damage > 0 ? mitigateDamageWithArmor(block.damage, Number(attack?.penetration) || 0, getEquippedArmorItems(), { wear: true, location }) : 0;
   const previousHp = state.player.hp ?? state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   const sourcePosition = attack?.mesh?.position ?? attack?.previousPosition ?? null;
 
@@ -14291,6 +14759,7 @@ function damageLocalPlayerTarget(target, amount, source, attack = null) {
 
   state.player.maxHp = state.player.maxHp ?? MULTIPLAYER_MAX_HEALTH;
   state.player.hp = Math.max(0, previousHp - damage);
+  if (damage > 0 && attack?.status && state.player.hp > 0) playerStatuses.apply(attack.status, attack.sourceName);
   world.multiplayer.damageInputSequence = world.multiplayer.nextInputSequence;
   markPlayerPersistenceDue();
   if (damage > 0 && !isBloodlessAttack(attack, source)) {
@@ -14306,7 +14775,7 @@ function damageLocalPlayerTarget(target, amount, source, attack = null) {
     world.multiplayer.respawnAt = Date.now() + PLAYER_RESPAWN_DELAY_MS;
     showDeathScreen();
     flash(`You were defeated by ${attack?.sourceName ?? "an outpost"}.`);
-  } else {
+  } else if (!attack?.statusTick) {
     flash(`${attack?.sourceName ?? "Outpost"} hit you for ${damage}.`);
   }
 
@@ -14320,7 +14789,8 @@ function damagePveEnemy(enemy, amount, source, attack = null) {
     return;
   }
 
-  const damage = mitigateDamageWithArmor(amount, Number(attack?.penetration) || 0, enemy.armor ?? []);
+  const location = locateBodyHit(enemy, attack?.impactPosition);
+  const damage = attack?.statusTick ? amount : mitigateDamageWithArmor(locationDamage(amount, location), Number(attack?.penetration) || 0, enemy.armor ?? [], { location });
   enemy.hp = Math.max(0, enemy.hp - damage);
   if (!isBloodlessAttack(attack, source)) {
     spawnBloodSplat(enemy, attack, damage);
@@ -14330,7 +14800,6 @@ function damagePveEnemy(enemy, amount, source, attack = null) {
   if (enemy.hp > 0) {
     revealHealthBarSprite(enemy.healthBar, { persistent: true });
   }
-  enemy.mesh.scale.set(1.08, 1.08, 1.08);
 
   if (enemy.hp <= 0) {
     enemy.dead = true;
@@ -14350,7 +14819,9 @@ function damagePveEnemy(enemy, amount, source, attack = null) {
 
     const renownGain = Math.max(1, Math.round(enemy.maxHp / 8));
     const goldDrop = droppedItems.find((item) => item.goldAmount);
-    const equipmentDrops = droppedItems.filter((item) => !item.goldAmount);
+    const staffDrops = droppedItems.filter(item => enemy.bossElement && item.type === 'Staff');
+    if (staffDrops.length) spawnDroppedLootItems(staffDrops, enemy.mesh.position, enemy.name);
+    const equipmentDrops = droppedItems.filter((item) => !item.goldAmount && !staffDrops.includes(item));
 
     if (equipmentDrops.length) {
       state.player.inventory.push(...equipmentDrops);
@@ -14365,7 +14836,7 @@ function damagePveEnemy(enemy, amount, source, attack = null) {
     markPersistenceDirty();
     refreshUi();
     flash(droppedItems.length
-      ? `${enemy.name} defeated. Looted ${formatLootNames(droppedItems)} and gained ${renownGain} prowess.${enemy.bossElement ? " Dungeon collapsing! Escape within 4 minutes!" : ""}`
+      ? `${enemy.name} defeated. ${enemy.bossElement ? 'Gem collected; staff dropped nearby.' : `Looted ${formatLootNames(droppedItems)}.`} Gained ${renownGain} prowess.${enemy.bossElement ? " Dungeon collapsing! Escape within 4 minutes!" : ""}`
       : `${enemy.name} defeated. Gained ${renownGain} prowess.`);
   } else if (source !== "outpost") {
     flash(`${enemy.name} hit for ${Math.round(damage)}.`);
@@ -14381,7 +14852,7 @@ function formatLootNames(items) {
 }
 
 function isBloodlessAttack(attack = null, source = "") {
-  return attack?.itemType === "Empty Hand" || source === "Empty Hand";
+  return attack?.statusTick || attack?.itemType === 'Staff' || source === 'Staff' || source === 'elemental magic' || attack?.itemType === "Empty Hand" || source === "Empty Hand";
 }
 
 function isBloodlessDamageSource(source = "") {
@@ -14500,7 +14971,10 @@ function getBloodSplatTexture() {
 }
 
 function applyKnockbackToPveEnemy(enemy, attack) {
-  const knockback = Math.max(0, Number(attack?.knockback) || 0);
+  const finisher = attack?.comboName === 'overheadFinish' || attack?.comboName === 'stab'
+    || attack?.comboName === 'drivingThrust' || attack?.jumpAttack || attack?.itemType === 'Flail';
+  const knockback = Math.max(0, Number(attack?.knockback) || 0) *
+    (attack?.kind === 'unarmed' || finisher || isProjectileWeapon(attack?.itemType) ? 1 : .4);
 
   if (!enemy?.mesh || knockback <= 0) {
     return;
@@ -14529,7 +15003,7 @@ function applyKnockbackToPveEnemy(enemy, attack) {
         ? SPEAR_KNOCKBACK_MAX_SPEED
         : KNOCKBACK_MAX_SPEED
   );
-  if (isEmptyHandShove || isSpearThrust) {
+  if (isEmptyHandShove || (isSpearThrust && finisher)) {
     const staggerDuration = isEmptyHandShove ? PVE_SHOVE_STAGGER_DURATION : SPEAR_HIT_STAGGER_DURATION;
     enemy.shoveStaggerTimer = Math.max(enemy.shoveStaggerTimer ?? 0, staggerDuration);
     enemy.attackTimer = Math.max(enemy.attackTimer ?? 0, staggerDuration);
@@ -14619,8 +15093,10 @@ function movePveEntityTo(entity, position, options = {}) {
       x: clamp(position.x, bounds.minX, bounds.maxX),
       z: clamp(position.z, bounds.minZ, bounds.maxZ)
     });
+    if (world.dungeon.layout && crossesBarrier(entity.mesh.position, resolved, roomBarriers(world.dungeon.layout), entity.radius ?? 1)) return;
     if (isDungeonEntranceSafe(resolved, (entity.radius ?? 1.2) + 1)) return;
     entity.mesh.position.x = resolved.x;
+    entity.mesh.position.y = dungeonMobElevation(resolved, world.dungeon.layout);
     entity.mesh.position.z = resolved.z;
     return;
   }
@@ -15103,6 +15579,18 @@ function createRegisteredWeaponAsset(item, hand) {
 }
 
 function createHeldItemMesh(item, hand) {
+  const root = createHeldItemBaseMesh(item, hand);
+  attachEquipmentGem(root, item, item.type.includes('Shield') ? 'shield' : 'weapon', HAND_CONFIG[hand].side);
+  return root;
+}
+
+function createHeldItemBaseMesh(item, hand) {
+  if (item.type === 'Staff') {
+    const staff = createStaffVisual(item.socketedGem ?? item.element, equipmentMaterial(item));
+    staff.userData.weaponHitSegments = getHeldWeaponHitSegments('Staff', hand);
+    staff.rotation.set(1.17, HAND_CONFIG[hand].side * .04, HAND_CONFIG[hand].side * -.18);
+    return staff;
+  }
   if (item.type === "Flail") {
     const flail=createFlailModel(), side=HAND_CONFIG[hand].side;
     flail.rotation.set(1.17,side*.04,side*-.18);
@@ -15111,6 +15599,7 @@ function createHeldItemMesh(item, hand) {
   const registered = createRegisteredWeaponAsset(item, hand);
 
   if (registered) {
+    registered.userData.sharedLootResources = true;
     return registered;
   }
 
@@ -16484,6 +16973,8 @@ function renderGearDetails(item) {
   }
 
   const durability = `${Math.round(item.durability)} / ${item.maxDurability}`;
+  const earthControl = earthStaffControl(item), fireControl = fireStaffConfig(item);
+  const gemDetails = item.socketedGem ? `<span>Gem socket</span><strong>${escapeHtml(item.socketedGem)}${earthControl || fireControl ? '' : ' (effect inactive)'}</strong>${earthControl ? `<span>Earth control</span><strong>Hold the staff's mouse button over a rock to lift and steer it. ${earthControl.duration}s control · responsiveness ${earthControl.response} · release to drop. Falls of ${ROCK_SMASH_MIN_DROP}+ units cause a ground smash. Bigger rocks deal more damage over a wider area.</strong>` : ''}` : "";
 
   if (item.category === "Treasure") {
     return `<article><header>${getItemIconMarkup(item)}<strong>${escapeHtml(item.name)}</strong></header><p>${escapeHtml(item.description ?? "Dungeon treasure")}</p><p>${escapeHtml(item.rarity)} treasure</p></article>`;
@@ -16506,7 +16997,7 @@ function renderGearDetails(item) {
           <span>Resistance</span><strong>${formatStat(item.armor.resistance)}%</strong>
           <span>Toughness</span><strong>${formatStat(item.armor.toughness)}</strong>
           <span>Weight</span><strong>${formatStat(item.armor.weight)}</strong>
-          <span>Durability</span><strong>${durability}</strong>
+          <span>Durability</span><strong>${durability}</strong>${gemDetails}${fireControl ? `<span>Flamethrower</span><strong>Hold to spray fire · ${fireControl.damagePerSecond} damage/s before armour · applies Flaming for 5s.</strong>` : ""}
         </div>
       </article>
     `;
@@ -16525,7 +17016,7 @@ function renderGearDetails(item) {
         <div class="stat-grid">
           ${isShield(item.type) ? `<span>Defend</span><strong>Hold its mouse button. Face the attack. Timed blocks cost less guard; attacks lower your shield.</strong>` : ""}
           <span>Category</span><strong>${escapeHtml(item.category)}</strong>
-          <span>Durability</span><strong>${durability}</strong>
+          <span>Durability</span><strong>${durability}</strong>${gemDetails}
         </div>
       </article>
     `;
@@ -16542,13 +17033,13 @@ function renderGearDetails(item) {
       </header>
       <div class="stat-grid">
         <span>Style</span><strong>${MELEE_STYLES[item.type]?.description ?? "Aim and release to fire."}</strong>
-        <span>Range</span><strong>${item.weapon.range}</strong>
+        <span>Range</span><strong>${WEAPON_STATS[item.type]?.range ?? item.weapon.range}</strong>
         <span>Damage</span><strong>${item.weapon.damage}</strong>
         <span>Penetration</span><strong>${item.weapon.penetration}</strong>
         <span>Knockback</span><strong>${formatStat(item.weapon.knockback ?? 0)}</strong>
         <span>Frequency</span><strong>${item.weapon.frequency}/s</strong>
         <span>Speed</span><strong>${item.weapon.speed}</strong>
-        <span>Durability</span><strong>${durability}</strong>
+        <span>Durability</span><strong>${durability}</strong>${gemDetails}
       </div>
     </article>
   `;
@@ -16581,7 +17072,9 @@ function renderInventoryPanel() {
   ui.inventoryGrid.scrollTop = inventoryScrollTop;
   ui.inventoryGrid.scrollLeft = inventoryScrollLeft;
 
-  ui.inventoryDetails.innerHTML = renderGearDetails(selectedGear);
+  ui.inventoryDetails.classList.toggle("is-hidden", !selectedGear);
+  ui.inventoryDetails.parentElement.classList.toggle("has-selection", Boolean(selectedGear));
+  ui.inventoryDetails.innerHTML = selectedGear ? renderGearDetails(selectedGear) : "";
   renderEquipmentSlots();
   renderInventoryHotbar(selectedGear);
 }
@@ -16660,7 +17153,7 @@ function getItemIconMarkup(item, options = {}) {
   const label = escapeHtml(equipmentName(item));
   const aria = options.decorative ? 'aria-hidden="true"' : `role="img" aria-label="${label}"`;
   if (item.category === "Treasure" && SORCERERS[item.element]) {
-    return `<span class="item-icon" ${aria}><svg viewBox="0 0 64 64" width="48" height="48"><path d="M32 4 54 24 32 60 10 24Z" fill="${SORCERERS[item.element].color}" stroke="#fff" stroke-width="2"/><path d="m32 4-8 20 8 36 8-36Z" fill="#fff" opacity=".3"/><path d="M10 24h44" stroke="#fff" opacity=".6"/></svg></span>`;
+    return `<span class="item-icon" ${aria}>${gemSvg(item.element)}</span>`;
   }
   return `<span class="item-icon" ${aria} style="--material-color:${equipmentMaterial(item).color}"><img src="${equipmentArtUrl(item)}" alt="" draggable="false"></span>`;
 }
@@ -16685,14 +17178,217 @@ function flash(message) {
   }
 }
 
+function earthAimRay() {
+  const caster = new THREE.Raycaster();
+  caster.setFromCamera(getNdcFromPointer({ clientX: world.pointer.x, clientY: world.pointer.y }), world.camera);
+  return caster.ray;
+}
+
+
+
+function startFireStaff(hand) {
+  const item = getEquippedItem(state, hand), config = fireStaffConfig(item);
+  if (!config || state.player.dead || isCameraMenuOpen() || isPlayerRolling() || world.fireCast || world.earthMagic?.active?.phase === 'held') return false;
+  world.fireCast = { hand, itemId: item.id, config, age: 0, pulse: 0, scene: world.sceneMode, area: world.activePoiInteriorId };
+  world.fireInputHand = hand;
+  world.attacks.left = null; world.attacks.right = null;
+  world.flailCharge = null; world.weaveQueue = null; world.guard.hand = null;
+  world.comboChains = { left: null, right: null };
+  return true;
+}
+
+function igniteTarget(target) {
+  if (target.isRemotePlayer || target.isStructure || target.isBarrel || target.isLocalPlayer) return;
+  const key = target.id ?? target.mesh.uuid;
+  let entry = flamingTargets.get(key);
+  if (!entry) {
+    entry = { target, statuses: new StatusEffects(), visuals: new PlayerStatusVisuals(target.mesh) };
+    flamingTargets.set(key, entry);
+  }
+  entry.statuses.apply('flaming', 'a fire staff');
+}
+
+function updateFlamingTargets(dt) {
+  if (!flamingTargets.size) return;
+  const active = new Set(getActiveCombatTargets().map(t => t.id ?? t.mesh?.uuid));
+  for (const [key, entry] of flamingTargets) {
+    const t = entry.target;
+    if (!t.dead && !t.removed && active.has(key)) entry.statuses.update(dt, amount => {
+      if (!t.dead) damageCombatTarget(t, amount, 'elemental magic', { statusTick: true, itemType: 'Staff', sourceName: 'Flaming' });
+    });
+    if (t.dead || t.removed || !active.has(key) || !entry.statuses.active.size) {
+      entry.visuals.root.removeFromParent();
+      const geometries = new Set(), materials = new Set();
+      entry.visuals.root.traverse(n => { if (n.geometry) geometries.add(n.geometry); if (n.material) materials.add(n.material); });
+      geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose());
+      flamingTargets.delete(key);
+    } else entry.visuals.update(dt, entry.statuses);
+  }
+}
+
+function updateFireStaff(dt) {
+  let cast = world.fireCast;
+  if (cast && (!(world.pointer.buttons & (cast.hand === 'left' ? 1 : 2)) || state.player.dead ||
+      isPlayerRolling() || isCameraMenuOpen() || cast.scene !== world.sceneMode || cast.area !== world.activePoiInteriorId ||
+      getEquippedItem(state, cast.hand)?.id !== cast.itemId || !fireStaffConfig(getEquippedItem(state, cast.hand)))) {
+    world.fireCast = null; cast = null;
+  }
+  const origin = new THREE.Vector3(), direction = new THREE.Vector3(0,0,1);
+  let length = 0, emitting = false;
+  if (cast) {
+    cast.age += dt;
+    const staff = world.heldItems[cast.hand]?.mesh, arm = world.playerRig?.[cast.hand + 'Arm'];
+    const target = world.aimPoint.clone();
+    if (target.distanceToSquared(world.playerMesh.position) < 64) target.copy(world.playerMesh.position).addScaledVector(world.aimDirection, 24).add(new THREE.Vector3(0,3,0));
+    const tip = poseEarthStaff(arm, staff, target, Math.min(1, cast.age/.16));
+    if (tip) {
+      origin.copy(staff.localToWorld(new THREE.Vector3(0,4.45,0)));
+      direction.set(0,1,0).applyQuaternion(staff.getWorldQuaternion(new THREE.Quaternion())).normalize();
+      length = Math.min(cast.config.range, Math.max(0, cast.age-.1)*34);
+      // The same clipped length drives rendering and damage.
+      for (let d=.4; d<=length; d+=.4) {
+        const point=origin.clone().addScaledVector(direction,d);
+        const previous=origin.clone().addScaledVector(direction,d-.4);
+        let blocked = getProjectileSceneryHit({previousPosition:previous,mesh:{position:point}});
+        if (world.sceneMode === 'outdoor') {
+          blocked ||= point.y < getTerrainHeightAt(point.x,point.z);
+          blocked ||= [...world.poiExteriorColliders,...world.castleExteriorColliders].some(c =>
+            Math.abs(point.x-c.x)<c.halfWidth && Math.abs(point.z-c.z)<c.halfDepth && point.y<getTerrainHeightAt(c.x,c.z)+(c.height??16));
+        }
+        if (blocked) { length=Math.max(0,d-.4); break; }
+      }
+      emitting = length > .1 && cast.age >= .1;
+      cast.pulse += dt;
+      if (emitting && cast.pulse >= cast.config.interval) {
+        const elapsed = Math.min(cast.pulse, .3); cast.pulse = 0;
+        const attack = { id:createId('flame'), hand:cast.hand, itemType:'Staff', itemName:'Flamethrower', sourceName:'a fire staff',
+          status:'flaming', direction, penetration:0, knockback:0, range:cast.config.range+6, previousPosition:origin };
+        for (const t of getActiveCombatTargets()) {
+          if (t.dead || t.removed) continue;
+          const scale=t.gremlinSize?.scale??1;
+          if (!flameHitsBody(origin,direction,length,getCombatTargetBaseWorldPosition(t),t.radius??1,(t.hitMinY??.6)*scale,(t.hitMaxY??5.6)*scale)) continue;
+          damageCombatTarget(t,cast.config.damagePerSecond*elapsed,'elemental magic',attack);
+          if (!t.dead) igniteTarget(t);
+        }
+      }
+    }
+  }
+  if (emitting && !world.flameJet) world.flameJet = new FlameJetVisual(world.scene);
+  if (world.flameJet) {
+    world.flameJet.update(dt,origin,direction,length,emitting);
+    if (!cast && !world.flameJet.particles.length) { world.flameJet.dispose(); world.flameJet=null; }
+  }
+}
+
+function startEarthRockControl(hand) {
+  const item = getEquippedItem(state, hand), config = earthStaffControl(item);
+  if (!config || world.sceneMode !== 'outdoor' || state.player.dead || isCameraMenuOpen() || isPlayerRolling()) return false;
+  const ray = earthAimRay();
+  const rock = world.earthMagic?.pick(ray, state.player.position, config.range, point => {
+    // Reject rocks hidden behind terrain or building walls.
+    const length = ray.origin.distanceTo(point);
+    for (let d = 1; d < length - .5; d += 1) {
+      const p = ray.at(d, new THREE.Vector3());
+      if (getTerrainHeightAt(p.x, p.z) > p.y + .2) return true;
+    }
+    for (const c of [...world.poiExteriorColliders, ...world.castleExteriorColliders]) {
+      const ground = getTerrainHeightAt(c.x, c.z);
+      const box = new THREE.Box3(new THREE.Vector3(c.x - c.halfWidth, ground, c.z - c.halfDepth),
+        new THREE.Vector3(c.x + c.halfWidth, ground + (c.height ?? 16), c.z + c.halfDepth));
+      const hit = ray.intersectBox(box, new THREE.Vector3());
+      if (hit && hit.distanceTo(ray.origin) < length - .2) return true;
+    }
+    return false;
+  });
+  if (!rock) return false;
+  if (!world.earthMagic.start(rock, item, hand, ray)) {
+    flash('Wait for the controlled rock to land.');
+    world.earthInputHand = hand;
+    return true;
+  }
+  world.earthInputHand = hand;
+  world.weaveQueue = null;
+  flash(`${equipmentName(item)}: hold to steer · release to drop · ${config.duration}s control.`);
+  return true;
+}
+
+function updateEarthRockControl(dt) {
+  const control = world.earthMagic;
+  if (!control) return;
+  const active = control.active;
+  if (active) {
+    const result = control.update(dt, {
+      ray: earthAimRay(),
+      playerPosition: new THREE.Vector3(state.player.position.x, getPlayerWorldElevation(), state.player.position.z),
+      item: getEquippedItem(state, active.hand),
+      held: Boolean(world.pointer.buttons & (active.hand === 'left' ? 1 : 2)) && !isCameraMenuOpen() && !isPlayerRolling(),
+      valid: world.sceneMode === 'outdoor' && !state.player.dead
+    });
+    if (result === 'expired') flash('Earth control exhausted. Release the button before lifting another rock.');
+  }
+  let panel = document.getElementById('earth-control-status');
+  if (!panel && control.active) {
+    panel = document.createElement('div');
+    panel.id = 'earth-control-status';
+    panel.setAttribute('aria-label', 'Earth staff control');
+    document.body.append(panel);
+  }
+  if (panel) {
+    panel.hidden = !control.active;
+    const a = control.active;
+    if (a) panel.textContent = a.phase === 'held'
+      ? `Earth control · ${a.config.material} · ${Math.max(0, a.config.duration - a.elapsed).toFixed(1)}s\nMove your aim to steer · release to drop`
+      : 'Rock falling';
+  }
+}
+
 function stepSimulation(deltaSeconds) {
   state.elapsed += deltaSeconds;
+  updatePlayerStatuses(deltaSeconds);
   updateMovement(deltaSeconds);
+  updateEarthRockControl(deltaSeconds);
+  updateFlamingTargets(deltaSeconds);
   tickFactionIncome(state, deltaSeconds, { factionIncome: !world.persistence.online });
   if (!world.persistence.online) tickCouriers(state, deltaSeconds);
   tickEvent(state, deltaSeconds);
   if (tickLoreSystem(state)) markPersistenceDirty();
   updateWorld(deltaSeconds);
+}
+
+function updatePlayerStatuses(dt) {
+  if (state.player.dead) playerStatuses.clear();
+  else playerStatuses.update(dt, (damage, effect) => {
+    damageLocalPlayerTarget({ mesh: world.playerMesh }, damage, 'elemental magic', { unavoidable: true, statusTick: true, sourceName: effect.source || STATUS_EFFECTS[effect.type].name });
+    if (state.player.dead) playerStatuses.clear();
+  });
+  let panel = document.getElementById('player-status-effects');
+  if (!panel) {
+    panel = document.createElement('div');panel.id='player-status-effects';panel.setAttribute('aria-label','Temporary status effects');document.body.append(panel);
+  }
+  const text = [...playerStatuses.active.values()].map(effect => `${STATUS_EFFECTS[effect.type].name} · ${Math.ceil(effect.remaining)}s — ${STATUS_EFFECTS[effect.type].description}`).join('\n');
+  if (panel.textContent !== text) panel.textContent=text;
+  panel.hidden=!text;
+}
+
+function updateRaidRoutes() {
+  // One shared budget per rendered frame, regardless of combat substep count.
+  world.raidRoutePlanner?.step();
+}
+
+function updateOutdoorMobVisibility() {
+  const frustum = world.mobVisualFrustum ??= new THREE.Frustum();
+  const matrix = world.mobVisualMatrix ??= new THREE.Matrix4();
+  const sphere = world.mobVisualSphere ??= new THREE.Sphere(new THREE.Vector3(), 18);
+  world.camera.updateMatrixWorld();
+  frustum.setFromProjectionMatrix(matrix.multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse));
+  for (const mob of world.outdoorMonsters) {
+    // Interior mobs are cheap in number; retain poses there without mixing
+    // local interior coordinates with outdoor camera space.
+    if (mob.raidInteriorId) { mob.visualActive = world.sceneMode !== 'outdoor'; continue; }
+    sphere.center.copy(mob.mesh.position); sphere.center.y += 5;
+    mob.visualActive = world.sceneMode === 'outdoor' && frustum.intersectsSphere(sphere)
+      && distance2D(mob.mesh.position, world.camera.position) < WORLD_RENDER_DISTANCE;
+  }
 }
 
 function animate() {
@@ -16701,17 +17397,32 @@ function animate() {
   const previousElapsed = state.elapsed;
   updatePersistence(Math.max(0, rawDeltaSeconds));
   updateHeldItemVisuals();
+  updateOutdoorMobVisibility();
   const steps = simulationSteps(rawDeltaSeconds);
   for (const step of steps) {
     if (diagnostics.profiler.current) diagnostics.profiler.current.steps++;
     stepSimulation(step);
   }
+  updateRaidRoutes();
 
   if (Math.floor(state.elapsed * 2) !== Math.floor(previousElapsed * 2)) {
     refreshUi();
   }
 
   updateFrameVisuals(steps.reduce((sum, step) => sum + step, 0));
+  const earthCast = world.earthMagic?.active;
+  if (earthCast?.phase === 'held') {
+    const staff = world.heldItems[earthCast.hand]?.mesh;
+    const arm = world.playerRig?.[earthCast.hand + 'Arm'];
+    const target = earthCast.mesh.getWorldPosition(new THREE.Vector3());
+    target.y += earthCast.centerHeight;
+    const tip = poseEarthStaff(arm, staff, target, Math.min(1, earthCast.elapsed / .25));
+    if (tip) {
+      earthCast.effect.tip.position.copy(earthCast.effect.root.worldToLocal(tip));
+      earthCast.effect.tip.visible = true;
+    }
+  }
+  updateFireStaff(steps.reduce((sum, step) => sum + step, 0));
   updateWorldRenderDistance();
   updateEntityStatusVisibility();
   minimap.update(state.elapsed);
@@ -16785,9 +17496,11 @@ function raycastTerrain() {
 function updateWorldRenderDistance() {
   if (world.sceneMode !== "outdoor") return;
   const camera = world.camera.position;
+  const forward = world.renderForward ??= new THREE.Vector3();
+  world.camera.getWorldDirection(forward);
   for (const object of world.renderChunks) {
     const bounds = object.userData.renderBounds;
-    object.visible = isWithinRenderDistance(bounds, camera);
+    object.visible = isWithinRenderDistance(bounds, camera) && !isBeyondFog(bounds, camera, forward, world.scene.fog.far);
     if (object.visible) updateInstanceDetail(object, camera);
     const detail = object.userData.terrainDetail;
     if (detail) {
@@ -16814,6 +17527,8 @@ function createTerrainMaterial() {
       sunColor: { value: new THREE.Color("#fff2d7") },
       sunStrength: { value: 1 },
       shadowAnchor: { value: new THREE.Vector2() },
+      hazeNear: { value: 420 },
+      hazeFar: { value: 1100 },
       roadMask: { value: roadMask },
       footpathMask: { value: footpathMask },
       grassMap: { value: createGrassTexture() },
@@ -16850,6 +17565,8 @@ function createTerrainMaterial() {
       uniform vec3 sunColor;
       uniform float sunStrength;
       uniform vec2 shadowAnchor;
+      uniform float hazeNear;
+      uniform float hazeFar;
       uniform sampler2D roadMask;
       uniform sampler2D footpathMask;
       uniform sampler2D grassMap;
@@ -16908,11 +17625,7 @@ function createTerrainMaterial() {
         vec3 hemi = mix(ground, sky, normal.y * 0.5 + 0.5) * 0.62;
         // Shadows remove direct sun/moon light; sky fill and local lamps remain.
         hemi *= mix(vec3(1.0), vec3(0.22, 0.28, 0.42), nightAmount);
-        float shadowDistance = length(vWorldPos.xz - shadowAnchor);
-        float shadow = 1.0;
-        if (shadowDistance < 105.0) {
-          shadow = mix(getShadowMask(), 1.0, smoothstep(70.0, 105.0, shadowDistance));
-        }
+        float shadow = getShadowMask();
         vec3 color = baseColor * (hemi + sunColor * diffuse * 0.88 * sunStrength * shadow);
         float lampAmount = 0.0;
         for (int i = 0; i < ${MAX_TERRAIN_LAMP_LIGHTS}; i++) {
@@ -16928,7 +17641,7 @@ function createTerrainMaterial() {
         lampAmount = clamp(lampAmount, 0.0, 0.95);
         vec3 lampColor = vec3(1.0, 0.62, 0.28);
         color += lampColor * lampAmount * (0.18 + nightAmount * 0.48);
-        float haze = smoothstep(420.0, 1100.0, distance(cameraPosition, vWorldPos));
+        float haze = smoothstep(hazeNear, hazeFar, distance(cameraPosition, vWorldPos));
         color = mix(color, mix(vec3(0.62, 0.70, 0.73), vec3(0.055, 0.07, 0.10), nightAmount), haze);
         gl_FragColor = vec4(color, 1.0);
       }
@@ -17583,6 +18296,8 @@ function openFoundingEditor(castleId, editing = false) {
   const dialog = document.querySelector("#founding-dialog");
   const form = dialog.querySelector("form");
   form.reset();
+  const patternNames = { cross: "Cross +", saltire: "Saltire X", checked: "Checked", stripes: "Horizontal stripes", tricolour: "Horizontal tricolour", "vertical-tricolour": "Vertical tricolour", chevron: "Chevron", quartered: "Quartered medallion", diamond: "Diamond medallion", canton: "Canton" };
+  form.elements.pattern.innerHTML = FLAG_PATTERNS.map(pattern => `<option value="${pattern}">${patternNames[pattern]}</option>`).join("");
   const existing = state.factions[castleId];
   dialog.querySelector("h2").textContent = editing ? "Edit your faction" : "Found a faction";
   dialog.querySelector("form > p").textContent = editing ? "Update your kingdom's name, mission and banner." : "Claim this abandoned castle and become its first king.";
@@ -17594,9 +18309,10 @@ function openFoundingEditor(castleId, editing = false) {
     for (const [key, value] of Object.entries(normalizeFlag(existing.flag))) form.elements[key].value = value;
   }
   const draft = () => ({ name: form.elements.name.value, mission: form.elements.mission.value,
-    flag: { pattern: form.elements.pattern.value, background: form.elements.background.value, foreground: form.elements.foreground.value, stripes: form.elements.stripes.value } });
+    flag: { pattern: form.elements.pattern.value, background: form.elements.background.value, foreground: form.elements.foreground.value, third: form.elements.third.value, stripes: form.elements.stripes.value } });
   const preview = () => { dialog.querySelector(".flag-preview").innerHTML = flagIcon(draft().flag); form.elements.stripes.disabled = form.elements.pattern.value !== "stripes"; };
   form.oninput = preview;
+  setupFlagColours(form, preview);
   dialog.querySelector(".founding-error").textContent = "";
   dialog.oncancel = () => { if (!editing) leaveRulerSeat(); };
   dialog.querySelector("[data-cancel]").onclick = () => { dialog.close(); if (!editing) leaveRulerSeat(); };

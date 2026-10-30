@@ -90,10 +90,14 @@
           <span>Amount</span>
           <input id="npc-trade-amount" type="number" min="1" step="1" value="1" />
         </label>
+        <nav id="blacksmith-tabs" class="blacksmith-tabs is-hidden" aria-label="Blacksmith menus">
+          <button type="button" data-smith-tab="exchange" aria-pressed="true">Exchange</button>
+          <button type="button" data-smith-tab="forge" aria-pressed="false">Forge</button>
+        </nav>
         <div id="npc-trade-resource-list" class="deposit-list market-trade-list"></div>
       </section>
 
-      <section id="steward-panel" class="hud npc-trade-panel steward-panel is-hidden" aria-label="Steward resource deposit" aria-hidden="true">
+      <section id="steward-panel" class="hud npc-trade-panel steward-panel is-hidden" aria-label="Steward" aria-hidden="true">
         <div class="panel-chrome">
           <div>
             <strong id="steward-title">Steward</strong>
@@ -101,11 +105,16 @@
           </div>
           <button id="steward-close" class="menu-close" type="button" aria-label="Close steward">Close</button>
         </div>
+        <nav id="steward-tabs" class="blacksmith-tabs" aria-label="Steward menus">
+          <button type="button" data-steward-tab="vault" aria-pressed="true">Faction vault</button>
+          <button type="button" data-steward-tab="storage" aria-pressed="false">Personal storage</button>
+        </nav>
         <label class="trade-amount">
           <span>Amount</span>
           <input id="steward-amount" type="number" min="1" step="1" value="1" />
         </label>
         <div id="steward-deposit-list" class="deposit-list"></div>
+        <div id="steward-storage" class="is-hidden"></div>
       </section>
 
       <section id="depot-panel" class="hud npc-trade-panel depot-panel is-hidden" aria-label="Depot storage" aria-hidden="true">
@@ -162,6 +171,9 @@
               <span>Gloves</span>
               <strong>Empty</strong>
             </button>
+            <button class="gear-slot gear-slot-legs" data-equip-slot="legs" type="button">
+              <span>Legs</span><strong>Empty</strong>
+            </button>
             <button class="gear-slot gear-slot-feet" data-equip-slot="feet" type="button">
               <span>Feet</span>
               <strong>Empty</strong>
@@ -178,7 +190,7 @@
           <section class="inventory-bag" aria-label="Item grid">
             <div class="material-legend" aria-label="Metal quality from lowest to highest"><span>METAL QUALITY</span><span style="--swatch:#b77b46">I Bronze</span><span style="--swatch:#858c97">II Iron</span><span style="--swatch:#c5d5e1">III Steel</span><span style="--swatch:#70d6cf">IV Mithril</span><span style="--swatch:#a68ad4">V Adamant</span></div>
             <div id="inventory-grid" class="inventory-grid"></div>
-            <div id="inventory-details" class="inventory-details"></div>
+            <div id="inventory-details" class="inventory-details is-hidden"></div>
             <div id="inventory-hotbar" class="inventory-hotbar" aria-label="Assign hotbar slots"></div>
           </section>
         </div>
@@ -269,8 +281,11 @@
 <label>Mission statement<textarea name="mission" required minlength="10" maxlength="400" placeholder="What does your kingdom stand for?"></textarea></label>
 <div class="flag-preview"></div>
 <label>Flag pattern<select name="pattern"><option value="cross">Cross +</option><option value="saltire">Saltire X</option><option value="checked">Checked</option><option value="stripes">Horizontal stripes</option></select></label>
-<label>Background colour<input type="color" name="background" value="#234d76"></label>
-<label>Pattern colour<input type="color" name="foreground" value="#efcc69"></label>
+<input type="hidden" name="background" value="#234d76">
+<input type="hidden" name="foreground" value="#efcc69">
+<input type="hidden" name="third" value="#f4e7c9">
+<div class="flag-colour-editor"></div>
+<p class="flag-colour-hint">The first four patterns use two colours. The other patterns use all three.</p>
 <label>Number of stripes<input type="number" name="stripes" min="2" max="8" value="3"></label>
 <p class="founding-error" role="alert"></p><button type="submit">Found faction &amp; become king</button><button type="button" data-cancel>Leave throne</button>
 </form></dialog></body>

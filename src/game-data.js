@@ -337,7 +337,7 @@ export const EVENT_TEMPLATES = [
     name: "Meteor Strike",
     rewardResources: ["iron", "stone"],
     itemRoots: ["Starfallen", "Meteor-Forged", "Skybrand"],
-    itemTypes: ["Long Sword", "Axe", "Shield", "Helmet", "Chestplate"],
+    itemTypes: ["Long Sword", "Axe", "Shield", "Helmet", "Chestplate", "Leggings"],
     danger: 3
   },
   {
@@ -345,7 +345,7 @@ export const EVENT_TEMPLATES = [
     name: "Warlord Challenge",
     rewardResources: ["gold", "iron"],
     itemRoots: ["Oathbreaker", "Bannerlord's", "Red Keep"],
-    itemTypes: ["Sword", "Bow", "Long Shield", "Chestplate", "Gloves"],
+    itemTypes: ["Sword", "Bow", "Long Shield", "Chestplate", "Gloves", "Leggings"],
     danger: 4
   },
   {
@@ -413,6 +413,7 @@ export const WEAPON_STATS = {
   Flail: { range: 3.4, damage: 27, penetration: 12, frequency: 0.85, speed: 1, knockback: 3.8 },
   "Long Sword": { range: 2.65, damage: 30, penetration: 10, frequency: 0.9, speed: 0.95, knockback: 2.4 },
   Spear: { range: 5.25, damage: 22, penetration: 9, frequency: 1.05, speed: 1.05, knockback: 3.6 },
+  Staff: { range: 4.6, damage: 8, penetration: 0, frequency: 1.1, speed: 1, knockback: 2 },
   Bow: { range: 28, damage: 18, penetration: 5, frequency: 0.85, speed: 0.9, knockback: 1.4 },
   Crossbow: { range: 24, damage: 34, penetration: 14, frequency: 0.48, speed: 0.72, knockback: 4 },
   "Long Bow": { range: 60, damage: 26, penetration: 8, frequency: 0.62, speed: 0.78, knockback: 2.2 }
@@ -422,6 +423,7 @@ export const ARMOR_STATS = {
   Helmet: { slot: "head", defense: 3, resistance: 2, toughness: 4, weight: 0.8 },
   Gloves: { slot: "gloves", defense: 2, resistance: 1, toughness: 3, weight: 0.55 },
   Chestplate: { slot: "chest", defense: 7, resistance: 4, toughness: 8, weight: 1.6 },
+  Leggings: { slot: "legs", defense: 5, resistance: 3, toughness: 6, weight: 1.2 },
   Feet: { slot: "feet", defense: 3, resistance: 2, toughness: 4, weight: 0.9 }
 };
 
@@ -432,12 +434,14 @@ export const ITEM_DEFINITIONS = [
   { type: "Axe", name: "Border Axe", category: "Weapon", rarity: "Common", maxDurability: 105 },
   { type: "Long Sword", name: "Knight Long Sword", category: "Weapon", rarity: "Uncommon", maxDurability: 118 },
   { type: "Spear", name: "Ashwood Spear", category: "Weapon", rarity: "Common", maxDurability: 95 },
+  { type: "Staff", name: "Wizard Staff", category: "Weapon", rarity: "Common", maxDurability: 100 },
   { type: "Bow", name: "Yew Bow", category: "Weapon", rarity: "Common", maxDurability: 90 },
   { type: "Crossbow", name: "Guard Crossbow", category: "Weapon", rarity: "Uncommon", maxDurability: 96 },
   { type: "Long Bow", name: "Ranger Long Bow", category: "Weapon", rarity: "Uncommon", maxDurability: 100 },
   { type: "Helmet", name: "Leather Helmet", category: "Armor", rarity: "Common", maxDurability: 90 },
   { type: "Gloves", name: "Leather Gloves", category: "Armor", rarity: "Common", maxDurability: 75 },
   { type: "Chestplate", name: "Leather Chestplate", category: "Armor", rarity: "Common", maxDurability: 120 },
+  { type: "Leggings", name: "Leather Leggings", category: "Armor", rarity: "Common", maxDurability: 105 },
   { type: "Feet", name: "Leather Boots", category: "Armor", rarity: "Common", maxDurability: 85 },
   { type: "Shield", name: "Round Shield", category: "Armor", rarity: "Common", maxDurability: 125 },
   { type: "Long Shield", name: "Tower Long Shield", category: "Armor", rarity: "Uncommon", maxDurability: 150 }

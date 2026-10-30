@@ -121,6 +121,7 @@ export function createGameState() {
         backItemId: null,
         legsItemId: null,
         feetItemId: null,
+        legsItemId: null,
         leftHandItemId: null,
         rightHandItemId: null,
         lastLeftAttackAt: -999,
@@ -131,6 +132,7 @@ export function createGameState() {
         ...resources
       },
       inventory: [],
+      stewardInventory: [],
       houseName: "",
       firstName: "",
       lifeNumber: 0,
@@ -1176,7 +1178,10 @@ export function unequipHand(state, hand) {
 
 export function getEquippedItem(state, hand) {
   const slot = hand === "left" ? "leftHandItemId" : "rightHandItemId";
-  return state.player.inventory.find((item) => item.id === state.player.equipment[slot]) ?? null;
+  const item = state.player.inventory.find((item) => item.id === state.player.equipment[slot]) ?? null;
+  // Items from old saves, storage or trades use the same reach as new drops.
+  if (item?.weapon && WEAPON_STATS[item.type]) item.weapon.range = WEAPON_STATS[item.type].range;
+  return item;
 }
 
 export function selectGearItem(state, itemId) {
@@ -1193,7 +1198,6 @@ export function selectGearItem(state, itemId) {
 export function getSelectedGearItem(state) {
   return (
     state.player.inventory.find((item) => item.id === state.player.selectedGearItemId) ??
-    state.player.inventory[0] ??
     null
   );
 }

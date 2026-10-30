@@ -1,4 +1,5 @@
 import { MELEE_STYLES } from './combat-motion.js';
+import { WEAPON_STATS } from './game-data.js';
 
 export const COMBAT_PROFILES = {
   "Empty Hand": {
@@ -460,6 +461,19 @@ COMBAT_PROFILES.Spear.combo = { sequence: [
   { name: 'drivingThrust', kind: 'thrust', durationScale: 1.1, damageScale: 1.3 }
 ] };
 COMBAT_PROFILES.Dagger.combo.sequence[2].damageScale = 1.5;
+COMBAT_PROFILES.Staff = {
+  ...COMBAT_PROFILES.Sword, family: 'polearm', kind: 'slash', stance: 'staffSweep',
+  windup: .32, strike: .26, recovery: .42, hitMoment: .48,
+  modelProfile: { assetKey: 'staff', shaftLength: 5.2, procedural: true },
+  pose: { ...COMBAT_PROFILES.Spear.pose },
+  hitVolume: { ...COMBAT_PROFILES.Sword.hitVolume, traceLength: 5.1 },
+  impactProfile: { weight: .35, camera: .014, hitstop: .03, flinch: .25, blood: 0 },
+  combo: { sequence: [
+    { name: 'leftSwipe', kind: 'slash', slashDirection: -1 },
+    { name: 'rightSwipe', kind: 'slash', slashDirection: 1 },
+    { name: 'staffThrust', kind: 'thrust', slashDirection: 0 }
+  ] }
+};
 for (const [type, style] of Object.entries(MELEE_STYLES)) {
   Object.assign(COMBAT_PROFILES[type], { itemType: type, durationBase: style.duration, maxTargets: style.targets });
 }
@@ -552,14 +566,14 @@ export function getCombatReleaseMoment(itemType, chargePower = 0) {
 
 export function getCombatRange(itemType, stats = {}, chargePower = 0) {
   const profile = getCombatProfile(itemType);
-  const baseRange = Number(stats?.range) || 1.4;
+  const baseRange = WEAPON_STATS[itemType]?.range ?? 1.4;
 
   if (profile.chargeable) {
     const scale = profile.chargeRangeScale ?? { base: 1, charged: 0 };
     return baseRange * (scale.base + chargePower * scale.charged);
   }
 
-  return baseRange + (profile.rangeBonus ?? 0);
+  return baseRange;
 }
 
 export function getCombatDamage(itemType, stats = {}, chargePower = 0) {
@@ -599,6 +613,7 @@ export function getCombatMeleeHitProfile(itemType, range) {
 }
 
 export function getCombatWeaponHitSegments(itemType, side = -1) {
+  if (itemType === 'Staff') return [{ start: [0, .45, 0], end: [0, 4.45, 0], radius: .22 }];
   const profile = getCombatProfile(itemType);
   const model = profile.modelProfile ?? {};
 
